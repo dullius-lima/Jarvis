@@ -1,0 +1,145 @@
+{
+  "name": "01_Rotina_Matinal_Abertura_B3_0930",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 9 * * 1-5"
+            }
+          ]
+        }
+      },
+      "name": "Disparo Abertura B3 (09:30 Seg-Sex)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/ativos/",
+        "options": {}
+      },
+      "name": "Obter Tickers da Carteira",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://brapi.dev/api/quote/TAEE11,BBAS3,EGIE3,WEGE3",
+        "options": {}
+      },
+      "name": "Coletar Cotações Abertura B3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/n8n/webhook/rotina-matinal",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "origem",
+              "value": "n8n_matinal_0930"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Disparar Webhook Backend Bazin",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.oportunidades.length }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "name": "Há Ativos Abaixo do Teto Bazin?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "=@cfo_buy_and_hold_alertas",
+        "text": "=🏢 *ESCRITÓRIO BUY & HOLD — BOLETIM MATINAL (09:30)*\n\nForam detectadas oportunidades com margem de segurança positiva frente ao Preço-Teto de Bazin!\n\nConsulte o terminal corporativo no 4º andar para detalhes."
+      },
+      "name": "Notificar Conselho / Cotistas",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [1340, 240]
+    }
+  ],
+  "connections": {
+    "Disparo Abertura B3 (09:30 Seg-Sex)": {
+      "main": [
+        [
+          {
+            "node": "Obter Tickers da Carteira",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obter Tickers da Carteira": {
+      "main": [
+        [
+          {
+            "node": "Coletar Cotações Abertura B3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Coletar Cotações Abertura B3": {
+      "main": [
+        [
+          {
+            "node": "Disparar Webhook Backend Bazin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Disparar Webhook Backend Bazin": {
+      "main": [
+        [
+          {
+            "node": "Há Ativos Abaixo do Teto Bazin?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Há Ativos Abaixo do Teto Bazin?": {
+      "main": [
+        [
+          {
+            "node": "Notificar Conselho / Cotistas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

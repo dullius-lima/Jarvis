@@ -1,0 +1,138 @@
+version: '3.8'
+
+services:
+  # ============================================================================
+  # 1. PostgreSQL 16 — Histórico Decenal & Estado da Carteira
+  # Limite de Memória OCI: 1536 MB (adequado para 1 OCPU / 6 GB RAM total)
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: buyandhold_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-buyandhold_db}
+      POSTGRES_USER: ${POSTGRES_USER:-cfo_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-SuperSecretCFO2026!}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command: >
+      postgres
+      -c shared_buffers=384MB
+      -c work_mem=16MB
+      -c maintenance_work_mem=64MB
+      -c effective_cache_size=1024MB
+      -c max_connections=60
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+    networks:
+      - internal_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.6'
+          memory: 1536M
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cfo_admin} -d ${POSTGRES_DB:-buyandhold_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # 2. FastAPI Backend & Financial Engine (Python 3.11)
+  # Limite de Memória OCI: 1800 MB
+  # ============================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: buyandhold_backend
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cfo_admin}:${POSTGRES_PASSWORD:-SuperSecretCFO2026!}@postgres:5432/${POSTGRES_DB:-buyandhold_db}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      APP_ENV: production
+      PORT: 8000
+      WORKERS: 1
+    ports:
+      - "8000:8000"
+    networks:
+      - internal_network
+      - external_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.8'
+          memory: 1800M
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ============================================================================
+  # 3. n8n Orquestrador de Rotinas (Matinal, Noturna CVM & Sentinela BTC 24/7)
+  # Limite de Memória OCI: 1024 MB (modo otimizado sem sobrecarga)
+  # ============================================================================
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: buyandhold_n8n
+    restart: always
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-cfo_n8n}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-SecureN8nPass2026!}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - EXECUTIONS_PROCESS=main
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-buyandhold_db}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-cfo_admin}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-SuperSecretCFO2026!}
+      - DB_POSTGRESDB_SCHEMA=n8n_schema
+      - BACKEND_API_URL=http://backend:8000
+    ports:
+      - "5678:5678"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n_workflows:/opt/n8n_workflows:ro
+    networks:
+      - internal_network
+      - external_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.6'
+          memory: 1024M
+        reservations:
+          memory: 384M
+
+volumes:
+  postgres_data:
+    driver: local
+  n8n_data:
+    driver: local
+
+networks:
+  internal_network:
+    driver: bridge
+    internal: true
+  external_network:
+    driver: bridge

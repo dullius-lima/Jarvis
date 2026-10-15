@@ -1,0 +1,6 @@
+{
+  "name": "Escritório de Investimentos Buy & Hold",
+  "description": "Plataforma corporativa de alocação Buy & Hold com edifício interativo em pixel art, auditoria matemática determinística Bazin/Graham e CFO por IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

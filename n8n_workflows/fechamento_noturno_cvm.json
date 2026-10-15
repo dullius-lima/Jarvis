@@ -1,0 +1,138 @@
+{
+  "name": "02_Rotina_Fechamento_Noturno_CVM_1900",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 19 * * 1-5"
+            }
+          ]
+        }
+      },
+      "name": "Disparo Fechamento CVM (19:00 Seg-Sex)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/FATO_RELEVANTE/DADOS/",
+        "options": {}
+      },
+      "name": "Consultar Portal Dados Abertos CVM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filtro determinístico: Cruzar apenas com tickers em custódia na carteira\nconst carteiraTickers = ['TAEE11', 'BBAS3', 'EGIE3', 'WEGE3'];\nconst fatos = $input.all().map(item => item.json);\n\nconst filtrados = fatos.filter(f => {\n  return carteiraTickers.some(t => (f.titulo || '').includes(t) || (f.ticker || '') === t);\n});\n\nreturn filtrados.map(f => ({ json: f }));"
+      },
+      "name": "Filtro Determinístico de Tickers da Carteira",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/n8n/webhook/fechamento-noturno",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"fatos_relevantes\": {{ JSON.stringify($input.all().map(i => i.json)) }}\n}",
+        "options": {}
+      },
+      "name": "Enviar ao Backend para Triagem de Ruído",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.resultado_triagem.filter(r => r.classificacao === 'REQUER_AUDITORIA_CFO').length }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "name": "Existe Risco Estrutural de Ruptura de Tese?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "=@cfo_buy_and_hold_alertas",
+        "text": "=🚨 *ALERTA 2º ANDAR — FATO RELEVANTE COM RISCO ESTRUTURAL*\n\nA triagem determinística identificou evento crítico na CVM exigindo convocação da Diretoria no 5º Andar.\n\nExecute a auditoria executiva pelo terminal."
+      },
+      "name": "Alerta Emergencial ao CFO",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [1340, 240]
+    }
+  ],
+  "connections": {
+    "Disparo Fechamento CVM (19:00 Seg-Sex)": {
+      "main": [
+        [
+          {
+            "node": "Consultar Portal Dados Abertos CVM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar Portal Dados Abertos CVM": {
+      "main": [
+        [
+          {
+            "node": "Filtro Determinístico de Tickers da Carteira",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtro Determinístico de Tickers da Carteira": {
+      "main": [
+        [
+          {
+            "node": "Enviar ao Backend para Triagem de Ruído",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar ao Backend para Triagem de Ruído": {
+      "main": [
+        [
+          {
+            "node": "Existe Risco Estrutural de Ruptura de Tese?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Existe Risco Estrutural de Ruptura de Tese?": {
+      "main": [
+        [
+          {
+            "node": "Alerta Emergencial ao CFO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

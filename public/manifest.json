@@ -1,0 +1,18 @@
+{
+  "name": "JARVIS · Cérebro Neural & Inteligência Familiar",
+  "short_name": "JARVIS",
+  "description": "Cérebro neural tridimensional autônomo com reconhecimento de voz Jarvis, sinapses de memória da família e auditoria de investimentos.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#030712",
+  "theme_color": "#06b6d4",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23030712'/><circle cx='50' cy='50' r='38' fill='none' stroke='%2306b6d4' stroke-width='4'/><path d='M30 50 Q 50 25, 70 50 Q 50 75, 30 50' fill='none' stroke='%2338bdf8' stroke-width='3'/><circle cx='50' cy='38' r='5' fill='%2338bdf8'/><circle cx='35' cy='50' r='4' fill='%2306b6d4'/><circle cx='65' cy='50' r='4' fill='%2306b6d4'/><circle cx='50' cy='62' r='5' fill='%23f59e0b'/></svg>",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

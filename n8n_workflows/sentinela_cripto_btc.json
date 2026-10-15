@@ -1,0 +1,153 @@
+{
+  "name": "03_Sentinela_Cripto_BTC_24_7_15min",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/15 * * * *"
+            }
+          ]
+        }
+      },
+      "name": "Sentinela 24/7 (A cada 15 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",
+        "options": {}
+      },
+      "name": "Coletar Preço & Volume BTC/USDT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Regra Rígida de Sentinela:\n// Variação > 5% em 1h ou perda de suporte técnico de longo prazo\nconst precoAtual = parseFloat($input.first().json.lastPrice);\nconst variacao24h = parseFloat($input.first().json.priceChangePercent);\n\n// Estimativa determinística de variação em 1 hora\nconst variacao1hEstimada = variacao24h / 6.0; \nconst suporteCritico = 55000.0;\nconst quebrouSuporte = precoAtual < suporteCritico;\n\nconst anomalia = Math.abs(variacao1hEstimada) >= 5.0 || quebrouSuporte;\n\nreturn [{\n  json: {\n    preco_btc_usd: precoAtual,\n    variacao_1h_pct: parseFloat(variacao1hEstimada.toFixed(2)),\n    variacao_24h_pct: variacao24h,\n    quebrou_suporte: quebrouSuporte,\n    nivel_suporte_usd: suporteCritico,\n    anomalia_detectada: anomalia\n  }\n}];"
+      },
+      "name": "Avaliação Determinística de Volatilidade e Suporte",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.anomalia_detectada }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Houve Anomalia Real (>5% ou Quebra Suporte)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/n8n/webhook/sentinela-cripto",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "name": "Disparar Webhook Emergência Cripto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "chatId": "=@cfo_buy_and_hold_alertas",
+        "text": "=⚡ *SENTINELA 24/7 — ANOMALIA DE MERCADO BTC*\n\nPreço: ${{ $json.preco_btc_usd }}\nVariação 1h: {{ $json.variacao_1h_pct }}%\nVariação 24h: {{ $json.variacao_24h_pct }}%\n\nAviso automático: A LLM CFO foi acionada para auditoria de risco de custódia."
+      },
+      "name": "Despacho Alerta Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [1340, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Em dias normais: SILÊNCIO OPERACIONAL TOTAL (zero chamadas a LLM e zero notificações)\nreturn [{ json: { status: 'SILENCIO_OPERACIONAL', log: 'Variação normal. Nenhuma chamada necessária.' } }];"
+      },
+      "name": "Silêncio Operacional (Sem Ação)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 400]
+    }
+  ],
+  "connections": {
+    "Sentinela 24/7 (A cada 15 min)": {
+      "main": [
+        [
+          {
+            "node": "Coletar Preço & Volume BTC/USDT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Coletar Preço & Volume BTC/USDT": {
+      "main": [
+        [
+          {
+            "node": "Avaliação Determinística de Volatilidade e Suporte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avaliação Determinística de Volatilidade e Suporte": {
+      "main": [
+        [
+          {
+            "node": "Houve Anomalia Real (>5% ou Quebra Suporte)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Houve Anomalia Real (>5% ou Quebra Suporte)?": {
+      "main": [
+        [
+          {
+            "node": "Disparar Webhook Emergência Cripto",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Silêncio Operacional (Sem Ação)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Disparar Webhook Emergência Cripto": {
+      "main": [
+        [
+          {
+            "node": "Despacho Alerta Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
