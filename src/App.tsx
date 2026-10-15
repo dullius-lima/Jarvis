@@ -52,18 +52,25 @@ export default function App() {
   const llmService = UniversalLLMService.getInstance();
   const voiceService = JarvisVoiceService.getInstance();
 
-  // Estado das Memórias e Sinapses Neurais
+  // Estado das Memórias e Sinapses Neurais (Inicia estritamente limpo sem itens pré-configurados)
   const [memories, setMemories] = useState<SynapseMemory[]>(() => {
     const saved = localStorage.getItem('jarvis_memories');
-    if (!saved) return INITIAL_SYNAPSE_MEMORIES;
+    if (!saved) return [];
     try {
       const parsed: SynapseMemory[] = JSON.parse(saved);
-      // Assegurar que os arquivos menores essenciais (compras, agenda, perfis de família) estejam sempre presentes
-      const existingIds = new Set(parsed.map((m) => m.id));
-      const missing = INITIAL_SYNAPSE_MEMORIES.filter((m) => !existingIds.has(m.id));
-      return [...parsed, ...missing];
+      // Remove todos os IDs que correspondam a dados pré-configurados de teste
+      const preconfigured = new Set([
+        'mem-compras', 'mem-agenda', 'mem-matheus', 'mem-esposa', 'mem-filhos',
+        'mem-b3', 'mem-bbas3', 'mem-taee11', 'mem-itub4', 'mem-vale3',
+        'mem-btc', 'mem-saude', 'mem-seguranca', 'mem-investimentos', 'mem-financas',
+        'mem-familia', 'mem-rotina', 'mem-wege3', 'mem-cfo'
+      ]);
+      const limpas = parsed.filter(
+        (m) => !preconfigured.has(m.id) && !m.id.startsWith('mem-pre-') && !m.id.includes('mock')
+      );
+      return limpas;
     } catch {
-      return INITIAL_SYNAPSE_MEMORIES;
+      return [];
     }
   });
 
@@ -81,11 +88,8 @@ export default function App() {
   // Configuração Universal de LLM (Gemini, Claude, OpenAI, DeepSeek, Groq, Mistral, Ollama)
   const [llmConfig, setLlmConfig] = useState<LLMProviderConfig>(() => llmService.getConfig());
 
-  // Alerta Ativo de Agente Sentinela (Discreto e Dispensável)
-  const [alertaSentinelaAtivo, setAlertaSentinelaAtivo] = useState<AgenteSentinela | null>(() => {
-    const pendentes = microService.verificarAlertasAtivos();
-    return pendentes.length > 0 ? pendentes[0] : null;
-  });
+  // Alerta Ativo de Agente Sentinela (Inicia estritamente nulo sem alertas pré-configurados)
+  const [alertaSentinelaAtivo, setAlertaSentinelaAtivo] = useState<AgenteSentinela | null>(null);
 
   // Estados de Voz e Reconhecimento
   const [wakeWordActive, setWakeWordActive] = useState<boolean>(true);
@@ -317,7 +321,7 @@ export default function App() {
     };
 
     setMemories((prev) => [nova, ...prev]);
-    dispararSinapse(`Nova Memória Gravada: "${mem.title}"`);
+    dispararSinapsePontual(nova.id, `Novo Dado Registrado: "${mem.title}"`);
     voiceService.playBeepSound();
   };
 
@@ -688,9 +692,27 @@ export default function App() {
     let labelSinapse = `Cognição Neural`;
     let particaoIsolada: MicroDatastoreParticionado | null = null;
 
-    // 1. Identificar menção a ativos B3 / Cripto
+    // 1. Identificar menção a ativos B3 / Cripto / Bazin
     const tickersConhecidos = ['TAEE11', 'BBAS3', 'WEGE3', 'BTC', 'PETR4', 'VALE3', 'ITUB4', 'ELET3', 'CPLE6'];
-    const tickerEncontrado = tickersConhecidos.find((t) => texto.toUpperCase().includes(t));
+    let tickerEncontrado = tickersConhecidos.find((t) => texto.toUpperCase().includes(t));
+
+    if (!tickerEncontrado) {
+      if (lower.includes('taee') || lower.includes('taesa') || lower.includes('bazin')) {
+        tickerEncontrado = 'TAEE11';
+      } else if (lower.includes('bbas') || lower.includes('banco do brasil')) {
+        tickerEncontrado = 'BBAS3';
+      } else if (lower.includes('wege') || lower.includes('weg')) {
+        tickerEncontrado = 'WEGE3';
+      } else if (lower.includes('btc') || lower.includes('bitcoin')) {
+        tickerEncontrado = 'BTC';
+      } else if (lower.includes('petr') || lower.includes('petrobras')) {
+        tickerEncontrado = 'PETR4';
+      } else if (lower.includes('vale')) {
+        tickerEncontrado = 'VALE3';
+      } else if (lower.includes('itub') || lower.includes('itaú') || lower.includes('itau')) {
+        tickerEncontrado = 'ITUB4';
+      }
+    }
 
     if (tickerEncontrado) {
       particaoIsolada = microService.obterParticao(tickerEncontrado);
@@ -820,32 +842,59 @@ export default function App() {
       {/* ==================================================================== */}
       {/* 1. TOP BAR ULTRA-LIMPO E EXPANSÍVEL (TOTALMENTE DESOBSTRUÍDO)         */}
       {/* ==================================================================== */}
-      <header className="z-40 max-w-5xl w-full mx-auto relative mb-1">
+      <header className="z-40 max-w-7xl w-full mx-auto relative mb-1">
         <div className="flex items-center justify-between gap-3 py-2 px-4 bg-slate-950/75 border border-cyan-500/25 rounded-2xl backdrop-blur-xl shadow-[0_0_25px_rgba(14,165,233,0.08)]">
-          {/* Identidade JARVIS e Status Dinâmico */}
-          <div className="flex items-center gap-3">
+          {/* 1. MICROFONE PRINCIPAL NA REGIÃO SUPERIOR ESQUERDA */}
+          <div className="flex items-center gap-2.5 sm:gap-3">
             <div className="relative flex items-center justify-center">
-              <span
-                className={`w-3 h-3 rounded-full absolute ${
-                  isOperationMode || isDictatingVoice
-                    ? 'animate-ping bg-red-400'
-                    : 'animate-ping bg-cyan-400'
+              {isDictatingVoice || isOperationMode ? (
+                <>
+                  <div className="absolute inset-0 -m-2 rounded-full border-2 border-red-500/70 animate-ping pointer-events-none" />
+                  <div className="absolute inset-0 -m-1 rounded-full border border-red-400 animate-pulse pointer-events-none" />
+                </>
+              ) : (
+                <div className="absolute inset-0 -m-1 rounded-full border border-cyan-500/30 animate-pulse pointer-events-none" />
+              )}
+
+              <button
+                type="button"
+                onClick={handleMicrophoneClick}
+                className={`relative group p-2.5 sm:p-3 rounded-2xl transition-all duration-300 shadow-xl active:scale-95 flex items-center justify-center cursor-pointer ${
+                  isDictatingVoice || isOperationMode
+                    ? 'bg-gradient-to-tr from-red-600 via-rose-500 to-amber-500 text-white shadow-[0_0_30px_rgba(239,68,68,0.7)] scale-105'
+                    : 'bg-gradient-to-tr from-cyan-600 via-sky-500 to-blue-600 text-white shadow-[0_0_20px_rgba(14,165,233,0.35)] hover:shadow-[0_0_28px_rgba(14,165,233,0.55)] hover:scale-105'
                 }`}
-              />
-              <span
-                className={`w-3 h-3 rounded-full shadow-lg ${
-                  isOperationMode || isDictatingVoice
-                    ? 'bg-red-500 shadow-[0_0_12px_#ef4444]'
-                    : 'bg-cyan-400 shadow-[0_0_10px_#22d3ee]'
-                }`}
-              />
+                title={
+                  isDictatingVoice || isOperationMode
+                    ? 'Modo de Operação Ativo - Clique para concluir comando'
+                    : 'Clique ou diga "Jarvis" para falar'
+                }
+              >
+                {isDictatingVoice || isOperationMode ? (
+                  <Mic className="w-5 h-5 animate-pulse" />
+                ) : (
+                  <Mic className="w-5 h-5" />
+                )}
+              </button>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-black tracking-[0.25em] font-mono text-cyan-400">
-                JARVIS
-              </span>
-              <span className="text-[10px] font-mono text-slate-300 bg-slate-900/90 px-2.5 py-0.5 rounded-full border border-cyan-500/30">
-                {isOperationMode ? '● Modo de Operação Ativo' : isListening ? 'Ouvindo: "Jarvis"' : 'Pronto'}
+
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm sm:text-base font-black tracking-[0.2em] font-mono text-cyan-400">
+                  JARVIS
+                </span>
+                <span
+                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase border ${
+                    isOperationMode || isDictatingVoice
+                      ? 'bg-red-950 text-red-300 border-red-500/50 animate-pulse'
+                      : 'bg-slate-900 text-cyan-300 border-cyan-500/30'
+                  }`}
+                >
+                  {isOperationMode ? '● Modo de Operação' : isListening ? '● Ouvindo' : 'Pronto'}
+                </span>
+              </div>
+              <span className="text-[11px] text-slate-400 font-sans hidden sm:block">
+                {isDictatingVoice ? 'Escutando sua voz...' : 'Microfone na região superior esquerda'}
               </span>
             </div>
           </div>
@@ -1030,9 +1079,16 @@ export default function App() {
         )}
       </header>
 
-      {/* Alerta Sentinela Discreto (Não obstrui o centro) */}
+      {/* Alerta Sentinela Interativo & Cirúrgico */}
       {alertaSentinelaAtivo && (
-        <div className="mt-2 mx-auto max-w-2xl w-full bg-red-950/70 border border-red-500/50 rounded-xl px-3.5 py-1.5 flex items-center justify-between text-xs text-red-200 shadow-md backdrop-blur-md animate-in slide-in-from-top-1 z-30">
+        <div
+          onClick={() => {
+            const targetId = `mem-${alertaSentinelaAtivo.chaveParticao.toLowerCase()}`;
+            dispararSinapsePontual(targetId, `Alerta Sentinela: ${alertaSentinelaAtivo.nome}`);
+          }}
+          className="mt-2 mx-auto max-w-2xl w-full bg-red-950/70 border border-red-500/50 rounded-xl px-3.5 py-1.5 flex items-center justify-between text-xs text-red-200 shadow-md backdrop-blur-md animate-in slide-in-from-top-1 z-30 cursor-pointer hover:bg-red-900/60 transition-all"
+          title="Clique para inspecionar a sinapse cirúrgica deste ativo no cérebro 3D"
+        >
           <div className="flex items-center gap-2 truncate">
             <ShieldAlert className="w-3.5 h-3.5 text-red-400 shrink-0 animate-pulse" />
             <span className="font-bold text-white font-mono uppercase text-[11px]">
@@ -1041,7 +1097,10 @@ export default function App() {
             <span className="truncate text-slate-200">{alertaSentinelaAtivo.alertaVigente}</span>
           </div>
           <button
-            onClick={() => setAlertaSentinelaAtivo(null)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setAlertaSentinelaAtivo(null);
+            }}
             className="text-[10px] text-red-400 hover:text-white px-1.5 py-0.5 rounded border border-red-500/30 shrink-0 ml-2"
           >
             ✕
@@ -1052,8 +1111,8 @@ export default function App() {
       {/* ==================================================================== */}
       {/* 2. CÉREBRO 3D AZUL COM SINAPSES VERMELHAS (TOTALMENTE DESOBSTRUÍDO) */}
       {/* ==================================================================== */}
-      <main className="flex-1 flex flex-col justify-between my-2 relative">
-        <div className="relative w-full flex-1 flex items-center justify-center min-h-[460px]">
+      <main className="flex-1 flex flex-col justify-between my-1 relative">
+        <div className="relative w-full flex-1 flex items-center justify-center min-h-[660px] h-[calc(100vh-130px)]">
           <RealisticBrainCanvas
             memories={memories}
             selectedMemory={selectedMemory}
@@ -1176,73 +1235,34 @@ export default function App() {
       )}
 
       {/* ==================================================================== */}
-      {/* 4. CONSOLE CENTRAL: APENAS O MICROFONE E MODO DE OPERAÇÃO DO JARVIS */}
+      {/* 4. CONSOLE INFERIOR COMPACTO (CÉREBRO TOTALMENTE DESOBSTRUÍDO)       */}
       {/* ==================================================================== */}
-      <footer className="z-30 pb-5 pt-2 flex flex-col items-center justify-center relative">
+      <footer className="z-30 pb-3 pt-1 flex flex-col items-center justify-center relative">
         {/* Transcrição em tempo real (Fita flutuante quando o usuário fala) */}
         {isDictatingVoice && inputMessage && (
-          <div className="mb-3 px-4 py-1.5 rounded-full bg-slate-950/90 border border-cyan-500/50 text-cyan-200 text-xs font-mono backdrop-blur-md shadow-lg animate-in fade-in slide-in-from-bottom-2 max-w-lg text-center truncate">
+          <div className="mb-2 px-4 py-1.5 rounded-full bg-slate-950/90 border border-cyan-500/50 text-cyan-200 text-xs font-mono backdrop-blur-md shadow-lg animate-in fade-in slide-in-from-bottom-2 max-w-lg text-center truncate">
             "{inputMessage}"
           </div>
         )}
 
-        {/* Botão de Microfone Central Futurista com Anéis Acústicos */}
-        <div className="relative flex flex-col items-center">
-          {/* Anéis de Energia Acústica Holográfica */}
-          {isDictatingVoice || isOperationMode ? (
-            <>
-              <div className="absolute inset-0 -m-5 rounded-full border-2 border-red-500/50 animate-ping pointer-events-none" />
-              <div className="absolute inset-0 -m-2 rounded-full border border-red-400/60 animate-pulse pointer-events-none" />
-            </>
-          ) : (
-            <div className="absolute inset-0 -m-3 rounded-full border border-cyan-500/20 animate-pulse pointer-events-none" />
-          )}
-
+        {/* Fita de Status Minimalista com Teclado Alternativo */}
+        <div className="flex items-center gap-3 bg-slate-950/80 px-4 py-1.5 rounded-full border border-slate-800 backdrop-blur-md shadow-md">
+          <span className="text-xs text-slate-300 font-sans">
+            {isDictatingVoice ? (
+              <span className="text-red-400 font-bold animate-pulse flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-red-400" /> Escutando comando por voz...
+              </span>
+            ) : (
+              <span>Diga <strong className="text-cyan-400 font-semibold">"Jarvis"</strong> ou clique no microfone no canto superior esquerdo</span>
+            )}
+          </span>
           <button
-            type="button"
-            onClick={handleMicrophoneClick}
-            className={`relative group p-5 sm:p-6 rounded-full transition-all duration-300 shadow-2xl active:scale-95 flex items-center justify-center cursor-pointer ${
-              isDictatingVoice || isOperationMode
-                ? 'bg-gradient-to-tr from-red-600 via-rose-500 to-amber-500 text-white shadow-[0_0_50px_rgba(239,68,68,0.7)] scale-110'
-                : 'bg-gradient-to-tr from-cyan-600 via-sky-500 to-blue-600 text-white shadow-[0_0_35px_rgba(14,165,233,0.35)] hover:shadow-[0_0_45px_rgba(14,165,233,0.55)] hover:scale-105'
-            }`}
-            title={
-              isDictatingVoice || isOperationMode
-                ? 'Modo de Operação Ativo - Clique para concluir comando'
-                : 'Clique ou diga "Jarvis" para entrar em modo de operação'
-            }
+            onClick={() => setShowTextInput(!showTextInput)}
+            className="text-slate-400 hover:text-white transition-colors p-1 rounded-md hover:bg-slate-800"
+            title="Digitar por teclado"
           >
-            {isDictatingVoice || isOperationMode ? (
-              <Mic className="w-8 h-8 sm:w-9 sm:h-9 animate-pulse" />
-            ) : (
-              <Mic className="w-8 h-8 sm:w-9 sm:h-9" />
-            )}
+            <Keyboard className="w-3.5 h-3.5" />
           </button>
-
-          {/* Legenda Operacional Minimalista */}
-          <div className="mt-3 text-center pointer-events-none">
-            {isDictatingVoice || isOperationMode ? (
-              <p className="text-xs font-mono font-bold text-red-400 tracking-wider flex items-center justify-center gap-1.5 animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-red-400" />
-                MODO DE OPERAÇÃO ATIVO • ESCUTANDO...
-              </p>
-            ) : (
-              <p className="text-xs font-mono text-slate-400 tracking-wide">
-                Diga <strong className="text-cyan-400 font-bold">"Jarvis"</strong> ou clique para operar
-              </p>
-            )}
-          </div>
-
-          {/* Fallback Ultradiscreto de Entrada por Teclado (Oculto por padrão) */}
-          <div className="mt-2">
-            <button
-              onClick={() => setShowTextInput(!showTextInput)}
-              className="text-slate-600 hover:text-slate-400 transition-colors p-1"
-              title="Alternar digitação por texto"
-            >
-              <Keyboard className="w-3.5 h-3.5 opacity-35 hover:opacity-100" />
-            </button>
-          </div>
         </div>
 
         {/* Input de texto exibido apenas se acionado pelo ícone de teclado */}
@@ -1414,7 +1434,8 @@ export default function App() {
         }}
         onAlertTriggered={(agente) => {
           setAlertaSentinelaAtivo(agente);
-          dispararSinapse(`Alerta Disparado: ${agente.nome}`);
+          const targetId = `mem-${agente.chaveParticao.toLowerCase()}`;
+          dispararSinapsePontual(targetId, `Alerta Sentinela: ${agente.nome}`);
         }}
       />
 

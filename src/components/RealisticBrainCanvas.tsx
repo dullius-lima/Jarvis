@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { SynapseMemory, SentimentAnalysisResult } from '../types/neural';
-import { Activity, Zap, Radio, Target, CheckCircle2, RotateCcw, RotateCw, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { Activity, Zap, Radio, Target, CheckCircle2, RotateCcw, RotateCw, ZoomIn, ZoomOut, Maximize2, Sparkles } from 'lucide-react';
 
 interface RealisticBrainCanvasProps {
   memories: SynapseMemory[];
@@ -16,6 +16,15 @@ interface RealisticBrainCanvasProps {
   onForceRest?: () => void;
 }
 
+interface MolecularParticle {
+  progress: number;
+  baseSpeed: number;
+  mesh: THREE.Mesh;
+  radius: number;
+  wobblePhase: number;
+  lateralSpread: THREE.Vector3;
+}
+
 interface TargetedSynapseBridge {
   targetMemoryId: string;
   sourceMemoryId?: string;
@@ -26,9 +35,46 @@ interface TargetedSynapseBridge {
   midpoint: THREE.Vector3;
   coreMesh: THREE.Mesh;
   glowMesh: THREE.Mesh;
-  particles: { progress: number; speed: number; mesh: THREE.Mesh }[];
+  particles: MolecularParticle[];
   phaseOffset: number;
   isDirectToCore: boolean;
+}
+
+// Interfaces para a Animação Customizada de Partículas em Trânsito nas Sinapses (Novo Dado)
+interface CustomDataParticle {
+  mesh: THREE.Mesh;
+  trailMeshes: THREE.Mesh[];
+  p1: THREE.Vector3;
+  p2: THREE.Vector3;
+  direction: THREE.Vector3;
+  lateralSpread: THREE.Vector3;
+  progress: number;
+  speed: number;
+  wobbleFreq: number;
+  wobbleAmp: number;
+  colorHex: number;
+  generation: number; // 0 = tronco principal core->alvo, 1 = ramificações inter-sinápticas
+  targetId: string;
+  onArrive?: () => void;
+}
+
+interface SynapticShockwave {
+  mesh: THREE.Mesh;
+  position: THREE.Vector3;
+  age: number;
+  maxAge: number;
+  startScale: number;
+  endScale: number;
+  material: THREE.MeshBasicMaterial;
+}
+
+interface SparkParticle {
+  mesh: THREE.Mesh;
+  position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  age: number;
+  maxAge: number;
+  material: THREE.MeshBasicMaterial;
 }
 
 export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
@@ -50,6 +96,7 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
   const [liveFreqHz, setLiveFreqHz] = useState<number>(1.2);
   const [liveThicknessUm, setLiveThicknessUm] = useState<number>(15);
   const [isCurrentlyFiring, setIsCurrentlyFiring] = useState<boolean>(false);
+  const [isParticleSurgeActive, setIsParticleSurgeActive] = useState<boolean>(false);
 
   // Encontrar o nó alvo atual (se houver)
   const currentTargetMem = memories.find((m) => m.id === activeTargetNodeId);
@@ -59,6 +106,10 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
   const activeSynapsePulseRef = useRef<string | null>(activeSynapsePulse || null);
   const isJarvisSpeakingRef = useRef<boolean>(isJarvisSpeaking);
   const isListeningRef = useRef<boolean>(isListening);
+
+  // Gatilho imperativo para a animação de partículas em trânsito
+  const triggerDataBurstRef = useRef<(targetId?: string, isNewData?: boolean) => void>(() => {});
+  const prevMemoryIdsRef = useRef<Set<string>>(new Set(memories.map((m) => m.id)));
 
   // Referência para controles manuais de zoom e rotação do cérebro
   const controlsRef = useRef<{
@@ -81,7 +132,10 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
 
   useEffect(() => {
     activeSynapsePulseRef.current = activeSynapsePulse || null;
-  }, [activeSynapsePulse]);
+    if (activeSynapsePulse) {
+      triggerDataBurstRef.current(activeTargetNodeId || undefined, false);
+    }
+  }, [activeSynapsePulse, activeTargetNodeId]);
 
   useEffect(() => {
     isJarvisSpeakingRef.current = isJarvisSpeaking;
@@ -90,6 +144,22 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
   useEffect(() => {
     isListeningRef.current = isListening;
   }, [isListening]);
+
+  // Efeito dedicado para detectar quando um NOVO dado / memória é registrado na rede neural
+  useEffect(() => {
+    const currentIds = new Set(memories.map((m) => m.id));
+    const newlyAdded = memories.filter((m) => !prevMemoryIdsRef.current.has(m.id));
+
+    if (newlyAdded.length > 0) {
+      const newestMem = newlyAdded[0];
+      // Dispara as partículas percorrendo as sinapses do núcleo ao novo nó e ramificando
+      setTimeout(() => {
+        triggerDataBurstRef.current(newestMem.id, true);
+      }, 120);
+    }
+
+    prevMemoryIdsRef.current = currentIds;
+  }, [memories]);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -102,8 +172,8 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     const scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(0x020713, 0.08);
 
-    const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 100);
-    camera.position.set(0, 0.6, 6.2);
+    const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 100);
+    camera.position.set(0, 0.35, 3.7);
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -137,8 +207,9 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     const pointLightSynapseRed = new THREE.PointLight(0xff2222, 0.0, 15);
     scene.add(pointLightSynapseRed);
 
-    // 3. Grupo Principal do Cérebro
+    // 3. Grupo Principal do Cérebro (Escala ampliada para cérebro imersivo e dominante)
     const brainGroup = new THREE.Group();
+    brainGroup.scale.set(1.18, 1.18, 1.18);
     scene.add(brainGroup);
 
     // =========================================================================
@@ -351,6 +422,7 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       return sprite;
     };
 
+    // Renderiza estritamente as memórias criadas pelo usuário (zero nós pré-estabelecidos)
     memories.forEach((mem) => {
       const memPos = new THREE.Vector3(...mem.coords);
       const memGroup = new THREE.Group();
@@ -407,10 +479,12 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       else if (mem.id === 'mem-matheus') shortTitle = '👤 Matheus';
       else if (mem.id === 'mem-esposa') shortTitle = '👤 Família';
       else if (mem.id === 'mem-filhos') shortTitle = '👤 Filhos';
-      else if (mem.id === 'mem-taee11') shortTitle = '📊 TAEE11';
+      else if (mem.id === 'mem-taee11') shortTitle = '📊 TAEE11 (Bazin)';
       else if (mem.id === 'mem-bbas3') shortTitle = '📊 BBAS3';
+      else if (mem.id === 'mem-wege3') shortTitle = '📊 WEGE3';
       else if (mem.id === 'mem-btc') shortTitle = '🪙 BTC';
       else if (mem.id === 'mem-saude') shortTitle = '🏥 Saúde';
+      else if (mem.id === 'mem-cfo') shortTitle = '💼 CFO IA';
       else if (mem.id === 'mem-seguranca') shortTitle = '🔐 Portão';
 
       const sprite = createNodeTextSprite(shortTitle, mem.category);
@@ -460,26 +534,39 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       bridgeGlowMesh.scale.set(0.022, length, 0.022);
       bridgesGroup.add(bridgeGlowMesh);
 
-      // Partículas de disparo sináptico
-      const bridgeParticles: { progress: number; speed: number; mesh: THREE.Mesh }[] = [];
-      const particleGeo = new THREE.SphereGeometry(0.038, 8, 8);
+      // Partículas moleculares biológicas de disparo sináptico (Bolas vermelhas / neurotransmissores)
+      const bridgeParticles: MolecularParticle[] = [];
+      const numMolecules = 10;
 
-      for (let k = 0; k < 3; k++) {
+      for (let k = 0; k < numMolecules; k++) {
+        // Variação de calibre da molécula biológica esférica
+        const molRadius = 0.034 + (k % 3) * 0.012;
+        const particleGeo = new THREE.SphereGeometry(molRadius, 12, 12);
         const particleMat = new THREE.MeshBasicMaterial({
-          color: 0xff2222, // Vermelho puro de sinapse ativa
+          color: 0xff1e27, // Vermelho arterial vivo de molécula ativa
           transparent: true,
-          opacity: 0.0, // Começa invisível em repouso
+          opacity: 0.0, // Permanece em repouso invisível
           blending: THREE.AdditiveBlending,
         });
         const pMesh = new THREE.Mesh(particleGeo, particleMat);
-        const initialProgress = k / 3;
+        const initialProgress = k / numMolecules;
         pMesh.position.lerpVectors(p1, p2, initialProgress);
         bridgesGroup.add(pMesh);
 
+        // Dispersão lateral orgânica ao longo do axônio
+        const lateralVector = new THREE.Vector3(
+          (Math.random() - 0.5) * 2,
+          (Math.random() - 0.5) * 2,
+          (Math.random() - 0.5) * 2
+        ).normalize();
+
         bridgeParticles.push({
           progress: initialProgress,
-          speed: 0.35 + Math.random() * 0.25,
+          baseSpeed: 0.32 + Math.random() * 0.28,
           mesh: pMesh,
+          radius: molRadius,
+          wobblePhase: Math.random() * Math.PI * 2,
+          lateralSpread: lateralVector,
         });
       }
 
@@ -499,6 +586,341 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     });
 
     // =========================================================================
+    // G. CONEXÕES ENTRE SINAPSES (PONTES INTER-SINÁPTICAS NA REDE NEURAL)
+    // =========================================================================
+    if (memories.length >= 2) {
+      const connectionsPerNode = new Map<string, number>();
+      memories.forEach((m) => connectionsPerNode.set(m.id, 0));
+
+      for (let i = 0; i < memories.length; i++) {
+        for (let j = i + 1; j < memories.length; j++) {
+          const memA = memories[i];
+          const memB = memories[j];
+          const posA = new THREE.Vector3(...memA.coords);
+          const posB = new THREE.Vector3(...memB.coords);
+          const dist = posA.distanceTo(posB);
+          const countA = connectionsPerNode.get(memA.id) || 0;
+          const countB = connectionsPerNode.get(memB.id) || 0;
+
+          // Conecta sinapses vizinhas ou da mesma categoria em raio de alcance
+          const sameCat = memA.category === memB.category;
+          const maxDist = sameCat ? 2.6 : 2.0;
+
+          if (dist < maxDist && countA < 3 && countB < 3) {
+            connectionsPerNode.set(memA.id, countA + 1);
+            connectionsPerNode.set(memB.id, countB + 1);
+
+            const interDir = new THREE.Vector3().subVectors(posB, posA).normalize();
+            const interMid = new THREE.Vector3().addVectors(posA, posB).multiplyScalar(0.5);
+            const interQuat = new THREE.Quaternion().setFromUnitVectors(upVector, interDir);
+
+            // Núcleo do filamento inter-sináptico
+            const interCoreMat = new THREE.MeshBasicMaterial({
+              color: 0x0ea5e9,
+              transparent: true,
+              opacity: 0.16,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false,
+            });
+            const interCoreMesh = new THREE.Mesh(unitCylinderGeo, interCoreMat);
+            interCoreMesh.position.copy(interMid);
+            interCoreMesh.setRotationFromQuaternion(interQuat);
+            interCoreMesh.scale.set(0.007, dist, 0.007);
+            bridgesGroup.add(interCoreMesh);
+
+            // Bainha holográfica inter-sináptica
+            const interGlowMat = new THREE.MeshBasicMaterial({
+              color: 0x0284c7,
+              transparent: true,
+              opacity: 0.10,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false,
+              side: THREE.DoubleSide,
+            });
+            const interGlowMesh = new THREE.Mesh(unitCylinderGeo, interGlowMat);
+            interGlowMesh.position.copy(interMid);
+            interGlowMesh.setRotationFromQuaternion(interQuat);
+            interGlowMesh.scale.set(0.016, dist, 0.016);
+            bridgesGroup.add(interGlowMesh);
+
+            // Partículas de fluxo biológico inter-sináptico
+            const interParticles: MolecularParticle[] = [];
+            const numInterMol = 6;
+            for (let k = 0; k < numInterMol; k++) {
+              const molRadius = 0.026 + (k % 2) * 0.008;
+              const pGeo = new THREE.SphereGeometry(molRadius, 8, 8);
+              const pMat = new THREE.MeshBasicMaterial({
+                color: 0x38bdf8,
+                transparent: true,
+                opacity: 0.0,
+                blending: THREE.AdditiveBlending,
+              });
+              const pMesh = new THREE.Mesh(pGeo, pMat);
+              const prog = k / numInterMol;
+              pMesh.position.lerpVectors(posA, posB, prog);
+              bridgesGroup.add(pMesh);
+
+              const lateral = new THREE.Vector3(
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2
+              ).normalize();
+
+              interParticles.push({
+                progress: prog,
+                baseSpeed: 0.35 + Math.random() * 0.25,
+                mesh: pMesh,
+                radius: molRadius,
+                wobblePhase: Math.random() * Math.PI * 2,
+                lateralSpread: lateral,
+              });
+            }
+
+            targetedBridges.push({
+              sourceMemoryId: memA.id,
+              targetMemoryId: memB.id,
+              p1: posA,
+              p2: posB,
+              length: dist,
+              direction: interDir,
+              midpoint: interMid,
+              coreMesh: interCoreMesh,
+              glowMesh: interGlowMesh,
+              particles: interParticles,
+              phaseOffset: Math.random() * Math.PI * 2,
+              isDirectToCore: false,
+            });
+          }
+        }
+      }
+    }
+
+    // =========================================================================
+    // H. SISTEMA DINÂMICO DE ANIMAÇÃO DE PARTÍCULAS EM TRÂNSITO (NOVO DADO REGISTRADO)
+    // =========================================================================
+    const burstGroup = new THREE.Group();
+    brainGroup.add(burstGroup);
+
+    const activeDataParticles: CustomDataParticle[] = [];
+    const activeShockwaves: SynapticShockwave[] = [];
+    const activeSparks: SparkParticle[] = [];
+
+    const sparkSphereGeo = new THREE.SphereGeometry(0.024, 8, 8);
+    const particleHeadGeo = new THREE.SphereGeometry(0.046, 12, 12);
+    const trailGeos = [
+      new THREE.SphereGeometry(0.034, 8, 8),
+      new THREE.SphereGeometry(0.024, 8, 8),
+      new THREE.SphereGeometry(0.015, 6, 6),
+    ];
+
+    let surgeResetTimer: any = null;
+
+    const triggerDataParticleStream = (targetIdParam?: string, isNewData = true) => {
+      // Determinar nó alvo
+      let targetMem = memories.find((m) => m.id === targetIdParam);
+      if (!targetMem && targetIdParam) {
+        const tClean = targetIdParam.toLowerCase().replace('mem-', '').replace('agente_', '');
+        targetMem = memories.find((m) => m.id.toLowerCase().includes(tClean) || m.title.toLowerCase().includes(tClean));
+      }
+      if (!targetMem && memories.length > 0) {
+        targetMem = memories[0];
+      }
+
+      const pStart = centralCorePos.clone();
+      const pEnd = targetMem ? new THREE.Vector3(...targetMem.coords) : new THREE.Vector3(0.4, 0.7, 0.5);
+      const targetId = targetMem ? targetMem.id : 'NUCLEO_JARVIS';
+      const dir = new THREE.Vector3().subVectors(pEnd, pStart).normalize();
+
+      // Ativa telemetria de trânsito de partículas no HUD
+      setIsParticleSurgeActive(true);
+      if (surgeResetTimer) clearTimeout(surgeResetTimer);
+      surgeResetTimer = setTimeout(() => {
+        setIsParticleSurgeActive(false);
+      }, 3400);
+
+      // Paleta neon dinâmica: Ciano elétrico e esmeralda para novo dado, ou escarlate/ouro para alerta
+      const colorPalette = isNewData
+        ? [0x00f5ff, 0x38bdf8, 0x10b981, 0x22d3ee]
+        : [0xff0055, 0xff3366, 0xfbbf24, 0x00f5ff];
+
+      const numParticlesInStream = 8;
+      for (let i = 0; i < numParticlesInStream; i++) {
+        const color = colorPalette[i % colorPalette.length];
+        const headMat = new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 1.0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const headMesh = new THREE.Mesh(particleHeadGeo, headMat);
+        headMesh.position.copy(pStart);
+        burstGroup.add(headMesh);
+
+        // Rastro luminoso (comet tail)
+        const trailMeshes: THREE.Mesh[] = [];
+        for (let t = 0; t < trailGeos.length; t++) {
+          const trailMat = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.65 - t * 0.18,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+          });
+          const trailMesh = new THREE.Mesh(trailGeos[t], trailMat);
+          trailMesh.position.copy(pStart);
+          burstGroup.add(trailMesh);
+          trailMeshes.push(trailMesh);
+        }
+
+        const lateral = new THREE.Vector3(
+          (Math.random() - 0.5) * 2,
+          (Math.random() - 0.5) * 2,
+          (Math.random() - 0.5) * 2
+        ).normalize();
+
+        const speed = 2.0 + Math.random() * 0.8;
+        // Iniciar com delay sequencial negativo para dispararem em comboio fluído
+        const progressOffset = -(i * 0.11);
+
+        activeDataParticles.push({
+          mesh: headMesh,
+          trailMeshes,
+          p1: pStart,
+          p2: pEnd,
+          direction: dir,
+          lateralSpread: lateral,
+          progress: progressOffset,
+          speed,
+          wobbleFreq: 14 + Math.random() * 6,
+          wobbleAmp: 0.05 + Math.random() * 0.03,
+          colorHex: color,
+          generation: 0,
+          targetId,
+          onArrive: i === 0 ? () => {
+            // A. Onda de Choque Sináptica (Shockwave Ring) no nó alvo
+            const ringGeo = new THREE.RingGeometry(0.04, 0.11, 24);
+            const ringMat = new THREE.MeshBasicMaterial({
+              color: 0x00f5ff,
+              transparent: true,
+              opacity: 0.95,
+              side: THREE.DoubleSide,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false,
+            });
+            const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+            ringMesh.position.copy(pEnd);
+            burstGroup.add(ringMesh);
+
+            activeShockwaves.push({
+              mesh: ringMesh,
+              position: pEnd.clone(),
+              age: 0,
+              maxAge: 0.75,
+              startScale: 1.0,
+              endScale: 5.2,
+              material: ringMat,
+            });
+
+            // B. Explosão de Centelhas Sinápticas (Sparks)
+            for (let s = 0; s < 14; s++) {
+              const spMat = new THREE.MeshBasicMaterial({
+                color: colorPalette[s % colorPalette.length],
+                transparent: true,
+                opacity: 1.0,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+              });
+              const spMesh = new THREE.Mesh(sparkSphereGeo, spMat);
+              spMesh.position.copy(pEnd);
+              burstGroup.add(spMesh);
+
+              const vel = new THREE.Vector3(
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2
+              ).normalize().multiplyScalar(0.75 + Math.random() * 0.9);
+
+              activeSparks.push({
+                mesh: spMesh,
+                position: pEnd.clone(),
+                velocity: vel,
+                age: 0,
+                maxAge: 0.55,
+                material: spMat,
+              });
+            }
+
+            // C. Cascata Secundária: Propagação instantânea pelas conexões entre sinapses!
+            const connectedBridges = targetedBridges.filter(
+              (b) => !b.isDirectToCore && (b.sourceMemoryId === targetId || b.targetMemoryId === targetId)
+            );
+
+            connectedBridges.forEach((bridge) => {
+              const isSource = bridge.sourceMemoryId === targetId;
+              const subP1 = isSource ? bridge.p1 : bridge.p2;
+              const subP2 = isSource ? bridge.p2 : bridge.p1;
+              const subDir = new THREE.Vector3().subVectors(subP2, subP1).normalize();
+
+              for (let k = 0; k < 3; k++) {
+                const subColor = 0x38bdf8;
+                const subMat = new THREE.MeshBasicMaterial({
+                  color: subColor,
+                  transparent: true,
+                  opacity: 0.95,
+                  blending: THREE.AdditiveBlending,
+                  depthWrite: false,
+                });
+                const subMesh = new THREE.Mesh(particleHeadGeo, subMat);
+                subMesh.position.copy(subP1);
+                burstGroup.add(subMesh);
+
+                const subTrails: THREE.Mesh[] = [];
+                for (let st = 0; st < 2; st++) {
+                  const stMat = new THREE.MeshBasicMaterial({
+                    color: subColor,
+                    transparent: true,
+                    opacity: 0.5 - st * 0.2,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                  });
+                  const stMesh = new THREE.Mesh(trailGeos[st], stMat);
+                  stMesh.position.copy(subP1);
+                  burstGroup.add(stMesh);
+                  subTrails.push(stMesh);
+                }
+
+                const subLateral = new THREE.Vector3(
+                  (Math.random() - 0.5) * 2,
+                  (Math.random() - 0.5) * 2,
+                  (Math.random() - 0.5) * 2
+                ).normalize();
+
+                activeDataParticles.push({
+                  mesh: subMesh,
+                  trailMeshes: subTrails,
+                  p1: subP1,
+                  p2: subP2,
+                  direction: subDir,
+                  lateralSpread: subLateral,
+                  progress: -(k * 0.14),
+                  speed: 2.3 + Math.random() * 0.5,
+                  wobbleFreq: 18,
+                  wobbleAmp: 0.04,
+                  colorHex: subColor,
+                  generation: 1,
+                  targetId: isSource ? bridge.targetMemoryId : (bridge.sourceMemoryId || ''),
+                });
+              }
+            });
+          } : undefined,
+        });
+      }
+    };
+
+    triggerDataBurstRef.current = triggerDataParticleStream;
+
+    // =========================================================================
     // 8. CONTROLES DE MOUSE / TOUCH / EXPANSÃO (ZOOM) E ROTAÇÃO MANUAL
     // =========================================================================
     let isDragging = false;
@@ -506,15 +928,15 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     let prevMouseY = 0;
     let targetRotationX = 0.1;
     let targetRotationY = 0.35;
-    let targetCameraDistance = 6.2;
+    let targetCameraDistance = 3.7;
     let initialPinchDist = 0;
 
     controlsRef.current = {
       zoomIn: () => {
-        targetCameraDistance = Math.max(2.6, targetCameraDistance - 0.9);
+        targetCameraDistance = Math.max(2.0, targetCameraDistance - 0.6);
       },
       zoomOut: () => {
-        targetCameraDistance = Math.min(10.0, targetCameraDistance + 0.9);
+        targetCameraDistance = Math.min(7.0, targetCameraDistance + 0.6);
       },
       rotateLeft: () => {
         targetRotationY -= Math.PI / 4;
@@ -525,7 +947,7 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       resetView: () => {
         targetRotationX = 0.1;
         targetRotationY = 0.35;
-        targetCameraDistance = 6.2;
+        targetCameraDistance = 3.7;
       },
     };
 
@@ -685,12 +1107,45 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       const breathingPulse = 1.0 + Math.sin(elapsed * 2.5) * (0.01 + synapticExcitation * 0.02);
       brainGroup.scale.set(breathingPulse, breathingPulse, breathingPulse);
 
-      // Iluminação pontual: acende em vermelho no alvo ou permanece em azul sereno
-      if (isFiring && targetId) {
-        const targetGroup = nodeGroupsMap.get(targetId);
+      // Iluminação pontual: acende em vermelho no alvo ou ilumina o núcleo sob sinapse
+      if (isFiring) {
+        let targetGroup: THREE.Group | undefined;
+        if (targetId) {
+          const tClean = targetId.toLowerCase().replace('mem-', '').replace('agente_', '').replace('sentinela-', '').replace('db_', '');
+          for (const [k, grp] of nodeGroupsMap.entries()) {
+            const kClean = k.toLowerCase().replace('mem-', '').replace('agente_', '').replace('sentinela-', '').replace('db_', '');
+            if (k.toLowerCase() === targetId.toLowerCase() || kClean === tClean || kClean.includes(tClean) || tClean.includes(kClean)) {
+              targetGroup = grp;
+              break;
+            }
+            if ((tClean.includes('taee') || tClean.includes('bazin')) && kClean.includes('taee')) {
+              targetGroup = grp;
+              break;
+            }
+            if (tClean.includes('bbas') && kClean.includes('bbas')) {
+              targetGroup = grp;
+              break;
+            }
+            if (tClean.includes('btc') && kClean.includes('btc')) {
+              targetGroup = grp;
+              break;
+            }
+            if (tClean.includes('wege') && kClean.includes('wege')) {
+              targetGroup = grp;
+              break;
+            }
+          }
+        }
+
         if (targetGroup) {
           pointLightSynapseRed.position.copy(targetGroup.position);
-          pointLightSynapseRed.intensity = synapticExcitation * 4.5;
+          pointLightSynapseRed.intensity = synapticExcitation * 5.0;
+        } else if (targetId) {
+          pointLightSynapseRed.intensity = synapticExcitation * 3.5;
+        } else {
+          // Pulso geral no cérebro
+          pointLightSynapseRed.position.set(0, 0.4, 0.5);
+          pointLightSynapseRed.intensity = synapticExcitation * 2.8;
         }
       } else {
         pointLightSynapseRed.intensity = 0.0;
@@ -702,42 +1157,81 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       centralHubMesh.rotation.x += 0.01;
 
       // =======================================================================
-      // 10. ATUALIZAÇÃO CIRÚRGICA DE SINAPSES (SOMENTE O NÓ ALVO FICA VERMELHO)
+      // 10. ATUALIZAÇÃO CIRÚRGICA DE SINAPSES (FLUXO MOLECULAR BIOLÓGICO DINÂMICO)
       // =======================================================================
       targetedBridges.forEach((bridge) => {
-        const isThisBridgeTargeted = targetId && bridge.targetMemoryId === targetId;
+        let isThisBridgeTargeted = false;
+        if (targetId) {
+          const tClean = targetId.toLowerCase().replace('mem-', '').replace('agente_', '').replace('sentinela-', '').replace('db_', '');
+          const bClean = bridge.targetMemoryId.toLowerCase().replace('mem-', '').replace('agente_', '').replace('sentinela-', '').replace('db_', '');
+
+          isThisBridgeTargeted = (
+            bridge.targetMemoryId.toLowerCase() === targetId.toLowerCase() ||
+            bClean === tClean ||
+            bClean.includes(tClean) ||
+            tClean.includes(bClean) ||
+            ((tClean.includes('taee') || tClean.includes('bazin')) && bClean.includes('taee')) ||
+            (tClean.includes('bbas') && bClean.includes('bbas')) ||
+            (tClean.includes('wege') && bClean.includes('wege')) ||
+            (tClean.includes('btc') && bClean.includes('btc')) ||
+            (tClean.includes('saude') && bClean.includes('saude')) ||
+            (tClean.includes('cfo') && (bClean.includes('cfo') || bClean.includes('taee')))
+          );
+        } else if (isFiring) {
+          // Quando for disparo geral da cognição sem nó específico, aciona os axônios principais do cérebro
+          isThisBridgeTargeted = bridge.isDirectToCore;
+        }
 
         if (isThisBridgeTargeted && isFiring) {
-          // A. SINAPSE CIRÚRGICA ALVO: COR VERMELHA VIBRANTE E EXPANSÃO DE PULSO
-          const pulseWave = Math.sin(elapsed * 18.0 + bridge.phaseOffset);
-          const dynamicRadius = (0.018 + synapticExcitation * 0.028) * (1.0 + pulseWave * 0.25);
+          // A. SINAPSE BIOLÓGICA ALVO: SUBSTITUIÇÃO DA LINHA VERMELHA POR FLUXO MOLECULAR
+          // O axônio mantém-se como um filamento neural translúcido sutil (SEM a barra vermelha pesada)
+          bridge.coreMesh.scale.set(0.008, bridge.length, 0.008);
+          (bridge.coreMesh.material as THREE.MeshBasicMaterial).color.setHex(0x1e3a5f);
+          (bridge.coreMesh.material as THREE.MeshBasicMaterial).opacity = 0.22;
 
-          bridge.coreMesh.scale.set(dynamicRadius, bridge.length, dynamicRadius);
-          (bridge.coreMesh.material as THREE.MeshBasicMaterial).color.copy(redColor);
-          (bridge.coreMesh.material as THREE.MeshBasicMaterial).opacity = 0.95;
+          bridge.glowMesh.scale.set(0.020, bridge.length, 0.020);
+          (bridge.glowMesh.material as THREE.MeshBasicMaterial).color.setHex(0x0284c7);
+          (bridge.glowMesh.material as THREE.MeshBasicMaterial).opacity = 0.14;
 
-          const glowRadius = dynamicRadius * 2.8;
-          bridge.glowMesh.scale.set(glowRadius, bridge.length, glowRadius);
-          (bridge.glowMesh.material as THREE.MeshBasicMaterial).color.copy(redGlowColor);
-          (bridge.glowMesh.material as THREE.MeshBasicMaterial).opacity = 0.75;
+          // LÓGICA BIOLÓGICA: Velocidade das moléculas proporcional à intensidade da sinapse (connectionsCount ou importância)
+          const targetMem = memories.find((m) => m.id === bridge.targetMemoryId);
+          const connections = targetMem?.connectionsCount ?? 6;
+          const importanceMultiplier =
+            targetMem?.importance === 'critica'
+              ? 2.8
+              : targetMem?.importance === 'alta'
+              ? 2.0
+              : 1.2;
 
-          // Partículas vermelhas viajando em alta velocidade apenas nesta sinapse
+          // Quanto maior a sinapse (mais conexões ou mais crítica), mais rápido o fluxo molecular
+          const intensityFactor = Math.min((connections / 4.5) * importanceMultiplier, 6.0);
+          const molecularVelocity = (1.8 + intensityFactor * 2.0) * (0.9 + synapticExcitation * 0.8);
+
+          // Partículas (bolas vermelhas esféricas) movendo-se como moléculas de neurotransmissores
           bridge.particles.forEach((part) => {
-            part.progress = (part.progress + part.speed * 2.8 * delta) % 1.0;
-            part.mesh.position.lerpVectors(bridge.p1, bridge.p2, part.progress);
-            const pScale = dynamicRadius * 3.0;
-            part.mesh.scale.set(pScale, pScale, pScale);
-            (part.mesh.material as THREE.MeshBasicMaterial).opacity = 0.98;
+            part.progress = (part.progress + part.baseSpeed * molecularVelocity * delta) % 1.0;
+
+            // Posição base ao longo do axônio com dispersão biológica vesicular lateral
+            const currentPos = new THREE.Vector3().lerpVectors(bridge.p1, bridge.p2, part.progress);
+            const lateralWobble = Math.sin(elapsed * 16.0 + part.wobblePhase) * 0.035;
+            currentPos.addScaledVector(part.lateralSpread, lateralWobble);
+            part.mesh.position.copy(currentPos);
+
+            // Escala dinâmica com pulso de disparo molecular
+            const pulse = 1.0 + Math.sin(part.progress * Math.PI) * 0.45;
+            const molScale = part.radius * 3.4 * pulse;
+            part.mesh.scale.set(molScale, molScale, molScale);
+            (part.mesh.material as THREE.MeshBasicMaterial).opacity = 0.96;
           });
         } else {
           // B. DEMAIS SINAPSES: REPOUSO AZUL CIBERNÉTICO SERENO (ZERO DISPARO VERMELHO)
-          bridge.coreMesh.scale.set(0.008, bridge.length, 0.008);
+          bridge.coreMesh.scale.set(0.007, bridge.length, 0.007);
           (bridge.coreMesh.material as THREE.MeshBasicMaterial).color.copy(restingCyanColor);
-          (bridge.coreMesh.material as THREE.MeshBasicMaterial).opacity = 0.16;
+          (bridge.coreMesh.material as THREE.MeshBasicMaterial).opacity = 0.14;
 
-          bridge.glowMesh.scale.set(0.018, bridge.length, 0.018);
+          bridge.glowMesh.scale.set(0.016, bridge.length, 0.016);
           (bridge.glowMesh.material as THREE.MeshBasicMaterial).color.copy(restingGlowColor);
-          (bridge.glowMesh.material as THREE.MeshBasicMaterial).opacity = 0.10;
+          (bridge.glowMesh.material as THREE.MeshBasicMaterial).opacity = 0.08;
 
           // Partículas ficam 100% invisíveis nas demais pontes
           bridge.particles.forEach((part) => {
@@ -747,13 +1241,132 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       });
 
       // =======================================================================
+      // 10.B ATUALIZAÇÃO DAS PARTÍCULAS CUSTOMIZADAS DE DADOS EM TRÂNSITO NAS SINAPSES
+      // =======================================================================
+      for (let i = activeDataParticles.length - 1; i >= 0; i--) {
+        const p = activeDataParticles[i];
+        p.progress += p.speed * delta;
+
+        if (p.progress < 0) {
+          // Aguardando disparo na esteira com delay
+          p.mesh.visible = false;
+          p.trailMeshes.forEach((tm) => (tm.visible = false));
+          continue;
+        }
+
+        if (p.progress >= 1.0) {
+          // Partícula alcançou o nó alvo da sinapse
+          if (p.onArrive) p.onArrive();
+          burstGroup.remove(p.mesh);
+          p.mesh.geometry.dispose();
+          (p.mesh.material as THREE.Material).dispose();
+
+          p.trailMeshes.forEach((tm) => {
+            burstGroup.remove(tm);
+            tm.geometry.dispose();
+            (tm.material as THREE.Material).dispose();
+          });
+
+          activeDataParticles.splice(i, 1);
+          continue;
+        }
+
+        p.mesh.visible = true;
+        p.trailMeshes.forEach((tm) => (tm.visible = true));
+
+        // Posição base interpolada ao longo da ponte sináptica
+        const basePos = new THREE.Vector3().lerpVectors(p.p1, p.p2, p.progress);
+
+        // Movimento espiral e pulso elétrico orgânico ao redor do feixe axônico
+        const spiralAngle = p.progress * Math.PI * 6 + elapsed * p.wobbleFreq;
+        const crossAxis = new THREE.Vector3().crossVectors(p.direction, p.lateralSpread).normalize();
+        const spiralOffset = p.lateralSpread.clone().multiplyScalar(Math.cos(spiralAngle) * p.wobbleAmp)
+          .add(crossAxis.clone().multiplyScalar(Math.sin(spiralAngle) * p.wobbleAmp));
+        const headPos = basePos.add(spiralOffset);
+        p.mesh.position.copy(headPos);
+
+        // Pulso de escala da cabeça da partícula de dados
+        const pulseHead = 1.0 + Math.sin(p.progress * Math.PI) * 0.45;
+        p.mesh.scale.set(pulseHead, pulseHead, pulseHead);
+
+        // Rastro luminoso (comet tail) que acompanha dinamicamente a trajetória
+        for (let t = 0; t < p.trailMeshes.length; t++) {
+          const trailProgress = Math.max(0, p.progress - (t + 1) * 0.035);
+          const tBasePos = new THREE.Vector3().lerpVectors(p.p1, p.p2, trailProgress);
+          const tSpiralAngle = trailProgress * Math.PI * 6 + elapsed * p.wobbleFreq;
+          const tOffset = p.lateralSpread.clone().multiplyScalar(Math.cos(tSpiralAngle) * (p.wobbleAmp * 0.8))
+            .add(crossAxis.clone().multiplyScalar(Math.sin(tSpiralAngle) * (p.wobbleAmp * 0.8)));
+          p.trailMeshes[t].position.copy(tBasePos.add(tOffset));
+          const tScale = Math.max(0.2, (1.0 - (t + 1) * 0.22) * pulseHead);
+          p.trailMeshes[t].scale.set(tScale, tScale, tScale);
+        }
+      }
+
+      // Atualização das Ondas de Choque Sinápticas (Shockwaves)
+      for (let i = activeShockwaves.length - 1; i >= 0; i--) {
+        const shock = activeShockwaves[i];
+        shock.age += delta;
+        const life = shock.age / shock.maxAge;
+        if (life >= 1.0) {
+          burstGroup.remove(shock.mesh);
+          shock.mesh.geometry.dispose();
+          shock.material.dispose();
+          activeShockwaves.splice(i, 1);
+          continue;
+        }
+
+        const scale = THREE.MathUtils.lerp(shock.startScale, shock.endScale, Math.pow(life, 0.6));
+        shock.mesh.scale.set(scale, scale, scale);
+        shock.material.opacity = (1.0 - life) * 0.95;
+        shock.mesh.lookAt(camera.position);
+      }
+
+      // Atualização das Centelhas Radiais (Sparks de potencial de ação)
+      for (let i = activeSparks.length - 1; i >= 0; i--) {
+        const sp = activeSparks[i];
+        sp.age += delta;
+        const life = sp.age / sp.maxAge;
+        if (life >= 1.0) {
+          burstGroup.remove(sp.mesh);
+          sp.mesh.geometry.dispose();
+          sp.material.dispose();
+          activeSparks.splice(i, 1);
+          continue;
+        }
+
+        sp.mesh.position.addScaledVector(sp.velocity, delta);
+        sp.material.opacity = 1.0 - life;
+        const s = 1.0 - life * 0.5;
+        sp.mesh.scale.set(s, s, s);
+      }
+
+      // =======================================================================
       // 11. ATUALIZAÇÃO DOS NÓS MENORES (RETÍCULOS E LABELS)
       // =======================================================================
       memories.forEach((mem) => {
         const group = nodeGroupsMap.get(mem.id);
         if (!group) return;
 
-        const isTarget = targetId && mem.id === targetId;
+        let isTarget = false;
+        if (targetId) {
+          const tClean = targetId.toLowerCase().replace('mem-', '').replace('agente_', '').replace('sentinela-', '').replace('db_', '');
+          const mClean = mem.id.toLowerCase().replace('mem-', '').replace('agente_', '').replace('sentinela-', '').replace('db_', '');
+          isTarget = (
+            mem.id.toLowerCase() === targetId.toLowerCase() ||
+            mClean === tClean ||
+            mClean.includes(tClean) ||
+            tClean.includes(mClean) ||
+            ((tClean.includes('taee') || tClean.includes('bazin')) && mClean.includes('taee')) ||
+            (tClean.includes('bbas') && mClean.includes('bbas')) ||
+            (tClean.includes('wege') && mClean.includes('wege')) ||
+            (tClean.includes('btc') && mClean.includes('btc')) ||
+            (tClean.includes('saude') && mClean.includes('saude')) ||
+            (tClean.includes('cfo') && mClean.includes('cfo'))
+          );
+        } else if (isFiring) {
+          isTarget = mem.importance === 'critica';
+        }
+
         const isSelected = selectedMemory && mem.id === selectedMemory.id;
         const isHovered = hoveredMemory && mem.id === hoveredMemory.id;
 
@@ -842,6 +1455,30 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
       }
+      if (surgeResetTimer) clearTimeout(surgeResetTimer);
+      activeDataParticles.forEach((p) => {
+        burstGroup.remove(p.mesh);
+        p.mesh.geometry.dispose();
+        (p.mesh.material as THREE.Material).dispose();
+        p.trailMeshes.forEach((tm) => {
+          burstGroup.remove(tm);
+          tm.geometry.dispose();
+          (tm.material as THREE.Material).dispose();
+        });
+      });
+      activeShockwaves.forEach((sw) => {
+        burstGroup.remove(sw.mesh);
+        sw.mesh.geometry.dispose();
+        sw.material.dispose();
+      });
+      activeSparks.forEach((sp) => {
+        burstGroup.remove(sp.mesh);
+        sp.mesh.geometry.dispose();
+        sp.material.dispose();
+      });
+      sparkSphereGeo.dispose();
+      particleHeadGeo.dispose();
+      trailGeos.forEach((g) => g.dispose());
       renderer.dispose();
     };
   }, [memories, onSelectMemory]);
@@ -861,7 +1498,12 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
                 : 'bg-cyan-400 shadow-[0_0_8px_#22d3ee]'
             }`}
           />
-          {isCurrentlyFiring && currentTargetMem ? (
+          {isParticleSurgeActive ? (
+            <span className="text-cyan-300 font-bold flex items-center gap-1.5 animate-pulse">
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+              Ingestão de Dados: <span className="text-white underline underline-offset-2">Cascata de Partículas Sinápticas</span>
+            </span>
+          ) : isCurrentlyFiring && currentTargetMem ? (
             <span className="text-red-400 font-bold flex items-center gap-1.5">
               <Target className="w-3.5 h-3.5 text-red-400 animate-spin" />
               Sinapse Cirúrgica: <span className="text-white underline underline-offset-2">{currentTargetMem.title}</span>
@@ -908,6 +1550,17 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
 
       {/* Controles Flutuantes Manuais: Expandir (Zoom In/Out) e Girar de um lado para o outro à vontade */}
       <div className="absolute right-4 top-1/2 -translate-y-1/2 flex flex-col gap-1.5 z-20 pointer-events-auto">
+        <button
+          onClick={() => triggerDataBurstRef.current(activeTargetNodeId || undefined, true)}
+          title="Disparar Animação de Partículas (Fluxo de Novo Dado nas Sinapses)"
+          className="p-2.5 rounded-xl bg-cyan-950/90 hover:bg-cyan-900 text-cyan-300 hover:text-white border border-cyan-400/50 hover:border-cyan-300 transition-all shadow-lg active:scale-95 group relative"
+        >
+          <Sparkles className="w-4 h-4 text-cyan-400 group-hover:rotate-45 transition-transform" />
+          <span className="absolute right-full mr-2.5 px-2.5 py-1 bg-slate-950/95 border border-cyan-500/40 rounded-lg text-[10px] text-cyan-300 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-xl font-mono">
+            Disparar Fluxo de Partículas (Novo Dado)
+          </span>
+        </button>
+        <div className="w-full h-px bg-cyan-500/20 my-0.5" />
         <button
           onClick={() => controlsRef.current.zoomIn()}
           title="Expandir Cérebro (Aproximar / Zoom In)"

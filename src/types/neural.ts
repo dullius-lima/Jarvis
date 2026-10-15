@@ -91,6 +91,24 @@ export interface AgentDefinition {
     requestReason: string;
     requestedAt: string;
   };
+  // Ferramentas & Funções integradas do Agente (API, MCP, Webhook, Funções de Código)
+  tools?: AgentTool[];
+}
+
+export interface AgentTool {
+  id: string;
+  name: string;
+  description: string;
+  type: 'API' | 'MCP' | 'WEBHOOK' | 'FUNCTION' | 'WORKSPACE' | 'SQL';
+  endpointOrMethod?: string;
+  parametersSchema?: string;
+  codeSnippet?: string;
+  headersOrAuth?: string;
+  enabled: boolean;
+  author: 'IA_AUTONOMA' | 'USUARIO';
+  createdAt: string;
+  lastExecutedAt?: string;
+  lastExecutionResult?: string;
 }
 
 export interface AgentAuditResult {

@@ -31,11 +31,9 @@ const DATASTORES_INICIAIS: Record<string, MicroDatastoreParticionado> = {
       nome: 'Sentinela Bazin TAEE11',
       chaveParticao: 'TAEE11',
       tipo: 'ativo_b3',
-      status: 'alerta_disparado',
+      status: 'vigilante',
       regraMonitoramento: 'Avisar se cotação operar abaixo do Teto Bazin de R$ 38.83 com margem > 10%',
       dataUltimaAuditoria: '14/10/2026 19:30',
-      alertaVigente: 'Oportunidade de aporte confirmada: Cotação a R$ 34.20 opera com margem de segurança de +13.5% frente ao teto Bazin.',
-      dataAlerta: '14/10/2026 18:00',
     },
   },
 
@@ -204,6 +202,15 @@ export class MicroDatastoresService {
     if (salvo) {
       try {
         this.datastores = JSON.parse(salvo);
+        // Garantir sentinelas limpos em modo vigilante neutro (sem alertas forçados)
+        Object.values(this.datastores).forEach((ds) => {
+          if (ds.agenteSentinela) {
+            ds.agenteSentinela.status = 'vigilante';
+            delete ds.agenteSentinela.alertaVigente;
+            delete ds.agenteSentinela.dataAlerta;
+          }
+        });
+        this.persistir();
       } catch (e) {
         this.datastores = { ...DATASTORES_INICIAIS };
       }
@@ -469,19 +476,43 @@ export class MicroDatastoresService {
     return Object.values(this.datastores).map((ds) => ds.agenteSentinela);
   }
 
-  // Disparar auditoria nos agentes e retornar alertas pendentes
+  // Disparo manual ou programado de alerta em sentinela específico
+  public dispararAlertaSentinela(chave: string): AgenteSentinela | null {
+    const key = chave.toUpperCase().trim();
+    const ds = this.datastores[key];
+    if (!ds) return null;
+
+    ds.agenteSentinela.status = 'alerta_disparado';
+    if (key === 'TAEE11') {
+      ds.agenteSentinela.alertaVigente = 'Sentinela Bazin TAEE11: Cotação em R$ 34.20 com margem de segurança de +13.5% frente ao teto Bazin de R$ 38.83. Alocação decenal recomendada.';
+    } else if (key === 'BBAS3') {
+      ds.agenteSentinela.alertaVigente = 'Sentinela Agro BBAS3: Cotação R$ 27.80 operando abaixo do teto de R$ 32.50 (+16.9% de margem). Basileia sólida.';
+    } else if (key === 'WEGE3') {
+      ds.agenteSentinela.alertaVigente = 'Sentinela WEGE3: Alerta de recuo operacional monitorado. ROIC em 31.8% e alavancagem de 0.15x.';
+    } else if (key === 'BTC') {
+      ds.agenteSentinela.alertaVigente = 'Sentinela BTC: Alerta de volatilidade acionado. Suporte testado em US$ 67.450.';
+    } else {
+      ds.agenteSentinela.alertaVigente = `Sentinela ${key}: Alerta de monitoramento prioritário disparado.`;
+    }
+    ds.agenteSentinela.dataAlerta = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    this.persistir();
+
+    this.registrarLog({
+      chaveParticao: key,
+      evento: `Disparo de Alerta Sentinela [${key}]`,
+      detalhes: ds.agenteSentinela.alertaVigente,
+      latenciaMs: 0.03,
+      tipo: 'sentinela_disparo',
+    });
+
+    return ds.agenteSentinela;
+  }
+
+  // Obter alertas pendentes
   public verificarAlertasAtivos(): AgenteSentinela[] {
     const alertas = Object.values(this.datastores)
       .map((ds) => ds.agenteSentinela)
       .filter((ag) => ag.status === 'alerta_disparado');
-
-    this.registrarLog({
-      chaveParticao: 'TODOS_SILOS',
-      evento: 'Auditoria de Sentinelas Concluída',
-      detalhes: `Varredura paralela nos sentinelas concluída. Alertas ativos encontrados: ${alertas.length} (${alertas.map((a) => a.chaveParticao).join(', ') || 'Nenhum'}). Silos operando sem contaminação.`,
-      latenciaMs: 0.06,
-      tipo: 'auditoria',
-    });
 
     return alertas;
   }

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { AgentDefinition, AgentAuditResult, LLMProviderType } from '../types/neural';
+import { AgentDefinition, AgentAuditResult, AgentTool, LLMProviderType } from '../types/neural';
 import { AgentRegistryService } from '../services/agentRegistry';
 import { MicroDatastoresService } from '../services/microDatastores';
 import { cfoDecisionService } from '../services/cfoDecisionService';
+import { JarvisVoiceService } from '../services/jarvisVoice';
 import { AgentTerminalModal } from './AgentTerminalModal';
 import {
   Bot,
@@ -78,6 +79,17 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
   const [mcpRawPayload, setMcpRawPayload] = useState('');
   const [isTranscribingMcp, setIsTranscribingMcp] = useState(false);
   const [mcpSuccessFeedback, setMcpSuccessFeedback] = useState<string | null>(null);
+
+  // Estados para Ferramentas & Funções Customizadas (Tools de API, MCP, Webhook, Funções)
+  const [selectedAgentForAddTool, setSelectedAgentForAddTool] = useState<AgentDefinition | null>(null);
+  const [newToolName, setNewToolName] = useState('');
+  const [newToolType, setNewToolType] = useState<'API' | 'MCP' | 'WEBHOOK' | 'FUNCTION' | 'WORKSPACE' | 'SQL'>('API');
+  const [newToolEndpoint, setNewToolEndpoint] = useState('');
+  const [newToolParams, setNewToolParams] = useState('');
+  const [newToolCode, setNewToolCode] = useState('');
+  const [newToolDescription, setNewToolDescription] = useState('');
+  const [executedToolFeedback, setExecutedToolFeedback] = useState<{ toolId: string; result: string; timestamp: string } | null>(null);
+  const [activeTriggerFeedback, setActiveTriggerFeedback] = useState<{ agentName: string; action: string } | null>(null);
 
   // Formulário de Criação de Novo Agente Manual
   const [novoNome, setNovoNome] = useState('');
@@ -249,9 +261,76 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
     setNovosGatilhos('');
   };
 
+  const handleSalvarNovaTool = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAgentForAddTool || !newToolName.trim()) return;
+
+    const novaTool: AgentTool = {
+      id: `tool-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      name: newToolName.trim(),
+      description: newToolDescription.trim() || `Ferramenta ${newToolType} configurada para ${selectedAgentForAddTool.name}`,
+      type: newToolType,
+      endpointOrMethod: newToolEndpoint.trim() || undefined,
+      parametersSchema: newToolParams.trim() || undefined,
+      codeSnippet: newToolCode.trim() || undefined,
+      enabled: true,
+      author: 'USUARIO',
+      createdAt: new Date().toLocaleDateString('pt-BR'),
+    };
+
+    agentService.addToolToAgent(selectedAgentForAddTool.id, novaTool);
+    recarregar();
+    setSelectedAgentForAddTool(null);
+    setNewToolName('');
+    setNewToolEndpoint('');
+    setNewToolParams('');
+    setNewToolCode('');
+    setNewToolDescription('');
+    onTriggerSynapse(`Nova Tool [${novaTool.type}] Criada para ${selectedAgentForAddTool.name}!`);
+
+    try {
+      JarvisVoiceService.getInstance().speak(`Nova ferramenta ${novaTool.name} integrada com sucesso.`);
+    } catch {}
+  };
+
+  const handleExecutarTool = async (agent: AgentDefinition, tool: AgentTool) => {
+    setActiveTriggerFeedback({
+      agentName: agent.name,
+      action: `Executando Ferramenta [${tool.name}] (${tool.type})...`,
+    });
+
+    onTriggerSynapse(`⚡ Tool [${tool.name}] do Agente ${agent.name} Acionada!`);
+
+    try {
+      JarvisVoiceService.getInstance().speak(`Acionando ${tool.name} do agente ${agent.name}.`);
+    } catch {}
+
+    const res = await agentService.executeAgentTool(agent.id, tool.id);
+    setExecutedToolFeedback({
+      toolId: tool.id,
+      result: res.result,
+      timestamp: res.timestamp,
+    });
+    recarregar();
+
+    setTimeout(() => {
+      setActiveTriggerFeedback(null);
+    }, 4500);
+  };
+
   const handleExecutarAuditoria = async (agent: AgentDefinition) => {
     setRunningAuditId(agent.id);
-    onTriggerSynapse(`Auditoria Delegada: ${agent.name}`);
+    setActiveTriggerFeedback({
+      agentName: agent.name,
+      action: 'Auditoria de Solvência & Valuation Decenal Iniciada...',
+    });
+
+    onTriggerSynapse(`⚡ Agente Acionado: ${agent.name}`);
+
+    try {
+      JarvisVoiceService.getInstance().speak(`Agente ${agent.name} acionado para auditoria.`);
+    } catch {}
+
     try {
       const res = await agentService.delegateAudit(agent.id);
       setLastAuditResult(res);
@@ -260,6 +339,9 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
       console.warn('Erro ao executar auditoria delegada:', e);
     } finally {
       setRunningAuditId(null);
+      setTimeout(() => {
+        setActiveTriggerFeedback(null);
+      }, 4500);
     }
   };
 
@@ -311,6 +393,34 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Banner de Interação Ativa quando um Agente ou Tool é Acionado */}
+        {activeTriggerFeedback && (
+          <div className="mb-3 p-3.5 rounded-2xl bg-gradient-to-r from-red-950/90 via-slate-900 to-cyan-950/80 border border-red-500/60 shadow-[0_0_30px_rgba(239,68,68,0.4)] flex items-center justify-between text-xs animate-in slide-in-from-top-2">
+            <div className="flex items-center gap-3">
+              <span className="w-3 h-3 rounded-full bg-red-500 animate-ping shrink-0" />
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-white text-sm">
+                    ⚡ Agente Acionado: {activeTriggerFeedback.agentName}
+                  </span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-600 text-white font-bold uppercase">
+                    Em Execução
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-0.5 font-sans">
+                  {activeTriggerFeedback.action}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveTriggerFeedback(null)}
+              className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded-lg border border-slate-700 hover:bg-slate-800"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Barra de Ações: Busca & Abrir Estúdio de Código / Criar Agente */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 mb-4">
@@ -967,6 +1077,119 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
                   </div>
                 )}
 
+                {/* Seção de Ferramentas & Funções Integradas no Código (Tools do Agente) */}
+                <div className="rounded-2xl bg-slate-950/85 border border-slate-800/90 p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Code className="w-4 h-4 text-cyan-400" />
+                      <span className="font-bold text-xs text-white">
+                        Ferramentas & Funções Integradas ({agent.tools?.length || 0} Tools)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedAgentForAddTool(agent);
+                        setNewToolName('');
+                        setNewToolType('API');
+                        setNewToolEndpoint('');
+                        setNewToolParams('');
+                        setNewToolCode('');
+                        setNewToolDescription('');
+                      }}
+                      className="px-2.5 py-1 rounded-xl bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                      title="Adicionar uma nova ferramenta (API, MCP, Webhook, Função)"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Criar Tool (+)</span>
+                    </button>
+                  </div>
+
+                  {(!agent.tools || agent.tools.length === 0) ? (
+                    <div className="text-xs text-slate-400 py-1 font-sans italic">
+                      Nenhuma ferramenta customizada criada ainda. Clique em "Criar Tool (+)" para adicionar API, protocolo MCP, Webhook ou funções de código.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {agent.tools.map((t) => (
+                        <div
+                          key={t.id}
+                          className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 flex flex-col justify-between gap-2"
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-1 mb-1">
+                              <span
+                                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full uppercase border ${
+                                  t.type === 'API'
+                                    ? 'bg-blue-950/80 text-blue-300 border-blue-500/40'
+                                    : t.type === 'MCP'
+                                    ? 'bg-purple-950/80 text-purple-300 border-purple-500/40'
+                                    : t.type === 'WEBHOOK'
+                                    ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
+                                    : t.type === 'WORKSPACE'
+                                    ? 'bg-amber-950/80 text-amber-300 border-amber-500/40'
+                                    : 'bg-cyan-950/80 text-cyan-300 border-cyan-500/40'
+                                }`}
+                              >
+                                {t.type}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                {t.author === 'USUARIO' ? 'Personalizada' : 'Código IA'}
+                              </span>
+                            </div>
+                            <h5 className="font-bold text-xs text-white leading-tight">
+                              {t.name}
+                            </h5>
+                            <p className="text-[11px] text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                              {t.description}
+                            </p>
+                            {t.endpointOrMethod && (
+                              <div className="mt-1 text-[10px] font-mono text-cyan-400/90 truncate">
+                                🔗 {t.endpointOrMethod}
+                              </div>
+                            )}
+                            {t.lastExecutionResult && (
+                              <div className="mt-1.5 p-1.5 rounded bg-slate-950 border border-slate-800 text-[10px] font-mono text-emerald-300 truncate">
+                                ✓ {t.lastExecutionResult}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {t.lastExecutedAt || 'Pronta'}
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleExecutarTool(agent, t)}
+                                className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-slate-950 text-xs font-bold flex items-center gap-1 shadow-sm transition-all cursor-pointer"
+                                title="Executar esta ferramenta e verificar interação do agente"
+                              >
+                                <Play className="w-3 h-3" />
+                                <span>Executar</span>
+                              </button>
+                              {t.author === 'USUARIO' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    agentService.deleteToolFromAgent(agent.id, t.id);
+                                    recarregar();
+                                  }}
+                                  className="p-1 text-slate-500 hover:text-rose-400 rounded"
+                                  title="Remover ferramenta"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* Rodapé do Card: Ações */}
                 <div className="flex items-center justify-between pt-1">
                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -1195,6 +1418,139 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Criar Nova Ferramenta / Tool Personalizada para o Agente */}
+      {selectedAgentForAddTool && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md animate-in fade-in">
+          <div className="w-full max-w-xl bg-slate-900 border border-cyan-500/50 rounded-3xl p-6 shadow-2xl relative text-slate-100 flex flex-col max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setSelectedAgentForAddTool(null)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-xl bg-cyan-950 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+                <Code className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  Criar Nova Tool para {selectedAgentForAddTool.name}
+                </h3>
+                <p className="text-xs text-slate-400 font-sans">
+                  Adicione API, protocolo MCP, Webhook ou função executável ao pipeline deste agente.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSalvarNovaTool} className="space-y-3.5">
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-300 block mb-1">
+                  Nome da Ferramenta / Tool
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newToolName}
+                  onChange={(e) => setNewToolName(e.target.value)}
+                  placeholder="Ex: API B3 Cotador Intradiário, MCP Feed Balanço..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white outline-none focus:border-cyan-500 font-sans"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold uppercase text-slate-300 block mb-1">
+                    Tipo de Ferramenta
+                  </label>
+                  <select
+                    value={newToolType}
+                    onChange={(e: any) => setNewToolType(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-cyan-500 font-mono"
+                  >
+                    <option value="API">API REST / Feed</option>
+                    <option value="MCP">Protocolo MCP</option>
+                    <option value="WEBHOOK">Webhook Externo (n8n)</option>
+                    <option value="FUNCTION">Função de Código Local</option>
+                    <option value="WORKSPACE">Google Workspace</option>
+                    <option value="SQL">Query / Relacional</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold uppercase text-slate-300 block mb-1">
+                    Endpoint / Método
+                  </label>
+                  <input
+                    type="text"
+                    value={newToolEndpoint}
+                    onChange={(e) => setNewToolEndpoint(e.target.value)}
+                    placeholder="https://... ou mcp://... ou func.exec()"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-cyan-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-300 block mb-1">
+                  Descrição da Ação da Tool
+                </label>
+                <input
+                  type="text"
+                  value={newToolDescription}
+                  onChange={(e) => setNewToolDescription(e.target.value)}
+                  placeholder="Ex: Coleta cotações em tempo real e calcula margem de segurança de Bazin"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-cyan-500 font-sans"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-300 block mb-1">
+                  Parâmetros / Schema JSON (Opcional)
+                </label>
+                <textarea
+                  rows={2}
+                  value={newToolParams}
+                  onChange={(e) => setNewToolParams(e.target.value)}
+                  placeholder={`{\n  "ticker": "${selectedAgentForAddTool.targetDatabase}",\n  "intervalo": "1d"\n}`}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-xs text-slate-200 outline-none focus:border-cyan-500 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase text-slate-300 block mb-1">
+                  Código / Instrução de Execução (Opcional)
+                </label>
+                <textarea
+                  rows={2}
+                  value={newToolCode}
+                  onChange={(e) => setNewToolCode(e.target.value)}
+                  placeholder="const result = await fetch(endpoint, { headers }); return result.json();"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-xs text-slate-200 outline-none focus:border-cyan-500 font-mono"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setSelectedAgentForAddTool(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow-lg transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Salvar Ferramenta no Agente</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

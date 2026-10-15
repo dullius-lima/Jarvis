@@ -401,6 +401,19 @@ export const MicroDatastoresModal: React.FC<MicroDatastoresModalProps> = ({
                         <div className="flex items-center gap-3">
                           <button
                             onClick={() => {
+                              const disparado = service.dispararAlertaSentinela(ds.chave);
+                              if (disparado) {
+                                onAlertTriggered(disparado);
+                                onClose();
+                              }
+                            }}
+                            className="text-rose-400 hover:text-rose-300 font-bold flex items-center gap-1 bg-rose-950/40 hover:bg-rose-900/50 px-2 py-0.5 rounded border border-rose-500/30 transition-colors"
+                            title={`Disparar sinapse molecular e alerta do sentinela de ${ds.chave} no cérebro 3D`}
+                          >
+                            <Zap className="w-3 h-3 text-rose-400" /> Disparar Sinapse ({ds.chave})
+                          </button>
+                          <button
+                            onClick={() => {
                               handleExecutarSimulacaoIsolamento(ds.chave);
                               setAbaAtiva('logs_explicacao');
                             }}

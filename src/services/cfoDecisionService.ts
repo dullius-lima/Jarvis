@@ -273,8 +273,140 @@ class CfoDecisionService {
       console.warn('Falha ao persistir decisão do CFO:', e);
     }
 
+    // Disparo autônomo assíncrono para o Webhook do n8n (se configurado)
+    this.enviarParaN8nWebhook(decisaoCompleta).catch((err) => {
+      console.warn('Falha silenciosa no envio ao Webhook n8n:', err);
+    });
+
     this.notificarListeners();
     return decisaoCompleta;
+  }
+
+  // =========================================================================
+  // INTEGRAÇÃO COM N8N WEBHOOK
+  // =========================================================================
+  private readonly N8N_STORAGE_KEY = 'jarvis_n8n_webhook_url';
+
+  public getN8nWebhookUrl(): string {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem(this.N8N_STORAGE_KEY) || '';
+  }
+
+  public setN8nWebhookUrl(url: string): void {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem(this.N8N_STORAGE_KEY, url.trim());
+    this.notificarListeners();
+  }
+
+  public async enviarParaN8nWebhook(decisao: DecisaoAutonomaCFO): Promise<{ success: boolean; status?: number; error?: string }> {
+    const webhookUrl = this.getN8nWebhookUrl();
+    if (!webhookUrl) return { success: false, error: 'URL do n8n não configurada' };
+
+    const payload = {
+      event: 'CFO_DECISION_EVENT',
+      source: 'JARVIS_NEURAL_BRAIN_CFO',
+      timestamp: decisao.dataHora,
+      decisionId: decisao.id,
+      actionType: decisao.tipoAcao,
+      title: decisao.titulo,
+      targetAsset: decisao.ativoOuAlvo,
+      category: decisao.categoria,
+      impact: decisao.impacto,
+      rationale: decisao.justificativaLogica,
+      executiveDetails: decisao.detalhesExecutivos,
+      parameters: decisao.parametros,
+      author: decisao.autor,
+      status: decisao.status,
+      neuralMetadata: {
+        targetNodeId: decisao.targetNodeId,
+        reversible: decisao.reversivel,
+      },
+    };
+
+    try {
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Jarvis-Event': 'CFO_DECISION',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      return {
+        success: response.ok,
+        status: response.status,
+      };
+    } catch (err: any) {
+      console.warn('Erro ao disparar webhook para n8n:', err);
+      return {
+        success: false,
+        error: err?.message || 'Falha de rede ao conectar com o n8n',
+      };
+    }
+  }
+
+  public async testarDisparoN8n(): Promise<{ success: boolean; message: string; payload: any }> {
+    const webhookUrl = this.getN8nWebhookUrl();
+    if (!webhookUrl) {
+      return {
+        success: false,
+        message: 'Por favor, informe a URL do Webhook do n8n antes de testar.',
+        payload: null,
+      };
+    }
+
+    const payloadTeste = {
+      event: 'CFO_DECISION_EVENT',
+      source: 'JARVIS_NEURAL_BRAIN_CFO',
+      timestamp: new Date().toISOString(),
+      decisionId: `test-n8n-${Date.now()}`,
+      actionType: 'PARECER_ALOCACAO',
+      title: 'Teste de Integração: Webhook n8n CFO Jarvis',
+      targetAsset: 'TAEE11',
+      category: 'AÇÕES B3',
+      impact: 'INFO',
+      rationale: 'Validação de conectividade entre o Cérebro Neural do Jarvis e o fluxo de automação externa do n8n.',
+      executiveDetails: 'Disparo de teste estruturado para acionamento de alertas no Telegram, Slack, Notion ou Sheets via n8n.',
+      parameters: {
+        tetoBazin: 39.20,
+        cotacao: 34.10,
+        margemSeguranca: '+14.9%',
+      },
+      author: 'Matheus Dullius (Teste de Integração)',
+      status: 'EXECUTADO',
+    };
+
+    try {
+      const res = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Jarvis-Event': 'CFO_DECISION_TEST',
+        },
+        body: JSON.stringify(payloadTeste),
+      });
+
+      if (res.ok) {
+        return {
+          success: true,
+          message: `Webhook recebido com sucesso pelo n8n (Status ${res.status})!`,
+          payload: payloadTeste,
+        };
+      } else {
+        return {
+          success: false,
+          message: `O n8n respondeu com status ${res.status}: ${res.statusText}`,
+          payload: payloadTeste,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `Falha na requisição: ${err?.message || 'Erro de rede ou CORS no n8n'}`,
+        payload: payloadTeste,
+      };
+    }
   }
 
   public limparHistorico(): void {
