@@ -5,6 +5,8 @@ import { SynapseMemoryPanel } from './components/SynapseMemoryPanel';
 import { MicroDatastoresModal } from './components/MicroDatastoresModal';
 import { AgentRegistryModal } from './components/AgentRegistryModal';
 import { LLMConfigModal } from './components/LLMConfigModal';
+import { CfoDecisionsModal } from './components/CfoDecisionsModal';
+import { cfoDecisionService } from './services/cfoDecisionService';
 import { INITIAL_SYNAPSE_MEMORIES } from './data/synapseMemories';
 import {
   SynapseMemory,
@@ -39,7 +41,9 @@ import {
   HelpCircle,
   Sparkles,
   ChevronDown,
-  Keyboard
+  Keyboard,
+  Trash2,
+  History,
 } from 'lucide-react';
 
 export default function App() {
@@ -108,6 +112,7 @@ export default function App() {
   const [datastoresModalOpen, setDatastoresModalOpen] = useState<boolean>(false);
   const [databaseExplainerOpen, setDatabaseExplainerOpen] = useState<boolean>(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState<boolean>(false);
+  const [cfoDecisionsModalOpen, setCfoDecisionsModalOpen] = useState<boolean>(false);
 
   // Modo TV & Dispositivos
   const [tvMode, setTvMode] = useState<boolean>(false);
@@ -281,6 +286,389 @@ export default function App() {
     await entrarModoOperacao();
   };
 
+  // Adicionar uma nova memória diretamente no cérebro 3D
+  const adicionarNovaMemoria = (
+    mem: Omit<SynapseMemory, 'id' | 'coords' | 'firing' | 'connectionsCount'>
+  ) => {
+    let coords: [number, number, number] = [0, 0, 0];
+    if (mem.category === 'investimento' || mem.category === 'cfo') {
+      coords = [
+        (Math.random() - 0.5) * 1.2,
+        1.0 + Math.random() * 0.6,
+        0.8 + Math.random() * 0.8,
+      ];
+    } else if (mem.category === 'saude') {
+      coords = [1.2 + Math.random() * 0.4, 0.2 + Math.random() * 0.5, 0.2];
+    } else {
+      coords = [
+        (Math.random() - 0.5) * 1.4,
+        Math.random() * 0.8,
+        (Math.random() - 0.5) * 1.5,
+      ];
+    }
+
+    const nova: SynapseMemory = {
+      ...mem,
+      id: `mem-${Date.now()}`,
+      coords,
+      firing: true,
+      connectionsCount: Math.floor(4 + Math.random() * 8),
+      color: 0xef4444, // Sinapse vermelha
+    };
+
+    setMemories((prev) => [nova, ...prev]);
+    dispararSinapse(`Nova Memória Gravada: "${mem.title}"`);
+    voiceService.playBeepSound();
+  };
+
+  const excluirMemoria = (id: string) => {
+    setMemories((prev) => prev.filter((m) => m.id !== id));
+    if (selectedMemory?.id === id) setSelectedMemory(null);
+  };
+
+  // Executor Central de Ações Autônomas da LLM (Criação e Exclusão Irrestrita de Agentes e Memórias)
+  const executarAcoesAutonomas = (actions: {
+    createdAgents?: Array<{
+      name: string;
+      role: string;
+      targetDatabase: string;
+      logic: string;
+      cognitiveEvaluation?: {
+        objective: string;
+        requiredInformation: string[];
+        whatToRequest: string[];
+        evaluationRationale: string;
+        targetAssetClass?: string;
+      };
+    }>;
+    deletedAgents?: Array<{ id?: string; name?: string }>;
+    createdMemories?: Array<{
+      title: string;
+      category: string;
+      content: string;
+      user?: string;
+      isAutonomousLLM?: boolean;
+      tokenPreservation?: {
+        originalTokensEstimated: number;
+        preservedTokensEstimated: number;
+        compressionRatio: string;
+        rationale: string;
+      };
+      autonomousNeedReason?: string;
+    }>;
+    deletedMemories?: Array<{ id?: string; termo?: string }>;
+    requestedApiData?: Array<{
+      agentName: string;
+      targetDatabase: string;
+      protocol: 'API' | 'MCP' | 'JSON_FEED';
+      dadosNecessarios: string[];
+      motivo: string;
+    }>;
+    transcriptions?: Array<{
+      agentName: string;
+      targetDatabase: string;
+      protocol?: 'API' | 'MCP' | 'JSON_FEED';
+      dadosTranscritos: Record<string, any>;
+      veredito?: 'COMPRAR' | 'AGUARDAR' | 'QUARENTENA' | 'ESTAVEL' | 'ALERTA' | 'OK';
+      detalhes?: string;
+      tokensOriginais?: number;
+      tokensPreservados?: number;
+      sinteseMemoria?: string;
+    }>;
+  }) => {
+    if (!actions) return;
+
+    // 1. Criação Autônoma de Agentes
+    if (actions.createdAgents && actions.createdAgents.length > 0) {
+      actions.createdAgents.forEach((ag) => {
+        const dbKey = (ag.targetDatabase || 'GERAL').toUpperCase().trim();
+        microService.autoAlimentarOuCriar(dbKey, 'ativo_b3');
+        agentService.registerAgent({
+          id: `agente-auto-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          name: ag.name,
+          role: ag.role,
+          targetDatabase: dbKey,
+          logic: ag.logic,
+          llmProvider: 'global',
+          model: 'padrão-sistema',
+          status: 'ativo',
+          lastAuditVerdict: 'ESTAVEL',
+          lastAuditDetails: 'Agente criado por autonomia executiva da LLM após avaliação de necessidades de informação.',
+          lastAuditDate: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
+          triggers: ['Alerta de Parâmetros', 'Disparo de Sinapse'],
+          isAutonomous: true,
+          createdAt: new Date().toLocaleDateString('pt-BR'),
+          author: 'LLM Autônoma (Avaliação Cognitiva)',
+          cognitiveEvaluation: ag.cognitiveEvaluation,
+        });
+
+        // Registrar na Auditoria Executiva do CFO
+        cfoDecisionService.registrarDecisao({
+          tipoAcao: 'CRIACAO_AGENTE',
+          titulo: `Criação Autônoma do Agente: ${ag.name}`,
+          ativoOuAlvo: dbKey,
+          categoria:
+            dbKey === 'BTC'
+              ? 'CRIPTOATIVOS'
+              : dbKey.includes('TESOURO')
+              ? 'TESOURO DIRETO'
+              : dbKey.includes('COMMODITIES')
+              ? 'COMMODITIES'
+              : 'AÇÕES B3',
+          impacto: 'ALTO',
+          justificativaLogica:
+            ag.cognitiveEvaluation?.evaluationRationale ||
+            ag.logic ||
+            `Criação deliberada pelo CFO autônomo para o banco particionado ${dbKey} com foco na avaliação fundamentalista decenal de 10 anos.`,
+          detalhesExecutivos: `Papel: ${ag.role}. Silo: ${dbKey}. Informações necessárias avaliadas: ${ag.cognitiveEvaluation?.requiredInformation?.join('; ') || 'Séries decenais'}. O que pedir: ${ag.cognitiveEvaluation?.whatToRequest?.join('; ') || 'Auditoria'}.`,
+          targetNodeId: `mem-${dbKey.toLowerCase()}`,
+          autor: 'LLM Autônoma (Avaliação Cognitiva)',
+          status: 'EXECUTADO',
+          reversivel: true,
+          parametros: {
+            horizonte: '10 anos',
+            motivo: `Alocação de especialista para ${dbKey}`,
+            informacoesNecessarias: ag.cognitiveEvaluation?.requiredInformation,
+            oquePedirParaAgente: ag.cognitiveEvaluation?.whatToRequest,
+          },
+        });
+
+        dispararSinapsePontual(null, `Agente Criado pela LLM: ${ag.name}`);
+      });
+    }
+
+    // 2. Exclusão Autônoma de Agentes (liberdade total sem restrições)
+    if (actions.deletedAgents && actions.deletedAgents.length > 0) {
+      actions.deletedAgents.forEach((ag) => {
+        const idOrName = ag.id || ag.name;
+        if (idOrName) {
+          agentService.deleteAgentByNameOrId(idOrName);
+
+          // Registrar na Auditoria Executiva do CFO
+          cfoDecisionService.registrarDecisao({
+            tipoAcao: 'EXCLUSAO_AGENTE',
+            titulo: `Exclusão Autônoma do Agente: ${ag.name || idOrName}`,
+            ativoOuAlvo: ag.name || idOrName,
+            categoria: 'SISTEMA_NEURAL',
+            impacto: 'ALTO',
+            justificativaLogica:
+              'Agente removido pelo CFO após deliberação de redundância, obsolescência técnica ou inconformidade com as diretrizes decenais de preservação de capital e valuation Bazin.',
+            detalhesExecutivos: `Remoção definitiva do ficheiro e encerramento de threads de sentinela para ${ag.name || idOrName}.`,
+            targetNodeId: null,
+            autor: 'CFO IA (Auditoria de Governança)',
+            status: 'EXECUTADO',
+            reversivel: false,
+          });
+
+          dispararSinapsePontual(null, `Agente Removido pela LLM: ${ag.name || idOrName}`);
+        }
+      });
+    }
+
+    // 3. Criação Autônoma de Memórias no Cérebro 3D (Zero Interferência Humana & Preservação de Tokens)
+    if (actions.createdMemories && actions.createdMemories.length > 0) {
+      actions.createdMemories.forEach((mem) => {
+        const tokensPoupados = mem.tokenPreservation
+          ? mem.tokenPreservation.originalTokensEstimated -
+            mem.tokenPreservation.preservedTokensEstimated
+          : 4200;
+
+        adicionarNovaMemoria({
+          title: mem.title || 'Memória Neural Destilada',
+          category: (mem.category as any) || 'investimento',
+          content: mem.content,
+          user: mem.user || 'LLM Autônoma (Zero Interferência)',
+          timestamp: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
+          importance: 'alta',
+          color: 0xef4444,
+          sentiment: 'analitico_racional',
+          isAutonomousLLM: true,
+          tokenPreservation: mem.tokenPreservation || {
+            originalTokensEstimated: 4500,
+            preservedTokensEstimated: 75,
+            compressionRatio: '98.3%',
+            rationale: 'Condensação de dados históricos para poupar janela de contexto.',
+          },
+          autonomousNeedReason:
+            mem.autonomousNeedReason ||
+            'Memória sináptica criada pela LLM sem intervenção humana para preservar tokens.',
+        });
+
+        // Registrar na Auditoria Executiva do CFO
+        cfoDecisionService.registrarDecisao({
+          tipoAcao: 'CRIACAO_MEMORIA',
+          titulo: `Gravação de Memória Neural: ${mem.title || 'Memória'}`,
+          ativoOuAlvo: (mem.title || '').split(' ')[0] || 'CÉREBRO',
+          categoria: 'SISTEMA_NEURAL',
+          impacto: 'MEDIO',
+          justificativaLogica: `Armazenamento autônomo sem interferência humana para preservação de tokens de contexto: ${mem.content}`,
+          detalhesExecutivos: `Destilação semântica com economia estimada de ~${tokensPoupados} tokens. Nó sináptico gravado na categoria ${mem.category || 'investimento'}.`,
+          targetNodeId: null,
+          autor: 'LLM Autônoma (Zero Interferência)',
+          status: 'EM_VIGOR',
+          reversivel: true,
+          parametros: {
+            tokensEconomizados: tokensPoupados,
+            motivo: mem.autonomousNeedReason || 'Preservação de tokens',
+          },
+        });
+      });
+    }
+
+    // 4. Exclusão Autônoma de Memórias Obsoletas
+    if (actions.deletedMemories && actions.deletedMemories.length > 0) {
+      actions.deletedMemories.forEach((del) => {
+        const termo = (del.termo || '').toLowerCase().trim();
+        const id = del.id;
+        setMemories((prev) =>
+          prev.filter((m) => {
+            if (id && m.id === id) return false;
+            if (termo && (m.title.toLowerCase().includes(termo) || m.content.toLowerCase().includes(termo))) {
+              return false;
+            }
+            return true;
+          })
+        );
+
+        // Registrar na Auditoria Executiva do CFO
+        cfoDecisionService.registrarDecisao({
+          tipoAcao: 'EXCLUSAO_MEMORIA',
+          titulo: `Purga Autônoma de Memória: ${del.termo || del.id || 'Nó Neural'}`,
+          ativoOuAlvo: del.termo || del.id || 'MEMÓRIA',
+          categoria: 'SISTEMA_NEURAL',
+          impacto: 'MEDIO',
+          justificativaLogica:
+            'Purga sináptica executada pelo CFO para eliminar memórias obsoletas, preceitos desatualizados ou ruídos de curto prazo incompatíveis com o plano decenal.',
+          detalhesExecutivos: `Nó expurgado dos circuitos neurais e persistência limpa.`,
+          targetNodeId: null,
+          autor: 'CFO IA (Purga Neural Autônoma)',
+          status: 'EXECUTADO',
+          reversivel: false,
+        });
+
+        dispararSinapsePontual(null, `Memória Purga pela LLM: ${del.termo || del.id}`);
+      });
+    }
+
+    // 5. Requisições Ativas de Dados de API / MCP (IA solicitou insumos faltantes ao usuário)
+    if (actions.requestedApiData && actions.requestedApiData.length > 0) {
+      actions.requestedApiData.forEach((req) => {
+        agentService.recordPendingDataRequest(req.agentName || req.targetDatabase, {
+          protocol: req.protocol,
+          requestedFields: req.dadosNecessarios,
+          requestReason: req.motivo,
+        });
+
+        cfoDecisionService.registrarDecisao({
+          tipoAcao: 'PEDIDO_DADOS_API_MCP',
+          titulo: `IA Solicitou Dados de ${req.protocol}: ${req.agentName}`,
+          ativoOuAlvo: req.targetDatabase,
+          categoria:
+            req.targetDatabase === 'BTC'
+              ? 'CRIPTOATIVOS'
+              : req.targetDatabase.includes('TESOURO')
+              ? 'TESOURO DIRETO'
+              : req.targetDatabase.includes('COMMODITIES')
+              ? 'COMMODITIES'
+              : 'AÇÕES B3',
+          impacto: 'ALTO',
+          justificativaLogica: `A IA avaliou que para auditar ou alimentar o agente ${req.agentName} faltam dados externos críticos.`,
+          detalhesExecutivos: `Campos necessários solicitados ao usuário no chat: ${req.dadosNecessarios.join(', ')}. Motivo: ${req.motivo}.`,
+          targetNodeId: `mem-${req.targetDatabase.toLowerCase()}`,
+          autor: 'LLM Autônoma (Avaliação Cognitiva)',
+          status: 'EM_VIGOR',
+          reversivel: true,
+          parametros: {
+            informacoesNecessarias: req.dadosNecessarios,
+            motivo: req.motivo,
+          },
+        });
+
+        dispararSinapsePontual(null, `Solicitação de Dados MCP/API: ${req.agentName}`);
+      });
+    }
+
+    // 6. Transcrições de Dados de API/MCP do Chat para o Agente Criado
+    if (actions.transcriptions && actions.transcriptions.length > 0) {
+      actions.transcriptions.forEach((tr) => {
+        const dbKey = tr.targetDatabase.toUpperCase();
+        microService.autoAlimentarOuCriar(dbKey, 'ativo_b3', tr.dadosTranscritos);
+
+        const targetAgent = agentService.findAgentByIdOrTarget(tr.agentName || dbKey);
+        if (targetAgent) {
+          agentService.updateAgent(targetAgent.id, {
+            status: tr.veredito === 'QUARENTENA' || tr.veredito === 'ALERTA' ? 'alerta' : 'ativo',
+            lastAuditVerdict: tr.veredito || 'ESTAVEL',
+            lastAuditDetails: tr.detalhes || `Dados da API/MCP transcritos via chat.`,
+            lastAuditDate: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
+            transcribedMcpData: {
+              lastTranscriptionDate: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
+              protocol: tr.protocol || 'MCP',
+              rawSummary: tr.detalhes || 'Transcrição realizada via chat.',
+              parsedMetrics: tr.dadosTranscritos,
+              tokensEstimatedBefore: tr.tokensOriginais || 3200,
+              tokensPreservedAfter: tr.tokensPreservados || 65,
+            },
+            pendingDataRequest: undefined,
+          });
+        }
+
+        const economizados = (tr.tokensOriginais || 3200) - (tr.tokensPreservados || 65);
+
+        // Se houver síntese de memória gerada na transcrição, cravar no cérebro 3D
+        if (tr.sinteseMemoria) {
+          adicionarNovaMemoria({
+            title: `Síntese MCP: ${dbKey}`,
+            category: 'investimento',
+            content: tr.sinteseMemoria,
+            user: 'LLM Autônoma (Zero Interferência)',
+            timestamp: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
+            importance: 'alta',
+            color: 0x06b6d4,
+            sentiment: 'analitico_racional',
+            isAutonomousLLM: true,
+            tokenPreservation: {
+              originalTokensEstimated: tr.tokensOriginais || 3200,
+              preservedTokensEstimated: tr.tokensPreservados || 65,
+              compressionRatio: `${((economizados / (tr.tokensOriginais || 3200)) * 100).toFixed(1)}% de preservação`,
+              rationale: `Payload bruto da API/MCP fornecido no chat condensado em nó sináptico compacto.`,
+            },
+            autonomousNeedReason: `Transcrição de dados do chat para o agente ${tr.agentName}. Economia de ~${economizados} tokens.`,
+            particaoId: dbKey,
+          });
+        }
+
+        // Registrar na Auditoria do CFO
+        cfoDecisionService.registrarDecisao({
+          tipoAcao: 'TRANSCRICAO_DADOS_API_MCP',
+          titulo: `Transcrição de Dados API/MCP: ${tr.agentName || dbKey}`,
+          ativoOuAlvo: dbKey,
+          categoria:
+            dbKey === 'BTC'
+              ? 'CRIPTOATIVOS'
+              : dbKey.includes('TESOURO')
+              ? 'TESOURO DIRETO'
+              : dbKey.includes('COMMODITIES')
+              ? 'COMMODITIES'
+              : 'AÇÕES B3',
+          impacto: 'ALTO',
+          justificativaLogica: `Dados fornecidos pelo usuário no chat foram transcritos e injetados diretamente no agente ${tr.agentName || dbKey}.`,
+          detalhesExecutivos: `Veredito emitido: ${tr.veredito || 'ESTAVEL'}. Economia de tokens: ~${economizados}. Métricas: ${JSON.stringify(tr.dadosTranscritos)}.`,
+          targetNodeId: `mem-${dbKey.toLowerCase()}`,
+          autor: 'LLM Autônoma (Transcrição Chat)',
+          status: 'EXECUTADO',
+          reversivel: true,
+          parametros: {
+            tokensEconomizados: economizados,
+            motivo: `Transcrição de dados para o agente ${tr.agentName}`,
+          },
+        });
+
+        dispararSinapsePontual(null, `Dados MCP Transcritos para o Agente: ${tr.agentName || dbKey}`);
+      });
+    }
+  };
+
   // Processar comando: Jarvis busca cirurgicamente o arquivo menor exato no cérebro
   const processarComandoJarvis = async (
     texto: string,
@@ -379,7 +767,9 @@ export default function App() {
 
       setJarvisResponseText(resposta);
 
-      if (data.novaMemoria) {
+      if (data.autonomousActions) {
+        executarAcoesAutonomas(data.autonomousActions);
+      } else if (data.novaMemoria) {
         adicionarNovaMemoria({
           title: data.novaMemoria.title || 'Registro Neural',
           content: data.novaMemoria.content || texto,
@@ -414,46 +804,6 @@ export default function App() {
       setLoadingAI(false);
       setInputMessage('');
     }
-  };
-
-  // Adicionar uma nova memória diretamente no cérebro 3D
-  const adicionarNovaMemoria = (
-    mem: Omit<SynapseMemory, 'id' | 'coords' | 'firing' | 'connectionsCount'>
-  ) => {
-    let coords: [number, number, number] = [0, 0, 0];
-    if (mem.category === 'investimento' || mem.category === 'cfo') {
-      coords = [
-        (Math.random() - 0.5) * 1.2,
-        1.0 + Math.random() * 0.6,
-        0.8 + Math.random() * 0.8,
-      ];
-    } else if (mem.category === 'saude') {
-      coords = [1.2 + Math.random() * 0.4, 0.2 + Math.random() * 0.5, 0.2];
-    } else {
-      coords = [
-        (Math.random() - 0.5) * 1.4,
-        Math.random() * 0.8,
-        (Math.random() - 0.5) * 1.5,
-      ];
-    }
-
-    const nova: SynapseMemory = {
-      ...mem,
-      id: `mem-${Date.now()}`,
-      coords,
-      firing: true,
-      connectionsCount: Math.floor(4 + Math.random() * 8),
-      color: 0xef4444, // Sinapse vermelha
-    };
-
-    setMemories((prev) => [nova, ...prev]);
-    dispararSinapse(`Nova Memória Gravada: "${mem.title}"`);
-    voiceService.playBeepSound();
-  };
-
-  const excluirMemoria = (id: string) => {
-    setMemories((prev) => prev.filter((m) => m.id !== id));
-    if (selectedMemory?.id === id) setSelectedMemory(null);
   };
 
   const currentProviderDef = llmService.getProviderDefinition(llmConfig.provider);
@@ -500,25 +850,54 @@ export default function App() {
             </div>
           </div>
 
-          {/* Botão Único Expansível: Painel do Sistema & Agentes */}
-          <button
-            onClick={() => setSystemMenuExpanded(!systemMenuExpanded)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/80 hover:bg-cyan-950/50 text-cyan-300 border border-slate-700/60 hover:border-cyan-500/50 transition-all text-xs font-mono shadow-md active:scale-95"
-            title="Expandir ferramentas, agentes e configurações"
-          >
-            <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden sm:inline font-bold">Painel do Sistema</span>
-            <ChevronDown
-              className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${
-                systemMenuExpanded ? 'rotate-180' : ''
-              }`}
-            />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Botão de Acesso Rápido ao Histórico de Decisões Autônomas do CFO */}
+            <button
+              onClick={() => setCfoDecisionsModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500/20 via-rose-500/15 to-cyan-500/20 hover:from-amber-500/30 hover:to-cyan-500/30 text-amber-300 border border-amber-500/40 hover:border-amber-400 transition-all text-xs font-mono shadow-[0_0_15px_rgba(245,158,11,0.2)] active:scale-95 shrink-0"
+              title="Abrir Histórico de Decisões Autônomas do CFO por IA (Criação/Exclusão de Agentes e Memórias)"
+            >
+              <History className="w-3.5 h-3.5 text-amber-400" />
+              <span className="font-bold">Decisões CFO</span>
+              <span className="text-[10px] bg-amber-400 text-slate-950 font-black px-1.5 py-0.2 rounded-full">
+                IA
+              </span>
+            </button>
+
+            {/* Botão Único Expansível: Painel do Sistema & Agentes */}
+            <button
+              onClick={() => setSystemMenuExpanded(!systemMenuExpanded)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/80 hover:bg-cyan-950/50 text-cyan-300 border border-slate-700/60 hover:border-cyan-500/50 transition-all text-xs font-mono shadow-md active:scale-95"
+              title="Expandir ferramentas, agentes e configurações"
+            >
+              <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden sm:inline font-bold">Painel do Sistema</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${
+                  systemMenuExpanded ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+          </div>
         </div>
 
         {/* Menu Expansível Desdobrável (Limpo, sem poluição da tela principal) */}
         {systemMenuExpanded && (
           <div className="mt-2 p-3.5 bg-slate-950/95 border border-cyan-500/40 rounded-2xl shadow-2xl backdrop-blur-2xl animate-in fade-in slide-in-from-top-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+            {/* Decisões Autônomas do CFO */}
+            <button
+              onClick={() => {
+                setCfoDecisionsModalOpen(true);
+                setSystemMenuExpanded(false);
+              }}
+              className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-amber-950/40 border border-slate-800 hover:border-amber-500/50 text-left transition-colors flex items-center gap-2 text-slate-200"
+            >
+              <History className="w-4 h-4 text-amber-400 shrink-0" />
+              <div>
+                <div className="font-bold text-amber-300">Decisões CFO (IA)</div>
+                <div className="text-[10px] text-slate-400">Linha do tempo & nós</div>
+              </div>
+            </button>
             {/* Ficheiro de Agentes */}
             <button
               onClick={() => {
@@ -687,6 +1066,66 @@ export default function App() {
             tvMode={tvMode}
             onForceRest={forcarRepousoNeural}
           />
+
+          {/* Inspetor Flutuante da Memória Selecionada no Cérebro 3D */}
+          {selectedMemory && (
+            <div className="absolute bottom-4 right-4 sm:right-8 max-w-sm w-[92%] sm:w-80 z-40 bg-slate-950/95 border border-cyan-500/40 rounded-2xl p-4 shadow-[0_0_35px_rgba(14,165,233,0.3)] backdrop-blur-xl animate-in slide-in-from-bottom-2">
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <div>
+                  <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-500/30">
+                    {selectedMemory.category}
+                  </span>
+                  <h4 className="font-bold text-sm text-slate-100 font-mono mt-1">
+                    {selectedMemory.title}
+                  </h4>
+                </div>
+                <button
+                  onClick={() => setSelectedMemory(null)}
+                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <p className="text-xs text-slate-300 font-sans leading-relaxed mb-3">
+                {selectedMemory.content}
+              </p>
+
+              <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 border-t border-slate-800/80 pt-2 mb-3">
+                <span>Autor: {selectedMemory.user}</span>
+                <span>{selectedMemory.timestamp}</span>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    const comando = `Jarvis, examine a memória "${selectedMemory.title}": ${selectedMemory.content}`;
+                    setInputMessage(comando);
+                    const emocao = SentimentEngine.analisar(comando);
+                    setActiveSentiment(emocao);
+                    processarComandoJarvis(comando, activeProfile, emocao);
+                    setSelectedMemory(null);
+                  }}
+                  className="flex-1 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-mono font-bold text-xs flex items-center justify-center gap-1 transition-colors shadow-sm"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Consultar
+                </button>
+                <button
+                  onClick={() => {
+                    excluirMemoria(selectedMemory.id);
+                    dispararSinapsePontual(null, `Memória Excluída: ${selectedMemory.title}`);
+                    setSelectedMemory(null);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-500/40 text-xs font-mono flex items-center gap-1 transition-colors"
+                  title="Excluir esta memória do cérebro"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Excluir</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </main>
 
@@ -922,6 +1361,9 @@ export default function App() {
         isOpen={agentRegistryModalOpen}
         onClose={() => setAgentRegistryModalOpen(false)}
         onTriggerSynapse={dispararSinapse}
+        onAutonomousAction={executarAcoesAutonomas}
+        onAddMemory={adicionarNovaMemoria}
+        onOpenCfoDecisions={() => setCfoDecisionsModalOpen(true)}
       />
 
       {/* Modal: Seleção Livre de LLM / IA Universal */}
@@ -974,6 +1416,25 @@ export default function App() {
           setAlertaSentinelaAtivo(agente);
           dispararSinapse(`Alerta Disparado: ${agente.nome}`);
         }}
+      />
+
+      {/* Modal: Histórico de Decisões Autônomas do CFO por IA */}
+      <CfoDecisionsModal
+        isOpen={cfoDecisionsModalOpen}
+        onClose={() => setCfoDecisionsModalOpen(false)}
+        onInspectNodeInBrain={(targetNodeId, label) => {
+          dispararSinapsePontual(targetNodeId, label);
+          if (targetNodeId) {
+            const memCorrespondente = memories.find(
+              (m) =>
+                m.id === targetNodeId ||
+                m.id.toLowerCase().includes(targetNodeId.replace('mem-', '').toLowerCase())
+            );
+            if (memCorrespondente) setSelectedMemory(memCorrespondente);
+          }
+        }}
+        onOpenAgentRegistry={() => setAgentRegistryModalOpen(true)}
+        onOpenMemories={() => setMemoryPanelOpen(true)}
       />
     </div>
   );

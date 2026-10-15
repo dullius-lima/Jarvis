@@ -1,141 +1,140 @@
-# Escritório de Investimentos Buy & Hold — Arquitetura Corporativa de 5 Andares
+# Painel de Histórico de Decisões Autônomas do CFO por IA
 
-Plataforma corporativa de monitoramento e alocação de carteira de investimentos (Ações B3, Renda Fixa e Bitcoin) fundamentada na filosofia rigorosa de Buy & Hold, com segregação estrita entre cálculo determinístico matemático e julgamento qualitativo executivo por Inteligência Artificial (CFO).
+Implementação de um sistema de auditoria executiva e linha do tempo interativa que registra, cataloga e exibe todas as ações tomadas de forma autônoma pelo CFO por IA (criação e exclusão de agentes especialistas e nós de memória neural), com data, hora, justificativa da lógica financeira aplicada e destaque visual do impacto no cérebro 3D.
 
-## Decisões Confirmadas & Resumo das Preferências
+---
+
+### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> **Definições alinhadas com o usuário**:
-> - **Ativos de Referência Pré-carregados**: Carteira diversificada pré-populada com histórico de 10 anos de demonstrativos contábeis (DFP/ITR CVM) cobrindo grandes pagadoras de dividendos B3 (TAEE11, BBAS3, EGIE3, WEGE3), Renda Fixa Soberana (Tesouro IPCA+ / NTN-B) e Bitcoin (BTC).
-> - **Modo Operacional Híbrido**: Interface interativa viva com execução em tempo real do motor de cálculo e agente CFO via Gemini na aplicação, acompanhada de pacote completo de arquivos de produção (`docker-compose.yml`, backend FastAPI, SQLAlchemy models, financial engine e specs JSON do n8n) prontos para deploy na Oracle Cloud Infrastructure (OCI).
-> - **Estilo Visual**: Fachada corporativa interativa em corte transversal estilo pixel art refinado com iluminação dinâmica dos escritórios, estações de trabalho animadas, servidores pulsantes no térreo e canal direto com a Diretoria no 5º andar.
+> As preferências para o novo painel de histórico de decisões foram definidas nas perguntas de alinhamento:
+> - **Localização e Navegação**: Aba dedicada e botão de acesso rápido direto no HUD superior do sistema.
+> - **Recursos de Auditoria e Controle**: Linha do tempo interativa com destaque direto de impacto no cérebro 3D ao inspecionar ou clicar em qualquer decisão autônoma.
+
+- **Decisão Confirmada 1 (Localização)**: Botão de acesso rápido com ícone de balanço/auditoria (`History` / `Scale` / `FileClock`) na barra superior (Top Bar), além de opção dedicada no menu expansível do Painel do Sistema e como aba no modal de agentes.
+- **Decisão Confirmada 2 (Experiência Interativa)**: Linha do tempo cronológica com filtros por tipo de ação (Criação de Agente, Exclusão de Agente, Criação de Memória, Purga de Memória, Deliberação de Alocação), acompanhada de badge de justificativa lógica da LLM e disparo de foco sináptico no cérebro 3D ao selecionar um evento.
 
 ---
 
-## 1. Visão Geral & Conceito Central
+### 1. Overview & Core Concept
 
-- **O que faz**: Oferece uma central de comando corporativa para o investidor institucional e pessoa física focada em acumulação de patrimônio a longo prazo. Divide as tarefas analíticas em 5 andares especializados de um edifício comercial:
-  - **5º Andar (Mesa da Diretoria & CFO)**: Gabinete executivo onde a IA atua como CFO, recebendo dossiês estruturados dos andares inferiores para deliberar sobre alocação de capital e emitir vereditos irrevogáveis (`COMPRAR`, `AGUARDAR`, `QUARENTENA`).
-  - **4º Andar (Auditoria Fundamentalista & Proventos)**: Análise decenal de balanços e DREs, cálculo determinístico do Preço-Teto de Décio Bazin (médias de 3 e 5 anos a 6% a.a. expurgando não-recorrentes), Margem de Segurança de Graham, CAGR de Proventos e múltiplos de eficiência (ROE, ROIC).
-  - **3º Andar (Solvência & Crédito)**: Monitoramento da alavancagem estrutural (Dívida Líquida / EBITDA histórica com trigger de alerta em 3.5x), cobertura de juros (EBIT / Despesas Financeiras) e spread sobre a curva Selic / IPCA.
-  - **2º Andar (Radar de Risco Exógeno & Notícias)**: Filtro determinístico de fatos relevantes da CVM e comunicados oficiais, triando ruído transitório de mercado contra risco estrutural de quebra de tese.
-  - **Térreo & Subsolo (Data Engine & Sentinela 24/7)**: Ingestão de cotações, taxas do Bacen, arquivos CVM e sentinela algorítmica de Bitcoin monitorando variações anormais (> 5% em 1h) em regime de silêncio absoluto em dias normais.
-- **Público-Alvo**: Investidores Buy & Hold disciplinados que buscam blindagem emocional contra o ruído de mercado, automatização de rotinas de auditoria e clareza matemática sobre preços-teto.
-- **Diferencial**: **Zero Alucinação Matemática**. A IA não calcula números; ela recebe um JSON auditado e emite pareceres qualitativos de governança e alocação de risco.
+- **O que faz**: Oferece rastreabilidade e governança total sobre as deliberações autônomas tomadas pela IA executiva (CFO Matheus Dullius / Jarvis). Toda vez que a LLM cria um agente, remove um agente obsoleto, insere uma memória sintética no cérebro ou purga memórias irrelevantes, o evento é gravado com carimbo de tempo rigoroso, contexto do ativo/mercado e justificativa da lógica aplicada.
+- **Público-Alvo**: O investidor e gestores da holding Investimentos Dullius, permitindo inspecionar por que cada decisão estrutural foi tomada pela IA no horizonte de 10 anos.
+- **Valor Principal**: Governança algorítmica, transparência de raciocínio da IA, prevenção de "caixa preta" e auditoria em tempo real com conexão física às sinapses do cérebro neural 3D.
 
 ---
 
-## 2. Experiência do Usuário & Design Visual
+### 2. User Experience & Visual Design
 
-### Jornadas do Usuário
-1. **Inspeção do Edifício Corporativo**:
-   - O investidor visualiza o prédio em corte transversal animado. Cada andar possui iluminação correspondente, funcionários em atividade, painéis de monitoramento e status operacional.
-   - Clicar em qualquer andar abre o painel analítico ou drawer lateral com os dados detalhados daquele setor.
-2. **Auditoria Pontual de Ativos**:
-   - O usuário seleciona um ativo da carteira (ou cadastra um novo ticker com preenchimento contábil).
-   - O motor determinístico processa instantaneamente o histórico decenal e gera o Dossiê Estruturado.
-   - O usuário pode convocar a Reunião com o CFO no 5º andar para obter o parecer executivo oficial e tirar dúvidas estratégicas.
-3. **Simulação dos Gatilhos de Rotina (n8n)**:
-   - Controles operacionais permitem disparar ou simular os 3 workflows n8n:
-     - *Rotina Matinal (09:30)*: Varredura de cotações B3 e comparação com Preço-Teto Bazin.
-     - *Fechamento Noturno CVM (19:00)*: Triagem de novos balanços ITR/DFP e fatos relevantes.
-     - *Sentinela Cripto BTC (24/7)*: Checagem algorítmica de volatilidade extrema e teste de estresse.
-4. **Central de Exportação & Infraestrutura OCI**:
-   - Aba dedicada para visualização e download dos arquivos de produção para subir na VM Oracle Cloud (`docker-compose.yml`, scripts Python, schemas PostgreSQL e workflows n8n).
+#### Fluxos Principais do Usuário
+1. **Acesso Imediato**: O usuário clica no novo botão de acesso rápido `"Histórico do CFO"` no topo da interface (ou acessa pelo menu de sistema / abas de agentes).
+2. **Visualização da Linha do Tempo**: O modal executivo exibe uma linha do tempo vertical organizada cronologicamente (com data, hora e indicadores de status semânticos).
+3. **Filtros Ágeis**: Segmentação rápida por tipo de ação:
+   - *Todos os Eventos*
+   - *Agentes Criados*
+   - *Agentes Excluídos*
+   - *Memórias Armazenadas*
+   - *Memórias Purgadas*
+4. **Inspeção de Justificativa Lógica**: Ao clicar em qualquer registro do histórico:
+   - Expande os detalhes técnicos: quem disparou (LLM Autônoma / CFO), ativo relacionado (ex: WEGE3, BTC, NTN-B 2035), parâmetros quantitativos avaliados e a transcrição da justificativa lógica.
+   - Dispara imediatamente um pulso sináptico focado no nó de dados correspondente no cérebro 3D, destacando visualmente onde essa decisão reside na arquitetura neural.
+5. **Auditoria e Reversão Opcional**: Visualização clara de quais agentes ou memórias ainda estão ativos no sistema a partir de cada decisão.
 
-### Identidade Visual & Layout
-- **Estética**: Edifício corporativo em pixel art refinado e iluminação noturna, combinada com interface moderna de dashboard financeiro institucional.
-- **Paleta de Cores**:
-  - Fundo Canvas: Azul-petróleo escuro profundo (`#0B1120`, `#0F172A`).
-  - Estrutura do Edifício: Ardósia corporativa (`#1E293B`, `#334155`) com vigas metálicas sutis.
-  - Luzes dos Escritórios: Âmbar quente executivo (`#F59E0B`), ciano de dados (`#06B6D4`), esmeralda de solvência (`#10B981`) e rubi de alerta de risco (`#EF4444`).
-- **Tipografia**:
-  - Cabeçalhos e Títulos: Sans-serif geométrica limpa (`Plus Jakarta Sans`).
-  - Métricas e Dados Financeiros: Monospaçada com alinhamento numérico estrito (`font-mono tabular-nums`).
-- **Contrato Top Bar**:
-  - Zona 1: `Holding Investimentos Buy & Hold` (marca em linha única).
-  - Zona 2: Links diretos: `Edifício Corporativo`, `Auditoria & Dossiês`, `Carteira & Ativos`, `Rotinas n8n`, `Deploy OCI`.
-  - Zona 3: Botão de ação: `Auditar Carteira Completa`.
+#### Identidade Visual & Tema
+- **Diretriz Estética**: Consola financeira executiva de alta densidade e estética dark slate (`#020612` e `#0b1120`), com linhas de demarcação sutis (`border-slate-800` / `border-amber-500/30`), tipografia monoespaçada tabular para carimbos de data/hora (`font-mono tabular-nums`).
+- **Paleta Semântica**:
+   - Criação de Agente / Memória: Destaque ciano/esmeralda (`#06b6d4` / `#10b981`), indicando expansão de capacidade cognitiva.
+   - Exclusão / Purga: Destaque âmbar/carmesim (`#f59e0b` / `#ef4444`), indicando poda cirúrgica de nós obsoletos.
+   - Deliberação de Valuation (10 Anos): Destaque dourado/âmbar (`#eab308`).
+- **Zero-Pill & Tipografia**: Respeito estrito à constituição de design: sem pills decorativos estáticos; datas e categorias exibidas como texto limpo unboxed com separadores sutis (`·`); controles de filtro com botões segmentados com estado ativo refinado.
 
 ---
 
-## 3. Decisões de Arquitetura & Engenharia de Dados
+### 3. Key Product Decisions & Trade-Offs
 
-### Decisão 1: Segregação Rigorosa Cálculo vs Julgamento
-- **Abordagem**: Todas as fórmulas financeiras (Décio Bazin com DPA médio de 3 e 5 anos, Graham $\sqrt{22.5 \times LPA \times VPA}$, Dívida Líquida/EBITDA, Divergência FCO vs Lucro Líquido, Margem Operacional) rodam 100% em código determinístico (FastAPI/Pandas no backend e módulo TypeScript espelhado no frontend para agilidade imediata).
-- **Por que**: Modelos de linguagem possuem taxa de erro inaceitável para aritmética financeira fina. A LLM recebe apenas o JSON final consolidado e atua exclusivamente na síntese qualitativa de riscos, coerência da tese e direcionamento de aporte.
+- **Decisão 1: Arquitetura de Persistência do Histórico do CFO**
+  - *Abordagem Escolhida*: Serviço singleton centralizado `CfoDecisionService` sincronizado com `localStorage` e enriquecido automaticamente no backend (`server.ts` e `App.tsx`).
+  - *Por quê*: Garante que o histórico persista entre recargas de página, funcione offline e registre imediatamente tanto decisões geradas por comandos de voz/texto do Jarvis quanto auditorias delegadas e validações decenais de código.
+  - *Alternativa Considerada*: Manter apenas em memória volátil (descartada porque o usuário precisa de rastreabilidade contínua das ações do CFO).
 
-### Decisão 2: Adaptação Rigorosa aos Recursos da OCI (1 OCPU, 6 GB RAM)
-- **Abordagem**: `docker-compose.yml` com limites declarados de memória:
-  - PostgreSQL 16: `mem_limit: 1536m` (`shared_buffers = 384MB`, `work_mem = 16MB`).
-  - n8n: `mem_limit: 1024m` (`EXECUTIONS_PROCESS=main`, modo otimizado de fila).
-  - FastAPI Engine: `mem_limit: 1800m` (Uvicorn single-worker leve, Pandas com tipos otimizados).
-  - Sobra de ~1.6 GB de RAM para buffer de SO e processos de rede.
+- **Decisão 2: Interação Bidirecional com o Cérebro 3D**
+  - *Abordagem Escolhida*: Ao passar o cursor ou clicar em um evento da linha do tempo, a aplicação invoca `dispararSinapsePontual` mirando no nó específico daquele ativo ou memória no Three.js.
+  - *Por quê*: Cumpre a preferência do usuário de conectar o histórico ao cérebro visual, transformando um log estático em uma experiência espacial imersiva.
 
-### Decisão 3: Cadastro Dinâmico 100% Orientado a Dados
-- **Abordagem**: As tabelas de `ativos`, `posicao_carteira` e `demonstrativos_anuais` permitem adicionar qualquer ação B3, título de renda fixa ou ativo cripto sem alterar linhas de código. Novas adições herdam automaticamente as rotinas de cálculo decenal e auditoria do CFO.
+- **Decisão 3: Registro Estruturado com Justificativa Obrigatória**
+  - *Abordagem Escolhida*: Cada registro contém `id`, `timestamp`, `tipoAcao` (`CRIACAO_AGENTE`, `EXCLUSAO_AGENTE`, `CRIACAO_MEMORIA`, `EXCLUSAO_MEMORIA`, `DELIBERACAO_VALUATION`), `alvo` (nome do agente, ticker ou título da memória), `justificativaLogica` (raciocínio dedutivo da LLM), `autor` e `impactoNeural`.
+  - *Por quê*: Responde cirurgicamente ao pedido do usuário de listar a data, a hora e a justificativa da lógica aplicada.
 
 ---
 
-## 4. Arquitetura Técnica & Especificação dos Entregáveis
+### 4. Technical Architecture & Data Strategy *(Technical Reference)*
+
+#### Diagrama de Arquitetura e Componentes
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                   INTERFACE INTERATIVA & PWA (FRONTEND)                │
-│                                                                        │
-│   ┌─────────────────────────────────┐   ┌───────────────────────────┐  │
-│   │   Fachada Edifício Pixel Art    │   │  Drawer Setorial / CFO    │  │
-│   │   [5º] Mesa Diretoria / CFO     │   │  · Parecer Executivo      │  │
-│   │   [4º] Fundamentalista & Bazin  │   │  · Dossiê Decenal Auditado│  │
-│   │   [3º] Solvência & Dívida/EBITDA│   │  · Diálogo Estratégico    │  │
-│   │   [2º] Radar Exógeno CVM        │   │  · Veredito Oficial       │  │
-│   │   [Tº] Ingestão & Sentinela BTC │   │  · Alocação Sugerida      │  │
-│   └─────────────────────────────────┘   └───────────────────────────┘  │
-└───────────────────────────────┬────────────────────────────────────────┘
-                                │
-                                ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                   BACKEND API (FASTAPI / EXPRESS PROXY)                │
-│                                                                        │
-│   ┌───────────────────────────┐         ┌──────────────────────────┐   │
-│   │ Financial Engine          │         │ LLM CFO Service          │   │
-│   │ · Teto Décio Bazin (3/5y) │         │ · Prompt Auditor Master  │   │
-│   │ · Fórmula de Graham       │         │ · Schema JSON Estrito    │   │
-│   │ · FCO vs Lucro Líquido    │         │ · Análise Qualitativa    │   │
-│   │ · Alavancagem & Selic     │         │ · Gemini 3.8 Flash API   │   │
-│   └─────────────┬─────────────┘         └─────────────▲────────────┘   │
-│                 │                                     │                │
-│                 └──────── Dossiê Estruturado (JSON) ──┘                │
-└───────────────────────────────┬────────────────────────────────────────┘
-                                │
-        ┌───────────────────────┴───────────────────────┐
-        ▼                                               ▼
-┌───────────────────────────────┐               ┌────────────────────────┐
-│  ORCHESTRATOR: n8n            │               │  POSTGRESQL (10 ANOS)  │
-│  · Rotina Matinal (09:30)     │               │  · ativos              │
-│  · Fechamento CVM (19:00)     │               │  · posicao_carteira    │
-│  · Sentinela Cripto BTC 24/7  │               │  · demonstrativos      │
-│                               │               │  · auditorias_cfo      │
-└───────────────────────────────┘               └────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                             HUD / Top Bar                                   │
+│  [JARVIS Wordmark]  ·  [Atalho: Histórico CFO]  ·  [Painel do Sistema]      │
+└─────────────────────────────────────┬───────────────────────────────────────┘
+                                      │ Abre Modal / Seleciona Aba
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CfoDecisionHistoryModal.tsx                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │ Filtros: [Todos] [Criações] [Exclusões] [Memórias] [Valuation 10 Anos]│  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │ Linha do Tempo Cronológica (Data, Hora, Ticker, Tipo, Lógica da LLM)  │  │
+│  │  ├─ [15/10/2026 05:14] CRIACAO_AGENTE: Sentinela WEGE3               │  │
+│  │  │  └─ Lógica: "P/L e ROIC decenal estáveis; tese de capex sustentada"│  │
+│  │  ├─ [15/10/2026 05:12] EXCLUSAO_MEMORIA: Cotação 2021 Obsoleta       │  │
+│  │  │  └─ Lógica: "Dados ultrapassados substituídos por série de 10 anos" │  │
+│  └──────────────────────────────────┬────────────────────────────────────┘  │
+└─────────────────────────────────────┼───────────────────────────────────────┘
+                                      │ Seleção de Registro
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        RealisticBrainCanvas (Three.js)                      │
+│        Disparo Cirúrgico de Fluxo Molecular de Sinapse no Nó Alvo           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      ▲
+                                      │ Grava Eventos Autônomos
+┌─────────────────────────────────────┴───────────────────────────────────────┐
+│               CfoDecisionService / aplicarAcoesAutonomasDaLLM                │
+│  - server.ts: /api/cfo/deliberar, /api/agent/validate-code, /api/agent/chat │
+│  - App.tsx: interceptação de comandos e exclusões autônomas                 │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Entregáveis de Código que Serão Fornecidos:
-1. `docker-compose.yml`: Totalmente funcional com restrições OCI (Postgres, n8n, FastAPI backend).
-2. `backend/app/database/models.py`: Modelos SQLAlchemy completos com relações, constraints e histórico decenal.
-3. `backend/app/services/financial_engine.py`: Motor determinístico com Décio Bazin (3/5 anos sem não-recorrentes), Graham, CAGR, Dívida Líquida/EBITDA e FCO vs Lucro Líquido.
-4. `backend/app/services/llm_cfo.py`: Integração do CFO com prompt de sistema corporativo rigoroso, validação Pydantic e saída JSON estruturada.
-5. `backend/app/routers/`: Rotas FastAPI completas para CRUD de ativos, auditoria do motor financeiro, consulta do CFO e webhooks de disparo do n8n.
-6. `frontend/`:
-   - Canvas animado do edifício em corte transversal com iluminação e trabalhadores.
-   - Painel interativo com abas para cada setor/andar.
-   - Drawer executivo de chat e pareceres do CFO conectado via endpoint seguro com o Gemini.
-   - Simulador de rotinas n8n e exportador de arquivos em 1 clique.
-7. `n8n_workflows/`: JSONs conceituais completos dos 3 workflows prontos para importação no n8n.
+#### Modelo de Dados da Decisão Autônoma
+```typescript
+export type TipoAcaoCFO = 
+  | 'CRIACAO_AGENTE'
+  | 'EXCLUSAO_AGENTE'
+  | 'CRIACAO_MEMORIA'
+  | 'EXCLUSAO_MEMORIA'
+  | 'DELIBERACAO_VALUATION'
+  | 'AUDITORIA_SILO';
 
----
+export interface DecisaoAutonomaCFO {
+  id: string;
+  timestamp: string; // Ex: '15/10/2026 05:14:22'
+  dataIso: string;
+  tipoAcao: TipoAcaoCFO;
+  tituloAlvo: string; // Nome do agente, ticker ou título da memória
+  categoriaAlvo?: string; // 'ativo_b3', 'cripto', 'tesouro', etc.
+  justificativaLogica: string; // O porquê da decisão aplicada pela IA
+  metricasAvaliadas?: Record<string, string | number>;
+  veredito?: 'COMPRAR' | 'AGUARDAR' | 'QUARENTENA' | 'ESTAVEL' | 'PURGADO' | 'REGISTRADO';
+  autor: string; // 'CFO Autônomo (Gemini 3.8)', 'Jarvis Cognição'
+  nodeIdSinapse?: string; // Nó no cérebro 3D para animação
+}
+```
 
-## 5. Plano de Verificação
-
-- **Verificação Matemática**: Validar cálculo do preço-teto Bazin e Graham com dados das empresas pré-carregadas (TAEE11 com DPA médio e teto a 6%, BBAS3 com LPA e VPA).
-- **Verificação do Agente CFO**: Confirmar que o parecer do CFO respeita a regra estrita de não inventar números e gera saída padronizada (`COMPRAR`, `AGUARDAR`, `QUARENTENA`).
-- **Verificação de Compilação**: Executar `compile_applet` e `lint_applet` para assegurar ausência de erros de build TypeScript e integridade visual responsiva em telas desktop e mobile.
+#### Mapeamento de Componentes e Handlers
+- `src/services/cfoDecisionService.ts`: Serviço que gerencia a lista de decisões, pré-populado com decisões do histórico do CFO e atualizado em tempo real sempre que `aplicarAcoesAutonomasDaLLM`, `/api/cfo/deliberar` ou o estúdio de 10 anos operam.
+- `src/components/CfoDecisionHistoryModal.tsx`: Modal executivo com linha do tempo responsiva, busca textual, filtros de ação e botão interativo para disparar sinapse no cérebro.
+- `src/App.tsx`:
+  - Botão de acesso rápido no header superior com contador de decisões autônomas.
+  - Opção no menu expansível do sistema.
+  - Integração no método `aplicarAcoesAutonomasDaLLM` para registrar automaticamente cada criação e exclusão com a justificativa real fornecida pela LLM.

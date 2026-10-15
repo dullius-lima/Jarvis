@@ -68,7 +68,29 @@ export interface AgentDefinition {
   triggers: string[];
   isAutonomous: boolean;
   createdAt: string;
-  author: string; // 'Jarvis Auto' | 'Matheus Dullius'
+  author: string; // 'Jarvis Auto' | 'LLM Autônoma (Avaliação Cognitiva)' | 'Matheus Dullius'
+  cognitiveEvaluation?: {
+    objective: string; // Objetivo avaliado pela LLM
+    requiredInformation: string[]; // Que tipo de informação a LLM avaliou como indispensável
+    whatToRequest: string[]; // O que pedir para o agente criar e auditar
+    evaluationRationale: string; // Justificativa da LLM para criar o agente e proteger tokens
+    targetAssetClass?: string; // 'Ações B3' | 'Fundos Imobiliários' | 'Cripto' | 'Tesouro Direto' | 'Títulos Estrangeiros' | 'Commodities'
+  };
+  // Suporte a protocolo de dados de API / MCP fornecidos pelo usuário via chat
+  transcribedMcpData?: {
+    lastTranscriptionDate: string;
+    protocol: 'API' | 'MCP' | 'JSON_FEED';
+    rawSummary: string;
+    parsedMetrics: Record<string, any>;
+    tokensEstimatedBefore: number;
+    tokensPreservedAfter: number;
+  };
+  pendingDataRequest?: {
+    protocol: string;
+    requestedFields: string[];
+    requestReason: string;
+    requestedAt: string;
+  };
 }
 
 export interface AgentAuditResult {
@@ -129,6 +151,15 @@ export interface SynapseMemory {
   connectionsCount: number;
   sentiment?: SentimentType;
   particaoId?: string;
+  // Campos de Criação Autônoma da LLM & Preservação de Tokens (Zero Interferência Humana)
+  isAutonomousLLM?: boolean;
+  tokenPreservation?: {
+    originalTokensEstimated: number; // Tokens de dados brutos / históricos
+    preservedTokensEstimated: number; // Tokens da memória sintetizada
+    compressionRatio: string; // Ex: '97.8% de preservação de tokens'
+    rationale: string; // Justificativa da LLM de por que criou a memória para poupar contexto
+  };
+  autonomousNeedReason?: string;
 }
 
 export interface VoiceConfig {

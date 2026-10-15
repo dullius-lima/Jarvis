@@ -19,7 +19,8 @@ import {
   Terminal,
   CheckCircle2,
   AlertTriangle,
-  Code
+  Code,
+  Radio,
 } from 'lucide-react';
 
 interface BrainTerminalProps {
@@ -27,6 +28,7 @@ interface BrainTerminalProps {
   ativos: Ativo[];
   ativoSelecionado: Ativo;
   onSelecionarAtivo: (ativo: Ativo) => void;
+  onAutonomousAction?: (actions: any) => void;
 }
 
 interface VereditoDulliusJSON {
@@ -44,6 +46,7 @@ export const BrainTerminal: React.FC<BrainTerminalProps> = ({
   ativos,
   ativoSelecionado,
   onSelecionarAtivo,
+  onAutonomousAction,
 }) => {
   // Estado de Comunicação por Voz
   const [vozAtiva, setVozAtiva] = useState<boolean>(true);
@@ -181,6 +184,10 @@ export const BrainTerminal: React.FC<BrainTerminalProps> = ({
 
       setMensagens((prev) => [...prev, brainMsg]);
       falarTexto(respostaIA);
+
+      if (data.autonomousActions && onAutonomousAction) {
+        onAutonomousAction(data.autonomousActions);
+      }
     } catch (err: any) {
       console.error(err);
       const erroMsg = {
@@ -677,6 +684,41 @@ export const BrainTerminal: React.FC<BrainTerminalProps> = ({
                 <span className="text-[10px] text-slate-500 mt-1 px-1 font-mono">{m.time}</span>
               </div>
             ))}
+          </div>
+
+          {/* Atalhos Rápidos para Fornecimento de Dados de API / Protocolo MCP */}
+          <div className="px-3 py-1.5 bg-slate-900/80 border-t border-slate-800 flex items-center gap-1.5 flex-wrap text-[10px] font-mono">
+            <span className="text-slate-400 flex items-center gap-1">
+              <Radio className="w-3 h-3 text-cyan-400" />
+              Fornecer Dados de API/MCP:
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setInputMensagem(`MCP: {"ticker": "${ativoSelecionado.ticker}", "cotacaoAtual": 34.50, "tetoBazin": 38.80, "margemSegurancaPct": 12.46, "dlEbitda": 2.1, "protocol": "MCP"}`);
+              }}
+              className="px-2 py-0.5 rounded bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/30 transition-colors"
+            >
+              + Feed MCP ({ativoSelecionado.ticker})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setInputMensagem(`MCP: {"titulo": "Tesouro IPCA+ 2035", "taxaAnual": "6.35% + IPCA", "indexador": "IPCA", "risco": "Soberano", "protocol": "MCP"}`);
+              }}
+              className="px-2 py-0.5 rounded bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-500/30 transition-colors"
+            >
+              + MCP Tesouro IPCA+
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setInputMensagem(`MCP: {"commodity": "Ouro Spot", "precoUsd": 2680.50, "curva": "Backwardation", "protocol": "MCP"}`);
+              }}
+              className="px-2 py-0.5 rounded bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/30 transition-colors"
+            >
+              + MCP Commodities
+            </button>
           </div>
 
           <form

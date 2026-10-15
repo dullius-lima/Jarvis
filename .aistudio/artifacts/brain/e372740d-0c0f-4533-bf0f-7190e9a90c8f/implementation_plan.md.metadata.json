@@ -1,6 +1,6 @@
 {
-  "summary": "Plano de implementação da plataforma Escritório de Investimentos Buy & Hold, cobrindo arquitetura do edifício corporativo de 5 andares (Pixel Art / Canvas 2D interativo), motor matemático determinístico de Décio Bazin & Graham, integração de auditoria com Gemini LLM CFO, banco de dados PostgreSQL com histórico decenal, rotas FastAPI, orquestração n8n e docker-compose com limites para Oracle Cloud 6GB RAM.",
-  "updatedAt": "2026-10-15T02:24:52.285334097Z",
+  "summary": "Plano de implementação detalhado para o Painel de Histórico de Decisões Autônomas do CFO por IA, contendo linha do tempo interativa, auditoria completa de criação e exclusão de agentes e memórias, justificativas lógicas da LLM, data, hora, filtros por tipo de evento e integração com destaque de impacto no cérebro 3D, acessível por aba dedicada e botão de acesso rápido no topo.",
+  "updatedAt": "2026-10-15T08:22:05.046960958Z",
   "requestFeedback": true,
   "userFacing": true
 }
