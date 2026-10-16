@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { AgentDefinition, AgentAuditResult, AgentTool, LLMProviderType } from '../types/neural';
-import { AgentRegistryService } from '../services/agentRegistry';
+import { AgentDefinition, AgentAuditResult, AgentTool, LLMProviderType, BodyPartAnatomy } from '../types/neural';
+import { AgentRegistryService, BODY_PARTS_CONFIG } from '../services/agentRegistry';
 import { MicroDatastoresService } from '../services/microDatastores';
 import { cfoDecisionService } from '../services/cfoDecisionService';
 import { JarvisVoiceService } from '../services/jarvisVoice';
@@ -34,6 +34,8 @@ import {
   Radio,
   FileSpreadsheet,
   UploadCloud,
+  Heart,
+  ExternalLink,
 } from 'lucide-react';
 import { InvestmentAgentStudioModal } from './InvestmentAgentStudioModal';
 
@@ -95,11 +97,20 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
   const [novoNome, setNovoNome] = useState('');
   const [novoPapel, setNovoPapel] = useState('');
   const [novoBanco, setNovoBanco] = useState('');
+  const [novoBodyPart, setNovoBodyPart] = useState<BodyPartAnatomy>('torax_tronco');
   const [novaLogica, setNovaLogica] = useState('');
   const [novoProvedor, setNovoProvedor] = useState<LLMProviderType | 'global'>('global');
   const [novosGatilhos, setNovosGatilhos] = useState('');
 
   if (!isOpen) return null;
+
+  const handleLimparTodosAgentes = () => {
+    if (window.confirm('Deseja excluir todos os agentes para deixar o ficheiro 100% limpo e criar novos agentes do zero?')) {
+      agentService.clearAllAgents();
+      setAgents([]);
+      onTriggerSynapse('Ficheiro de agentes limpo com sucesso.');
+    }
+  };
 
   const recarregar = () => {
     setAgents(agentService.listAgents());
@@ -233,8 +244,10 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
       llmProvider: novoProvedor,
       model: 'padrão-sistema',
       status: 'ativo',
+      bodyPart: novoBodyPart,
+      bodyCoordinates: BODY_PARTS_CONFIG[novoBodyPart]?.coords,
       lastAuditVerdict: 'OK',
-      lastAuditDetails: 'Agente criado manualmente. Pronto para auditorias.',
+      lastAuditDetails: `Agente vinculado ao órgão [${BODY_PARTS_CONFIG[novoBodyPart]?.label || novoBodyPart}]. Pronto para auditorias.`,
       lastAuditDate: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
       triggers: novosGatilhos
         .split(',')
@@ -459,6 +472,16 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
               <span>Estúdio Código (10a)</span>
             </button>
 
+            {/* Botão para Abrir Página Dedicada agents.html */}
+            <button
+              onClick={() => window.open('/agents.html', '_blank')}
+              className="px-3 py-2 rounded-xl bg-gradient-to-r from-cyan-600 via-sky-500 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-slate-950 font-bold text-xs font-mono flex items-center justify-center gap-1.5 shadow-md transition-all shrink-0 cursor-pointer"
+              title="Abrir Construtor de Agentes em Página HTML Dedicada (com Webhooks, Bancos de Dados e Testes)"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Abrir agents.html</span>
+            </button>
+
             {/* Botão de Histórico e Auditoria do CFO */}
             {onOpenCfoDecisions && (
               <button
@@ -484,6 +507,15 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Manual</span>
+            </button>
+
+            <button
+              onClick={handleLimparTodosAgentes}
+              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-rose-950/60 border border-slate-800 hover:border-rose-500/50 text-rose-400 text-xs font-mono flex items-center justify-center gap-1.5 transition-colors shrink-0"
+              title="Excluir todos os agentes padronizados e deixar o ficheiro limpo do zero"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Limpar Ficheiro</span>
             </button>
           </div>
         </div>
@@ -752,6 +784,28 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
               </div>
             </div>
 
+            {/* Mapeamento Anatômico: Posição no Corpo Humano */}
+            <div>
+              <label className="text-[10px] font-mono uppercase text-cyan-300 block mb-1.5 flex items-center gap-1.5">
+                <Heart className="w-3.5 h-3.5 text-red-400" />
+                Posição Anatômica no Corpo Humano (Instalação 3D)
+              </label>
+              <select
+                value={novoBodyPart}
+                onChange={(e) => setNovoBodyPart(e.target.value as BodyPartAnatomy)}
+                className="w-full bg-slate-900 border border-cyan-500/40 rounded-xl px-3 py-2 text-xs text-cyan-200 outline-none font-mono"
+              >
+                {Object.values(BODY_PARTS_CONFIG).map((part) => (
+                  <option key={part.id} value={part.id}>
+                    {part.label} ({part.organ}) — {part.description}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-slate-400 font-mono mt-1">
+                Uma terminação nervosa do sistema periférico conectará o cérebro à esta posição no corpo humano.
+              </p>
+            </div>
+
             <div>
               <label className="text-[10px] font-mono uppercase text-slate-400 block mb-1">
                 Lógica & Diretrizes do Agente (Prompt de Auditoria)
@@ -906,32 +960,65 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
 
         {/* Lista de Ficheiro de Agentes */}
         <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-          {agentesFiltrados.map((agent) => {
-            const isRunning = runningAuditId === agent.id;
-            return (
-              <div
-                key={agent.id}
-                className="p-4 rounded-2xl bg-slate-900/70 border border-slate-800 hover:border-red-500/40 transition-all flex flex-col gap-2.5"
-              >
-                {/* Cabeçalho do Card */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-2.5">
-                    <span
-                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                        agent.status === 'alerta'
-                          ? 'bg-rose-500 animate-ping'
-                          : agent.status === 'em_auditoria'
-                          ? 'bg-amber-400 animate-pulse'
-                          : 'bg-emerald-500'
-                      }`}
-                    />
-                    <div>
-                      <h4 className="font-bold text-sm text-slate-100 flex items-center gap-2">
-                        <span>{agent.name}</span>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                          {agent.role}
-                        </span>
-                      </h4>
+          {agentesFiltrados.length === 0 ? (
+            <div className="p-8 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800 text-center flex flex-col items-center justify-center gap-3 text-slate-400">
+              <Bot className="w-10 h-10 text-slate-600 animate-pulse" />
+              <div>
+                <p className="text-sm font-mono text-slate-300 font-bold">Ficheiro de Agentes Limpo</p>
+                <p className="text-xs text-slate-400 font-sans mt-1 max-w-md">
+                  Nenhum agente pré-programado ou padronizado ativo. Você tem total liberdade de criar e moldar cada agente de IA especialista do zero.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 mt-2">
+                <button
+                  onClick={() => setShowCreateModal(true)}
+                  className="px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Criar Primeiro Agente</span>
+                </button>
+                <button
+                  onClick={() => setShowAutonomousModal(true)}
+                  className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Auto-Criar com IA</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            agentesFiltrados.map((agent) => {
+              const isRunning = runningAuditId === agent.id;
+              return (
+                <div
+                  key={agent.id}
+                  className="p-4 rounded-2xl bg-slate-900/70 border border-slate-800 hover:border-red-500/40 transition-all flex flex-col gap-2.5"
+                >
+                  {/* Cabeçalho do Card */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                          agent.status === 'alerta'
+                            ? 'bg-rose-500 animate-ping'
+                            : agent.status === 'em_auditoria'
+                            ? 'bg-amber-400 animate-pulse'
+                            : 'bg-emerald-500'
+                        }`}
+                      />
+                      <div>
+                        <h4 className="font-bold text-sm text-slate-100 flex items-center gap-2 flex-wrap">
+                          <span>{agent.name}</span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                            {agent.role}
+                          </span>
+                          {agent.bodyPart && (
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950/90 text-cyan-300 border border-cyan-500/40 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                              {BODY_PARTS_CONFIG[agent.bodyPart]?.label || agent.bodyPart} ({BODY_PARTS_CONFIG[agent.bodyPart]?.organ})
+                            </span>
+                          )}
+                        </h4>
                       <div className="text-[10px] text-slate-400 font-mono flex items-center gap-2 mt-0.5">
                         <span>Banco: <strong className="text-red-400">{agent.targetDatabase}</strong></span>
                         <span>·</span>
@@ -1275,7 +1362,8 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
                 </div>
               </div>
             );
-          })}
+          })
+        )}
         </div>
       </div>
 

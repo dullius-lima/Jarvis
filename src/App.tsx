@@ -6,6 +6,9 @@ import { MicroDatastoresModal } from './components/MicroDatastoresModal';
 import { AgentRegistryModal } from './components/AgentRegistryModal';
 import { LLMConfigModal } from './components/LLMConfigModal';
 import { CfoDecisionsModal } from './components/CfoDecisionsModal';
+import { AuthLockScreen } from './components/AuthLockScreen';
+import { SecuritySettingsModal } from './components/SecuritySettingsModal';
+import { authService } from './services/authService';
 import { cfoDecisionService } from './services/cfoDecisionService';
 import { INITIAL_SYNAPSE_MEMORIES } from './data/synapseMemories';
 import {
@@ -16,12 +19,14 @@ import {
   SentimentAnalysisResult,
   MicroDatastoreParticionado,
   AgenteSentinela,
-  LLMProviderConfig
+  LLMProviderConfig,
+  AgentDefinition,
+  AgentNerveSignal,
 } from './types/neural';
 import { JarvisVoiceService } from './services/jarvisVoice';
 import { SentimentEngine } from './services/sentimentEngine';
 import { MicroDatastoresService } from './services/microDatastores';
-import { AgentRegistryService } from './services/agentRegistry';
+import { AgentRegistryService, BODY_PARTS_CONFIG } from './services/agentRegistry';
 import { UniversalLLMService } from './services/llmConfig';
 import {
   Mic,
@@ -44,6 +49,11 @@ import {
   Keyboard,
   Trash2,
   History,
+  Lock,
+  Shield,
+  User,
+  Wrench,
+  ExternalLink,
 } from 'lucide-react';
 
 export default function App() {
@@ -51,6 +61,45 @@ export default function App() {
   const agentService = AgentRegistryService.getInstance();
   const llmService = UniversalLLMService.getInstance();
   const voiceService = JarvisVoiceService.getInstance();
+
+  // Sistema de Proteção & Autenticação (Usuário padrão: matheus_dulius@hotmail.com / 123456)
+  const [isUnlocked, setIsUnlocked] = useState<boolean>(() => authService.isAuthenticated());
+  const [securityModalOpen, setSecurityModalOpen] = useState<boolean>(false);
+
+  // Lista viva de agentes criados pelo usuário
+  const [agentsList, setAgentsList] = useState<AgentDefinition[]>(() => agentService.listAgents());
+
+  // Sinalização Neural viva nos nervos do corpo (Moléculas Vermelhas / Vesícula Amarela)
+  const [activeNerveSignal, setActiveNerveSignal] = useState<AgentNerveSignal | null>(null);
+
+  useEffect(() => {
+    const unsub = agentService.subscribeNerveSignal((sig) => {
+      setActiveNerveSignal(sig);
+    });
+
+    // Sincronização viva quando o usuário criar agentes na página agents.html
+    const handleSyncAgents = () => {
+      setAgentsList(agentService.listAgents());
+    };
+    window.addEventListener('storage', handleSyncAgents);
+    const handleMsg = (ev: MessageEvent) => {
+      if (ev.data?.type === 'AGENTS_UPDATED') handleSyncAgents();
+    };
+    window.addEventListener('message', handleMsg);
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('jarvis_agent_sync');
+      bc.onmessage = handleSyncAgents;
+    } catch {}
+
+    return () => {
+      unsub();
+      window.removeEventListener('storage', handleSyncAgents);
+      window.removeEventListener('message', handleMsg);
+      if (bc) bc.close();
+    };
+  }, []);
 
   // Estado das Memórias e Sinapses Neurais (Inicia estritamente limpo sem itens pré-configurados)
   const [memories, setMemories] = useState<SynapseMemory[]>(() => {
@@ -692,7 +741,61 @@ export default function App() {
     let labelSinapse = `Cognição Neural`;
     let particaoIsolada: MicroDatastoreParticionado | null = null;
 
-    // 1. Identificar menção a ativos B3 / Cripto / Bazin
+    // 1. Verificar se a mensagem invoca ou consulta um dos Agentes de IA criados no Ficheiro
+    const createdAgents = agentService.listAgents();
+    const matchingAgent = createdAgents.find((ag) => {
+      const n = ag.name.toLowerCase();
+      const r = ag.role.toLowerCase();
+      const db = (ag.targetDatabase || '').toLowerCase();
+      const bp = ag.bodyPart ? ag.bodyPart.replace('_', ' ').toLowerCase() : '';
+      const bpLabel = ag.bodyPart ? (BODY_PARTS_CONFIG[ag.bodyPart]?.label || '').toLowerCase() : '';
+      return (
+        lower.includes(n) ||
+        (db && db !== 'geral' && lower.includes(db)) ||
+        (bp && lower.includes(bp)) ||
+        (bpLabel && lower.includes(bpLabel)) ||
+        (lower.includes('agente') && (lower.includes(n) || lower.includes(db)))
+      );
+    });
+
+    if (matchingAgent) {
+      const partConfig = BODY_PARTS_CONFIG[matchingAgent.bodyPart || 'coracao'];
+      labelSinapse = `Invocação do Agente [${matchingAgent.name}] no(a) ${partConfig.label}`;
+      dispararSinapsePontual(`agente-${matchingAgent.id}`, labelSinapse);
+
+      try {
+        // A. O AgentRegistryService emite o sinal BRAIN_TO_AGENT (moléculas vermelhas percorrendo o nervo)
+        // e, ao responder, emite o sinal AGENT_TO_BRAIN (vesícula amarela de retorno)
+        const agentChatResp = await agentService.chatWithAgent(matchingAgent.id, texto);
+        const respostaFinal = `[LLM Central ⇄ Agente ${matchingAgent.name} (${partConfig.label})]: ${agentChatResp.resposta}`;
+
+        setJarvisResponseText(respostaFinal);
+
+        if (agentChatResp.autonomousActions) {
+          executarAcoesAutonomas(agentChatResp.autonomousActions);
+        }
+
+        setIsJarvisSpeaking(true);
+        const maxSpeechMs = Math.min(7500, Math.max(3000, respostaFinal.split(' ').length * 280));
+        if (speechSafetyTimeoutRef.current) clearTimeout(speechSafetyTimeoutRef.current);
+        speechSafetyTimeoutRef.current = setTimeout(() => {
+          setIsJarvisSpeaking(false);
+        }, maxSpeechMs);
+
+        voiceService.speak(agentChatResp.resposta, () => {
+          if (speechSafetyTimeoutRef.current) clearTimeout(speechSafetyTimeoutRef.current);
+          setIsJarvisSpeaking(false);
+        });
+
+        setLoadingAI(false);
+        setInputMessage('');
+        return;
+      } catch (errAg) {
+        console.warn('Erro ao comunicar diretamente com o agente, prosseguindo com cognição central:', errAg);
+      }
+    }
+
+    // 2. Identificar menção a ativos B3 / Cripto / Bazin
     const tickersConhecidos = ['TAEE11', 'BBAS3', 'WEGE3', 'BTC', 'PETR4', 'VALE3', 'ITUB4', 'ELET3', 'CPLE6'];
     let tickerEncontrado = tickersConhecidos.find((t) => texto.toUpperCase().includes(t));
 
@@ -719,11 +822,12 @@ export default function App() {
       if (!particaoIsolada) {
         particaoIsolada = microService.autoAlimentarOuCriar(tickerEncontrado, tickerEncontrado === 'BTC' ? 'cripto' : 'ativo_b3');
         agentService.createAgentForDatabase(tickerEncontrado, tickerEncontrado === 'BTC' ? 'cripto' : 'ativo_b3');
+        setAgentsList(agentService.listAgents());
       }
       targetNodeId = `mem-${tickerEncontrado.toLowerCase()}`;
       labelSinapse = `Sinapse Cirúrgica: [Silo ${particaoIsolada.chave}]`;
     }
-    // 2. Identificação pontual de Arquivos Menores Cotidianos
+    // 3. Identificação pontual de Arquivos Menores Cotidianos
     else if (lower.includes('compras') || lower.includes('mercado') || lower.includes('supermercado') || lower.includes('despensa') || lower.includes('comprar') || lower.includes('leite') || lower.includes('café') || lower.includes('pão')) {
       targetNodeId = 'mem-compras';
       labelSinapse = 'Sinapse Cirúrgica: [Arquivo Menor: Lista de Compras]';
@@ -806,7 +910,6 @@ export default function App() {
 
       setIsJarvisSpeaking(true);
 
-      // Timeout de segurança proporcional para NUNCA travar o cérebro
       const maxSpeechMs = Math.min(6500, Math.max(3000, resposta.split(' ').length * 280));
       if (speechSafetyTimeoutRef.current) clearTimeout(speechSafetyTimeoutRef.current);
       speechSafetyTimeoutRef.current = setTimeout(() => {
@@ -830,473 +933,231 @@ export default function App() {
 
   const currentProviderDef = llmService.getProviderDefinition(llmConfig.provider);
 
+  // Sistema de Proteção e Acesso Seguro (Usuário padrão: matheus_dulius@hotmail.com / 123456)
+  if (!isUnlocked) {
+    return <AuthLockScreen onUnlock={() => setIsUnlocked(true)} />;
+  }
+
   return (
-    <div
-      className={`min-h-screen bg-[#020612] text-slate-100 flex flex-col font-sans transition-all duration-500 ${
-        tvMode ? 'p-6 lg:p-10 text-lg' : 'p-3 sm:p-5'
-      }`}
-    >
+    <div className="w-screen h-screen bg-[#02050e] text-slate-100 flex flex-col font-sans overflow-hidden relative select-none">
       {/* ==================================================================== */}
-      {/* 1. TOP HUD LIMPO E ELEGANTE (CÉREBRO AZUL + SINAPSES VERMELHAS)      */}
+      {/* BARRA SUPERIOR: MICROFONE, CHAT COM TECLADO E ÍCONE DE FERRAMENTA   */}
       {/* ==================================================================== */}
-      {/* ==================================================================== */}
-      {/* 1. TOP BAR ULTRA-LIMPO E EXPANSÍVEL (TOTALMENTE DESOBSTRUÍDO)         */}
-      {/* ==================================================================== */}
-      <header className="z-40 max-w-7xl w-full mx-auto relative mb-1">
-        <div className="flex items-center justify-between gap-3 py-2 px-4 bg-slate-950/75 border border-cyan-500/25 rounded-2xl backdrop-blur-xl shadow-[0_0_25px_rgba(14,165,233,0.08)]">
-          {/* 1. MICROFONE PRINCIPAL NA REGIÃO SUPERIOR ESQUERDA */}
-          <div className="flex items-center gap-2.5 sm:gap-3">
-            <div className="relative flex items-center justify-center">
-              {isDictatingVoice || isOperationMode ? (
-                <>
-                  <div className="absolute inset-0 -m-2 rounded-full border-2 border-red-500/70 animate-ping pointer-events-none" />
-                  <div className="absolute inset-0 -m-1 rounded-full border border-red-400 animate-pulse pointer-events-none" />
-                </>
-              ) : (
-                <div className="absolute inset-0 -m-1 rounded-full border border-cyan-500/30 animate-pulse pointer-events-none" />
-              )}
+      <header className="z-50 w-full px-4 py-2.5 bg-slate-950/85 backdrop-blur-xl border-b border-cyan-500/20 shadow-xl flex items-center justify-between gap-3">
+        
+        {/* 1. Microfone */}
+        <button
+          type="button"
+          onClick={handleMicrophoneClick}
+          className={`p-2.5 sm:p-3 rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center shrink-0 cursor-pointer ${
+            isDictatingVoice || isOperationMode
+              ? 'bg-red-600 text-white shadow-[0_0_25px_rgba(239,68,68,0.7)] animate-pulse'
+              : 'bg-gradient-to-tr from-cyan-600 via-sky-500 to-blue-600 text-white shadow-[0_0_15px_rgba(14,165,233,0.35)] hover:scale-105'
+          }`}
+          title={isDictatingVoice ? 'Escutando sua voz... Clique para concluir' : 'Falar com o Jarvis por voz'}
+        >
+          <Mic className="w-5 h-5" />
+        </button>
 
-              <button
-                type="button"
-                onClick={handleMicrophoneClick}
-                className={`relative group p-2.5 sm:p-3 rounded-2xl transition-all duration-300 shadow-xl active:scale-95 flex items-center justify-center cursor-pointer ${
-                  isDictatingVoice || isOperationMode
-                    ? 'bg-gradient-to-tr from-red-600 via-rose-500 to-amber-500 text-white shadow-[0_0_30px_rgba(239,68,68,0.7)] scale-105'
-                    : 'bg-gradient-to-tr from-cyan-600 via-sky-500 to-blue-600 text-white shadow-[0_0_20px_rgba(14,165,233,0.35)] hover:shadow-[0_0_28px_rgba(14,165,233,0.55)] hover:scale-105'
-                }`}
-                title={
-                  isDictatingVoice || isOperationMode
-                    ? 'Modo de Operação Ativo - Clique para concluir comando'
-                    : 'Clique ou diga "Jarvis" para falar'
-                }
-              >
-                {isDictatingVoice || isOperationMode ? (
-                  <Mic className="w-5 h-5 animate-pulse" />
-                ) : (
-                  <Mic className="w-5 h-5" />
-                )}
-              </button>
-            </div>
+        {/* 2. Chat com Teclado na Parte Superior */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!inputMessage.trim() || loadingAI) return;
+            const msg = inputMessage.trim();
+            const emocao = SentimentEngine.analisar(msg);
+            setActiveSentiment(emocao);
+            processarComandoJarvis(msg, activeProfile, emocao);
+            setInputMessage('');
+          }}
+          className="flex-1 max-w-3xl flex items-center gap-2 bg-slate-900/90 border border-cyan-500/30 hover:border-cyan-400/60 focus-within:border-cyan-400 rounded-2xl px-3.5 py-1.5 transition-all shadow-inner"
+        >
+          <input
+            type="text"
+            value={inputMessage}
+            onChange={(e) => setInputMessage(e.target.value)}
+            placeholder={isDictatingVoice ? 'Escutando sua voz...' : 'Digite aqui para conversar com o Jarvis ou acionar agentes...'}
+            className="flex-1 bg-transparent text-xs sm:text-sm text-slate-100 placeholder-slate-500 outline-none font-sans"
+          />
+          <button
+            type="submit"
+            disabled={!inputMessage.trim() || loadingAI}
+            className="p-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-slate-950 disabled:opacity-30 transition-all cursor-pointer shrink-0"
+            title="Enviar comando"
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        </form>
 
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm sm:text-base font-black tracking-[0.2em] font-mono text-cyan-400">
-                  JARVIS
-                </span>
-                <span
-                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase border ${
-                    isOperationMode || isDictatingVoice
-                      ? 'bg-red-950 text-red-300 border-red-500/50 animate-pulse'
-                      : 'bg-slate-900 text-cyan-300 border-cyan-500/30'
-                  }`}
-                >
-                  {isOperationMode ? '● Modo de Operação' : isListening ? '● Ouvindo' : 'Pronto'}
-                </span>
-              </div>
-              <span className="text-[11px] text-slate-400 font-sans hidden sm:block">
-                {isDictatingVoice ? 'Escutando sua voz...' : 'Microfone na região superior esquerda'}
-              </span>
-            </div>
-          </div>
+        {/* 3. Ícone de Ferramenta para Acessar as Funções & Criação de Agente em Outra HTML */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setSystemMenuExpanded(!systemMenuExpanded)}
+            className="p-2.5 rounded-2xl bg-slate-900/90 hover:bg-cyan-950/70 border border-cyan-500/30 hover:border-cyan-400 text-cyan-300 transition-all shadow-lg active:scale-95 cursor-pointer"
+            title="Ferramentas & Criação de Agentes de IA"
+          >
+            <Wrench className="w-5 h-5 text-cyan-400" />
+          </button>
 
-          <div className="flex items-center gap-2">
-            {/* Botão de Acesso Rápido ao Histórico de Decisões Autônomas do CFO */}
-            <button
-              onClick={() => setCfoDecisionsModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500/20 via-rose-500/15 to-cyan-500/20 hover:from-amber-500/30 hover:to-cyan-500/30 text-amber-300 border border-amber-500/40 hover:border-amber-400 transition-all text-xs font-mono shadow-[0_0_15px_rgba(245,158,11,0.2)] active:scale-95 shrink-0"
-              title="Abrir Histórico de Decisões Autônomas do CFO por IA (Criação/Exclusão de Agentes e Memórias)"
-            >
-              <History className="w-3.5 h-3.5 text-amber-400" />
-              <span className="font-bold">Decisões CFO</span>
-              <span className="text-[10px] bg-amber-400 text-slate-950 font-black px-1.5 py-0.2 rounded-full">
-                IA
-              </span>
-            </button>
-
-            {/* Botão Único Expansível: Painel do Sistema & Agentes */}
-            <button
-              onClick={() => setSystemMenuExpanded(!systemMenuExpanded)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/80 hover:bg-cyan-950/50 text-cyan-300 border border-slate-700/60 hover:border-cyan-500/50 transition-all text-xs font-mono shadow-md active:scale-95"
-              title="Expandir ferramentas, agentes e configurações"
-            >
-              <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-              <span className="hidden sm:inline font-bold">Painel do Sistema</span>
-              <ChevronDown
-                className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${
-                  systemMenuExpanded ? 'rotate-180' : ''
-                }`}
-              />
-            </button>
-          </div>
+          {/* Bloqueio de Acesso / Segurança */}
+          <button
+            type="button"
+            onClick={() => {
+              authService.logout();
+              setIsUnlocked(false);
+            }}
+            className="p-2.5 rounded-2xl bg-slate-900/90 hover:bg-red-950/50 border border-slate-700 hover:border-red-500/40 text-slate-400 hover:text-red-400 transition-all shadow-md active:scale-95 cursor-pointer"
+            title="Bloquear Acesso"
+          >
+            <Lock className="w-4 h-4" />
+          </button>
         </div>
-
-        {/* Menu Expansível Desdobrável (Limpo, sem poluição da tela principal) */}
-        {systemMenuExpanded && (
-          <div className="mt-2 p-3.5 bg-slate-950/95 border border-cyan-500/40 rounded-2xl shadow-2xl backdrop-blur-2xl animate-in fade-in slide-in-from-top-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
-            {/* Decisões Autônomas do CFO */}
-            <button
-              onClick={() => {
-                setCfoDecisionsModalOpen(true);
-                setSystemMenuExpanded(false);
-              }}
-              className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-amber-950/40 border border-slate-800 hover:border-amber-500/50 text-left transition-colors flex items-center gap-2 text-slate-200"
-            >
-              <History className="w-4 h-4 text-amber-400 shrink-0" />
-              <div>
-                <div className="font-bold text-amber-300">Decisões CFO (IA)</div>
-                <div className="text-[10px] text-slate-400">Linha do tempo & nós</div>
-              </div>
-            </button>
-            {/* Ficheiro de Agentes */}
-            <button
-              onClick={() => {
-                setAgentRegistryModalOpen(true);
-                setSystemMenuExpanded(false);
-              }}
-              className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-red-950/40 border border-slate-800 hover:border-red-500/50 text-left transition-colors flex items-center gap-2 text-slate-200"
-            >
-              <Bot className="w-4 h-4 text-red-400 shrink-0" />
-              <div>
-                <div className="font-bold text-red-300">Ficheiro de Agentes</div>
-                <div className="text-[10px] text-slate-400">Modificar lógicas</div>
-              </div>
-            </button>
-
-            {/* Escolha Livre de Provedor LLM */}
-            <button
-              onClick={() => {
-                setLlmConfigModalOpen(true);
-                setSystemMenuExpanded(false);
-              }}
-              className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-cyan-950/40 border border-slate-800 hover:border-cyan-500/50 text-left transition-colors flex items-center gap-2 text-slate-200"
-            >
-              <Cpu className="w-4 h-4 text-cyan-400 shrink-0" />
-              <div>
-                <div className="font-bold text-cyan-300">Provedor de LLM</div>
-                <div className="text-[10px] text-slate-400">{currentProviderDef.name.split(' ')[0]}</div>
-              </div>
-            </button>
-
-            {/* Bancos Particionados Isolados */}
-            <button
-              onClick={() => {
-                setDatastoresModalOpen(true);
-                setSystemMenuExpanded(false);
-              }}
-              className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-cyan-950/40 border border-slate-800 hover:border-cyan-500/50 text-left transition-colors flex items-center gap-2 text-slate-200"
-            >
-              <Database className="w-4 h-4 text-cyan-400 shrink-0" />
-              <div>
-                <div className="font-bold text-slate-200">Bancos por Ativo</div>
-                <div className="text-[10px] text-slate-400">Partições isoladas</div>
-              </div>
-            </button>
-
-            {/* Banco de Memórias */}
-            <button
-              onClick={() => {
-                setMemoryPanelOpen(true);
-                setSystemMenuExpanded(false);
-              }}
-              className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-cyan-950/40 border border-slate-800 hover:border-cyan-500/50 text-left transition-colors flex items-center gap-2 text-slate-200"
-            >
-              <Layers className="w-4 h-4 text-cyan-400 shrink-0" />
-              <div>
-                <div className="font-bold text-slate-200">Memórias Sinápticas</div>
-                <div className="text-[10px] text-slate-400">{memories.length} nós</div>
-              </div>
-            </button>
-
-            {/* Perfil Familiar */}
-            <button
-              onClick={() => {
-                setProfileDropdownOpen(true);
-                setSystemMenuExpanded(false);
-              }}
-              className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-cyan-950/40 border border-slate-800 hover:border-cyan-500/50 text-left transition-colors flex items-center gap-2 text-slate-200"
-            >
-              <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: activeProfile.avatarColor }} />
-              <div>
-                <div className="font-bold text-slate-200">{activeProfile.name}</div>
-                <div className="text-[10px] text-slate-400">Trocar perfil</div>
-              </div>
-            </button>
-
-            {/* Configuração de Voz */}
-            <button
-              onClick={() => {
-                setVoiceSettingsOpen(true);
-                setSystemMenuExpanded(false);
-              }}
-              className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-cyan-950/40 border border-slate-800 hover:border-cyan-500/50 text-left transition-colors flex items-center gap-2 text-slate-200"
-            >
-              <Sliders className="w-4 h-4 text-cyan-400 shrink-0" />
-              <div>
-                <div className="font-bold text-slate-200">Voz do Jarvis</div>
-                <div className="text-[10px] text-slate-400">Tom e velocidade</div>
-              </div>
-            </button>
-
-            {/* O que é o Banco de Dados */}
-            <button
-              onClick={() => {
-                setDatabaseExplainerOpen(true);
-                setSystemMenuExpanded(false);
-              }}
-              className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-cyan-950/40 border border-slate-800 hover:border-cyan-500/50 text-left transition-colors flex items-center gap-2 text-slate-200"
-            >
-              <HelpCircle className="w-4 h-4 text-cyan-400 shrink-0" />
-              <div>
-                <div className="font-bold text-slate-200">Entenda os Bancos</div>
-                <div className="text-[10px] text-slate-400">Como funciona</div>
-              </div>
-            </button>
-
-            {/* Modo TV e PWA */}
-            <div className="flex gap-1.5">
-              <button
-                onClick={() => setTvMode(!tvMode)}
-                className={`flex-1 p-2.5 rounded-xl border text-center transition-colors ${
-                  tvMode
-                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                    : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-cyan-500/40'
-                }`}
-                title="Modo TV"
-              >
-                <Tv className="w-4 h-4 mx-auto mb-0.5 text-amber-400" />
-                <span className="text-[10px]">TV</span>
-              </button>
-              <button
-                onClick={handleInstallPWA}
-                className="flex-1 p-2.5 rounded-xl bg-slate-900 hover:bg-cyan-950/60 text-cyan-400 border border-cyan-500/30 text-center transition-colors"
-                title="Instalar App"
-              >
-                <Download className="w-4 h-4 mx-auto mb-0.5" />
-                <span className="text-[10px]">Instalar</span>
-              </button>
-            </div>
-          </div>
-        )}
       </header>
 
-      {/* Alerta Sentinela Interativo & Cirúrgico */}
-      {alertaSentinelaAtivo && (
-        <div
-          onClick={() => {
-            const targetId = `mem-${alertaSentinelaAtivo.chaveParticao.toLowerCase()}`;
-            dispararSinapsePontual(targetId, `Alerta Sentinela: ${alertaSentinelaAtivo.nome}`);
-          }}
-          className="mt-2 mx-auto max-w-2xl w-full bg-red-950/70 border border-red-500/50 rounded-xl px-3.5 py-1.5 flex items-center justify-between text-xs text-red-200 shadow-md backdrop-blur-md animate-in slide-in-from-top-1 z-30 cursor-pointer hover:bg-red-900/60 transition-all"
-          title="Clique para inspecionar a sinapse cirúrgica deste ativo no cérebro 3D"
-        >
-          <div className="flex items-center gap-2 truncate">
-            <ShieldAlert className="w-3.5 h-3.5 text-red-400 shrink-0 animate-pulse" />
-            <span className="font-bold text-white font-mono uppercase text-[11px]">
-              [{alertaSentinelaAtivo.nome}]:
+      {/* Menu Desdobrável das Ferramentas (Ao clicar no ícone de ferramentas) */}
+      {systemMenuExpanded && (
+        <div className="absolute top-16 right-4 z-50 max-w-md w-[92%] sm:w-96 bg-slate-950/95 border border-cyan-500/40 rounded-2xl p-4 shadow-[0_0_35px_rgba(6,182,212,0.25)] backdrop-blur-2xl animate-in fade-in slide-in-from-top-2 space-y-2 text-xs font-mono">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+            <span className="font-bold text-cyan-400 flex items-center gap-1.5">
+              <Wrench className="w-4 h-4" />
+              FUNÇÕES & AGENTES DE IA
             </span>
-            <span className="truncate text-slate-200">{alertaSentinelaAtivo.alertaVigente}</span>
+            <button onClick={() => setSystemMenuExpanded(false)} className="text-slate-400 hover:text-white">✕</button>
           </div>
+
+          {/* Botão em Destaque: Abrir Página HTML Dedicada com todas as conexões externas */}
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setAlertaSentinelaAtivo(null);
+            onClick={() => {
+              window.open('/agents.html', '_blank');
+              setSystemMenuExpanded(false);
             }}
-            className="text-[10px] text-red-400 hover:text-white px-1.5 py-0.5 rounded border border-red-500/30 shrink-0 ml-2"
+            className="w-full p-3 rounded-xl bg-gradient-to-r from-cyan-600 via-sky-500 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-slate-950 font-bold text-left transition-all flex items-center justify-between shadow-lg cursor-pointer"
           >
-            ✕
+            <div>
+              <div className="flex items-center gap-1.5 text-xs font-extrabold uppercase">
+                <ExternalLink className="w-4 h-4" />
+                Criar Agente de IA (agents.html)
+              </div>
+              <div className="text-[10px] font-normal text-slate-950/80 mt-0.5">
+                Abre em nova janela com Webhooks, Bancos de Dados e Teste Funcional
+              </div>
+            </div>
+            <span className="text-[10px] bg-slate-950 text-cyan-300 px-2 py-0.5 rounded-full font-bold">HTML</span>
+          </button>
+
+          {/* Opção Ficheiro Interno */}
+          <button
+            onClick={() => {
+              setAgentRegistryModalOpen(true);
+              setSystemMenuExpanded(false);
+            }}
+            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
+          >
+            <Bot className="w-4 h-4 text-cyan-400 shrink-0" />
+            <div>
+              <div className="font-bold text-slate-100">Ficheiro no Modal</div>
+              <div className="text-[10px] text-slate-400">Ver agentes acoplados ao corpo</div>
+            </div>
+          </button>
+
+          {/* Opção Segurança & Senha */}
+          <button
+            onClick={() => {
+              setSecurityModalOpen(true);
+              setSystemMenuExpanded(false);
+            }}
+            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
+          >
+            <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
+            <div>
+              <div className="font-bold text-slate-100">Segurança & Troca de Senha</div>
+              <div className="text-[10px] text-slate-400">matheus_dulius@hotmail.com</div>
+            </div>
+          </button>
+
+          {/* Opção Provedor de LLM */}
+          <button
+            onClick={() => {
+              setLlmConfigModalOpen(true);
+              setSystemMenuExpanded(false);
+            }}
+            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
+          >
+            <Cpu className="w-4 h-4 text-purple-400 shrink-0" />
+            <div>
+              <div className="font-bold text-slate-100">Motor de LLM Universal</div>
+              <div className="text-[10px] text-slate-400">Gemini, Claude, GPT, Ollama</div>
+            </div>
+          </button>
+
+          {/* Decisões CFO */}
+          <button
+            onClick={() => {
+              setCfoDecisionsModalOpen(true);
+              setSystemMenuExpanded(false);
+            }}
+            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
+          >
+            <History className="w-4 h-4 text-amber-400 shrink-0" />
+            <div>
+              <div className="font-bold text-slate-100">Decisões Autônomas CFO</div>
+              <div className="text-[10px] text-slate-400">Auditorias e deliberações de IA</div>
+            </div>
           </button>
         </div>
       )}
 
       {/* ==================================================================== */}
-      {/* 2. CÉREBRO 3D AZUL COM SINAPSES VERMELHAS (TOTALMENTE DESOBSTRUÍDO) */}
+      {/* ÁREA PRINCIPAL: SILHUETA HUMANA, CÉREBRO 3D E SISTEMA NERVOSO        */}
       {/* ==================================================================== */}
-      <main className="flex-1 flex flex-col justify-between my-1 relative">
-        <div className="relative w-full flex-1 flex items-center justify-center min-h-[660px] h-[calc(100vh-130px)]">
-          <RealisticBrainCanvas
-            memories={memories}
-            selectedMemory={selectedMemory}
-            onSelectMemory={(mem) => setSelectedMemory(mem)}
-            isJarvisSpeaking={isJarvisSpeaking}
-            isListening={isListening || isDictatingVoice}
-            activeSynapsePulse={activeSynapsePulse}
-            activeTargetNodeId={activeTargetNodeId}
-            activeSentiment={activeSentiment}
-            tvMode={tvMode}
-            onForceRest={forcarRepousoNeural}
-          />
+      <main className="flex-1 w-full h-[calc(100vh-64px)] relative overflow-hidden">
+        <RealisticBrainCanvas
+          memories={memories}
+          selectedMemory={selectedMemory}
+          onSelectMemory={(mem) => setSelectedMemory(mem)}
+          isJarvisSpeaking={isJarvisSpeaking}
+          isListening={isListening || isDictatingVoice}
+          activeSynapsePulse={activeSynapsePulse}
+          activeTargetNodeId={activeTargetNodeId}
+          activeSentiment={activeSentiment}
+          tvMode={tvMode}
+          onForceRest={forcarRepousoNeural}
+          agents={agentsList}
+          onSelectAgent={(ag) => {
+            setAgentRegistryModalOpen(true);
+          }}
+          activeNerveSignal={activeNerveSignal}
+        />
 
-          {/* Inspetor Flutuante da Memória Selecionada no Cérebro 3D */}
-          {selectedMemory && (
-            <div className="absolute bottom-4 right-4 sm:right-8 max-w-sm w-[92%] sm:w-80 z-40 bg-slate-950/95 border border-cyan-500/40 rounded-2xl p-4 shadow-[0_0_35px_rgba(14,165,233,0.3)] backdrop-blur-xl animate-in slide-in-from-bottom-2">
-              <div className="flex items-start justify-between gap-2 mb-2">
-                <div>
-                  <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-500/30">
-                    {selectedMemory.category}
+        {/* Resposta Flutuante Discreta do Jarvis (Sem Obstruir a Visualização) */}
+        {jarvisResponseText && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 max-w-xl w-[92%] z-40 animate-in fade-in slide-in-from-top-3 duration-300 pointer-events-auto">
+            <div className="bg-slate-950/90 border border-cyan-500/40 rounded-2xl p-4 shadow-[0_0_35px_rgba(6,182,212,0.25)] backdrop-blur-2xl relative">
+              <button
+                onClick={() => setJarvisResponseText(null)}
+                className="absolute top-2.5 right-2.5 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                title="Fechar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              <div className="flex items-center gap-2 mb-1.5 text-xs font-mono uppercase font-bold text-cyan-400">
+                <span className="w-2 h-2 rounded-full animate-ping bg-cyan-400" />
+                <span>JARVIS</span>
+                {isJarvisSpeaking && (
+                  <span className="text-[10px] text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded flex items-center gap-1">
+                    <Volume2 className="w-3 h-3 animate-pulse" />
+                    Vocalizando
                   </span>
-                  <h4 className="font-bold text-sm text-slate-100 font-mono mt-1">
-                    {selectedMemory.title}
-                  </h4>
-                </div>
-                <button
-                  onClick={() => setSelectedMemory(null)}
-                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                )}
               </div>
-
-              <p className="text-xs text-slate-300 font-sans leading-relaxed mb-3">
-                {selectedMemory.content}
+              <p className="text-slate-100 text-sm leading-relaxed pr-6 font-sans">
+                "{jarvisResponseText}"
               </p>
-
-              <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 border-t border-slate-800/80 pt-2 mb-3">
-                <span>Autor: {selectedMemory.user}</span>
-                <span>{selectedMemory.timestamp}</span>
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    const comando = `Jarvis, examine a memória "${selectedMemory.title}": ${selectedMemory.content}`;
-                    setInputMessage(comando);
-                    const emocao = SentimentEngine.analisar(comando);
-                    setActiveSentiment(emocao);
-                    processarComandoJarvis(comando, activeProfile, emocao);
-                    setSelectedMemory(null);
-                  }}
-                  className="flex-1 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-mono font-bold text-xs flex items-center justify-center gap-1 transition-colors shadow-sm"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  Consultar
-                </button>
-                <button
-                  onClick={() => {
-                    excluirMemoria(selectedMemory.id);
-                    dispararSinapsePontual(null, `Memória Excluída: ${selectedMemory.title}`);
-                    setSelectedMemory(null);
-                  }}
-                  className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-500/40 text-xs font-mono flex items-center gap-1 transition-colors"
-                  title="Excluir esta memória do cérebro"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Excluir</span>
-                </button>
-              </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </main>
-
-      {/* ==================================================================== */}
-      {/* 3. RESPOSTA FLUTUANTE DO JARVIS (DISCRETA, SEM OBSTRUIR O CÉREBRO)   */}
-      {/* ==================================================================== */}
-      {jarvisResponseText && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 max-w-xl w-[92%] z-50 animate-in fade-in slide-in-from-top-3 duration-300 pointer-events-auto">
-          <div className="bg-slate-950/90 border border-cyan-500/40 rounded-2xl p-4 shadow-[0_0_40px_rgba(14,165,233,0.22)] backdrop-blur-2xl relative">
-            <button
-              onClick={() => setJarvisResponseText(null)}
-              className="absolute top-2.5 right-2.5 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-              title="Fechar resposta"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <div className="flex items-center gap-2 mb-1.5 text-xs font-mono uppercase font-bold tracking-wider text-cyan-400">
-              <span className="w-2 h-2 rounded-full animate-ping bg-cyan-400" />
-              <span>JARVIS</span>
-              {isJarvisSpeaking && (
-                <span className="text-[10px] text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded flex items-center gap-1">
-                  <Volume2 className="w-3 h-3 animate-pulse" />
-                  Vocalizando
-                </span>
-              )}
-            </div>
-            <p className="text-slate-100 text-sm leading-relaxed pr-6 font-sans">
-              "{jarvisResponseText}"
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Aviso discreto caso o navegador bloqueie permissão de microfone */}
-      {voiceErrorMessage && (
-        <div className="max-w-md w-[90%] mx-auto mb-2 p-3 bg-amber-950/80 border border-amber-500/50 rounded-xl text-xs text-amber-200 flex items-start gap-2 animate-in fade-in z-30">
-          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <p className="font-semibold">{voiceErrorMessage}</p>
-          </div>
-          <button
-            onClick={() => setVoiceErrorMessage(null)}
-            className="text-amber-400 hover:text-white text-xs px-1"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* ==================================================================== */}
-      {/* 4. CONSOLE INFERIOR COMPACTO (CÉREBRO TOTALMENTE DESOBSTRUÍDO)       */}
-      {/* ==================================================================== */}
-      <footer className="z-30 pb-3 pt-1 flex flex-col items-center justify-center relative">
-        {/* Transcrição em tempo real (Fita flutuante quando o usuário fala) */}
-        {isDictatingVoice && inputMessage && (
-          <div className="mb-2 px-4 py-1.5 rounded-full bg-slate-950/90 border border-cyan-500/50 text-cyan-200 text-xs font-mono backdrop-blur-md shadow-lg animate-in fade-in slide-in-from-bottom-2 max-w-lg text-center truncate">
-            "{inputMessage}"
-          </div>
-        )}
-
-        {/* Fita de Status Minimalista com Teclado Alternativo */}
-        <div className="flex items-center gap-3 bg-slate-950/80 px-4 py-1.5 rounded-full border border-slate-800 backdrop-blur-md shadow-md">
-          <span className="text-xs text-slate-300 font-sans">
-            {isDictatingVoice ? (
-              <span className="text-red-400 font-bold animate-pulse flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-red-400" /> Escutando comando por voz...
-              </span>
-            ) : (
-              <span>Diga <strong className="text-cyan-400 font-semibold">"Jarvis"</strong> ou clique no microfone no canto superior esquerdo</span>
-            )}
-          </span>
-          <button
-            onClick={() => setShowTextInput(!showTextInput)}
-            className="text-slate-400 hover:text-white transition-colors p-1 rounded-md hover:bg-slate-800"
-            title="Digitar por teclado"
-          >
-            <Keyboard className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* Input de texto exibido apenas se acionado pelo ícone de teclado */}
-        {showTextInput && (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!inputMessage.trim()) return;
-              const emocao = SentimentEngine.analisar(inputMessage);
-              setActiveSentiment(emocao);
-              processarComandoJarvis(inputMessage, activeProfile, emocao);
-              setInputMessage('');
-              setShowTextInput(false);
-            }}
-            className="mt-3 flex items-center gap-2 max-w-md w-full px-3 py-1.5 bg-slate-950/90 border border-slate-800 rounded-xl animate-in fade-in"
-          >
-            <input
-              type="text"
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              placeholder="Digite o comando para o Jarvis..."
-              className="flex-1 bg-transparent text-xs text-slate-100 focus:outline-none font-sans"
-              autoFocus
-            />
-            <button
-              type="submit"
-              disabled={loadingAI || !inputMessage.trim()}
-              className="p-1.5 rounded-lg bg-cyan-600 text-white text-xs disabled:opacity-40"
-            >
-              <Send className="w-3.5 h-3.5" />
-            </button>
-          </form>
-        )}
-      </footer>
 
       {/* ==================================================================== */}
       {/* 5. MODAL EXPLICATIVO: O QUE SÃO OS BANCOS DE DADOS COMPARTIMENTADOS? */}
@@ -1379,7 +1240,10 @@ export default function App() {
       {/* Modal: Ficheiro de Agentes e Modificação de Lógica */}
       <AgentRegistryModal
         isOpen={agentRegistryModalOpen}
-        onClose={() => setAgentRegistryModalOpen(false)}
+        onClose={() => {
+          setAgentRegistryModalOpen(false);
+          setAgentsList(agentService.listAgents());
+        }}
         onTriggerSynapse={dispararSinapse}
         onAutonomousAction={executarAcoesAutonomas}
         onAddMemory={adicionarNovaMemoria}
@@ -1456,6 +1320,12 @@ export default function App() {
         }}
         onOpenAgentRegistry={() => setAgentRegistryModalOpen(true)}
         onOpenMemories={() => setMemoryPanelOpen(true)}
+      />
+
+      {/* Modal: Segurança, Troca de Senha & Sincronização Multi-Máquinas */}
+      <SecuritySettingsModal
+        isOpen={securityModalOpen}
+        onClose={() => setSecurityModalOpen(false)}
       />
     </div>
   );

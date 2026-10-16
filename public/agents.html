@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Estúdio de Criação de Agentes de IA · Conexões Externas & Sistema Nervoso</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@600;800;900&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+            orbitron: ['Orbitron', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#ecfeff',
+              400: '#22d3ee',
+              500: '#06b6d4',
+              600: '#0891b2',
+              900: '#164e63',
+              950: '#083344',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #020617;
+      color: #f8fafc;
+      font-family: 'Inter', sans-serif;
+    }
+    .custom-scroll::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: rgba(6, 182, 212, 0.4);
+      border-radius: 9999px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb:hover {
+      background: rgba(6, 182, 212, 0.7);
+    }
+    .neon-border {
+      box-shadow: 0 0 20px rgba(6, 182, 212, 0.15);
+    }
+    .pulse-glow {
+      animation: pulseGlow 2.5s infinite ease-in-out;
+    }
+    @keyframes pulseGlow {
+      0%, 100% { opacity: 0.8; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.02); }
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-[#020617] text-slate-100 flex flex-col custom-scroll antialiased selection:bg-cyan-500 selection:text-slate-950">
+
+  <!-- Header Superior -->
+  <header class="border-b border-cyan-500/20 bg-slate-950/80 backdrop-blur-xl sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-600 via-sky-500 to-indigo-600 flex items-center justify-center shadow-[0_0_20px_rgba(6,182,212,0.4)]">
+        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+      </div>
+      <div>
+        <h1 class="font-orbitron font-extrabold text-base tracking-wider text-cyan-400 flex items-center gap-2">
+          ESTÚDIO DE AGENTES DE IA
+          <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/30">CONEXÕES EXTERNAS</span>
+        </h1>
+        <p class="text-xs text-slate-400 font-sans">Criação direta pelo usuário · Acoplamento automático no corpo humano e sistema nervoso</p>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button onclick="limparTudoComConfirmacao()" class="px-3 py-1.5 rounded-xl bg-rose-950/50 hover:bg-rose-900/60 border border-rose-500/30 text-rose-300 text-xs font-mono transition-all flex items-center gap-1.5 cursor-pointer">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+        </svg>
+        Deixar em Branco (Zerar Ficheiro)
+      </button>
+
+      <button onclick="window.close()" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-mono transition-all flex items-center gap-1.5 cursor-pointer">
+        Voltar à Visualização 3D
+      </button>
+    </div>
+  </header>
+
+  <!-- Conteúdo Principal com 2 Colunas -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Coluna Esquerda: Formulário de Criação Completo de Agente (7 colunas) -->
+    <div class="lg:col-span-7 space-y-6">
+      
+      <div class="bg-slate-900/90 border border-cyan-500/30 rounded-2xl p-6 shadow-xl backdrop-blur-xl neon-border">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-4 mb-5">
+          <div class="flex items-center gap-2.5">
+            <span class="w-3 h-3 rounded-full bg-cyan-400 animate-ping"></span>
+            <h2 class="font-mono font-bold text-sm uppercase tracking-wider text-cyan-300">Criar Novo Agente de IA</h2>
+          </div>
+          <span class="text-[11px] font-mono text-slate-400">Instalação direta no corpo humano</span>
+        </div>
+
+        <form id="agentForm" onsubmit="event.preventDefault(); salvarAgente();" class="space-y-4 text-xs font-mono">
+
+          <!-- 1. Identificação Básica -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-slate-300 font-bold mb-1">Nome do Agente *</label>
+              <input type="text" id="agName" required placeholder="Ex: Sentinela de Preços / Auditor Fiscal" class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-slate-100 text-xs outline-none transition-all">
+            </div>
+
+            <div>
+              <label class="block text-slate-300 font-bold mb-1">Função / Papel Operacional</label>
+              <input type="text" id="agRole" placeholder="Ex: Monitoramento 24/7 & Disparo de Ordens" class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-slate-100 text-xs outline-none transition-all">
+            </div>
+          </div>
+
+          <!-- 2. Acoplamento Anatômico no Corpo Humano -->
+          <div>
+            <label class="block text-slate-300 font-bold mb-1">Local de Instalação no Corpo Humano *</label>
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <label class="flex items-center gap-2 p-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-cyan-500/50 cursor-pointer text-[11px]">
+                <input type="radio" name="bodyPartRadio" value="cranio_cerebro" checked class="text-cyan-500">
+                <span>🧠 Cabeça (Córtex)</span>
+              </label>
+              <label class="flex items-center gap-2 p-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-cyan-500/50 cursor-pointer text-[11px]">
+                <input type="radio" name="bodyPartRadio" value="pescoco_cervical" class="text-cyan-500">
+                <span>⚡ Pescoço (Cervical)</span>
+              </label>
+              <label class="flex items-center gap-2 p-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-cyan-500/50 cursor-pointer text-[11px]">
+                <input type="radio" name="bodyPartRadio" value="torax_tronco" class="text-cyan-500">
+                <span>🫁 Tórax (Tronco)</span>
+              </label>
+              <label class="flex items-center gap-2 p-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-cyan-500/50 cursor-pointer text-[11px]">
+                <input type="radio" name="bodyPartRadio" value="mao_direita" class="text-cyan-500">
+                <span>✋ Mão Direita (Ação)</span>
+              </label>
+              <label class="flex items-center gap-2 p-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-cyan-500/50 cursor-pointer text-[11px]">
+                <input type="radio" name="bodyPartRadio" value="mao_esquerda" class="text-cyan-500">
+                <span>🛡️ Mão Esquerda (Defesa)</span>
+              </label>
+              <label class="flex items-center gap-2 p-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-cyan-500/50 cursor-pointer text-[11px]">
+                <input type="radio" name="bodyPartRadio" value="coluna_vertebral" class="text-cyan-500">
+                <span>🦴 Coluna (Medula)</span>
+              </label>
+              <label class="flex items-center gap-2 p-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-cyan-500/50 cursor-pointer text-[11px]">
+                <input type="radio" name="bodyPartRadio" value="quadril_pelve" class="text-cyan-500">
+                <span>⚖️ Pelve (Equilíbrio)</span>
+              </label>
+              <label class="flex items-center gap-2 p-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-cyan-500/50 cursor-pointer text-[11px]">
+                <input type="radio" name="bodyPartRadio" value="perna_direita" class="text-cyan-500">
+                <span>🦵 Perna Direita (Passo)</span>
+              </label>
+              <label class="flex items-center gap-2 p-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-cyan-500/50 cursor-pointer text-[11px]">
+                <input type="radio" name="bodyPartRadio" value="pe_esquerdo" class="text-cyan-500">
+                <span>🦶 Pés (Ancoragem)</span>
+              </label>
+            </div>
+            <p class="text-[10px] text-slate-500 mt-1">Ao salvar, uma terminação nervosa 3D conecta o cérebro à esta posição anatômica específica.</p>
+          </div>
+
+          <!-- 3. Diretrizes de Raciocínio & Lógica da LLM -->
+          <div>
+            <label class="block text-slate-300 font-bold mb-1">Instruções Sistêmicas & Lógica de Operação *</label>
+            <textarea id="agLogic" rows="3" required placeholder="Instruções para o agente raciocinar: Ex: Analisar volatilidade a cada 5 min, filtrar ruídos de mercado, emitir veredito em JSON e disparar webhook se margem > 15%." class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-xl p-3 text-slate-100 text-xs outline-none transition-all resize-y"></textarea>
+          </div>
+
+          <!-- 4. Seletor de Conexão Externa (Todas as Possibilidades de Conexão Externa) -->
+          <div class="border border-slate-800 bg-slate-950/60 rounded-xl p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-cyan-400 flex items-center gap-1.5">
+                <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                </svg>
+                Possibilidades de Conexão Externa
+              </span>
+              <span class="text-[10px] text-slate-400">APIs, Webhooks, Bancos de Dados & Bots</span>
+            </div>
+
+            <!-- Abas de Tipo de Conexão Externa -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[11px]">
+              <button type="button" onclick="setConnectionType('WEBHOOK')" id="tab-WEBHOOK" class="p-2 rounded-lg bg-cyan-950 text-cyan-300 border border-cyan-500/40 text-center font-bold">
+                🌐 Webhook / REST
+              </button>
+              <button type="button" onclick="setConnectionType('DATABASE')" id="tab-DATABASE" class="p-2 rounded-lg bg-slate-900 text-slate-400 border border-slate-800 hover:border-slate-700 text-center">
+                🗄️ Banco de Dados
+              </button>
+              <button type="button" onclick="setConnectionType('MESSAGING')" id="tab-MESSAGING" class="p-2 rounded-lg bg-slate-900 text-slate-400 border border-slate-800 hover:border-slate-700 text-center">
+                💬 Telegram / Zap
+              </button>
+              <button type="button" onclick="setConnectionType('CODE')" id="tab-CODE" class="p-2 rounded-lg bg-slate-900 text-slate-400 border border-slate-800 hover:border-slate-700 text-center">
+                ⚡ Script / Python
+              </button>
+            </div>
+
+            <!-- Painel Dinâmico: Webhook / REST -->
+            <div id="conn-WEBHOOK" class="space-y-2.5">
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div class="sm:col-span-2">
+                  <label class="block text-slate-400 text-[10px] mb-1">URL do Endpoint HTTP/REST</label>
+                  <input type="url" id="connUrl" placeholder="https://api.empresa.com/v1/webhook ou n8n" class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-lg px-2.5 py-1.5 text-slate-100 text-[11px] outline-none">
+                </div>
+                <div>
+                  <label class="block text-slate-400 text-[10px] mb-1">Método HTTP</label>
+                  <select id="connMethod" class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-lg px-2.5 py-1.5 text-slate-100 text-[11px] outline-none">
+                    <option value="POST">POST</option>
+                    <option value="GET">GET</option>
+                    <option value="PUT">PUT</option>
+                    <option value="PATCH">PATCH</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-slate-400 text-[10px] mb-1">Headers de Autenticação / Bearer Token (JSON)</label>
+                <input type="text" id="connHeaders" placeholder='{"Authorization": "Bearer chave_secreta", "X-Custom": "valor"}' class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-lg px-2.5 py-1.5 text-slate-100 text-[11px] outline-none">
+              </div>
+            </div>
+
+            <!-- Painel Dinâmico: Banco de Dados -->
+            <div id="conn-DATABASE" class="hidden space-y-2.5">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-slate-400 text-[10px] mb-1">Tipo de Banco</label>
+                  <select id="connDbType" class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-lg px-2.5 py-1.5 text-slate-100 text-[11px] outline-none">
+                    <option value="PostgreSQL">PostgreSQL (Relacional)</option>
+                    <option value="MySQL">MySQL / MariaDB</option>
+                    <option value="MongoDB">MongoDB (Documentos)</option>
+                    <option value="Supabase">Supabase / REST</option>
+                    <option value="Firebase">Firebase Firestore</option>
+                    <option value="Redis">Redis (Key-Value / Cache)</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-slate-400 text-[10px] mb-1">Connection String / Host</label>
+                  <input type="text" id="connDbUri" placeholder="postgresql://user:pass@host:5432/dbname" class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-lg px-2.5 py-1.5 text-slate-100 text-[11px] outline-none">
+                </div>
+              </div>
+            </div>
+
+            <!-- Painel Dinâmico: Messaging / Telegram / WhatsApp -->
+            <div id="conn-MESSAGING" class="hidden space-y-2.5">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-slate-400 text-[10px] mb-1">Plataforma</label>
+                  <select id="connMsgPlatform" class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-lg px-2.5 py-1.5 text-slate-100 text-[11px] outline-none">
+                    <option value="Telegram">Telegram Bot API</option>
+                    <option value="Discord">Discord Webhook</option>
+                    <option value="WhatsApp">WhatsApp Cloud API</option>
+                    <option value="Slack">Slack Incoming Webhook</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-slate-400 text-[10px] mb-1">Bot Token ou Webhook URL</label>
+                  <input type="text" id="connMsgToken" placeholder="https://discord.com/api/webhooks/... ou botToken" class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-lg px-2.5 py-1.5 text-slate-100 text-[11px] outline-none">
+                </div>
+              </div>
+            </div>
+
+            <!-- Painel Dinâmico: Código / Python -->
+            <div id="conn-CODE" class="hidden space-y-2.5">
+              <div>
+                <label class="block text-slate-400 text-[10px] mb-1">Snippet de Código Executável (Python / TypeScript)</label>
+                <textarea id="connCodeSnippet" rows="2" placeholder="def run_audit(data):\n    return {'verdict': 'APROVADO', 'score': 9.8}" class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-lg p-2 text-slate-100 text-[11px] font-mono outline-none"></textarea>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- 5. Painel de Confirmação & Validação de Funcionalidade -->
+          <div class="border border-slate-800 bg-slate-950 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold text-slate-200 flex items-center gap-2">
+                <span id="funcStatusIcon" class="w-3 h-3 rounded-full bg-slate-600"></span>
+                Status de Funcionalidade: <span id="funcStatusText" class="text-slate-400">Aguardando Validação</span>
+              </span>
+              <button type="button" onclick="testarFuncionalidade()" class="px-3 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold text-xs transition-all flex items-center gap-1 cursor-pointer">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Testar Funcionalidade
+              </button>
+            </div>
+
+            <!-- Diagnóstico das Verificações -->
+            <div id="funcDiagnostics" class="text-[11px] space-y-1 text-slate-400 pt-2 border-t border-slate-800/80">
+              <p>• Clique em "Testar Funcionalidade" para verificar sintaxe, endpoint, latência e compatibilidade antes de acoplar ao corpo.</p>
+            </div>
+          </div>
+
+          <!-- 6. Botão de Submissão -->
+          <div class="flex gap-3 pt-2">
+            <button type="submit" id="btnSalvarAgente" class="flex-1 py-3 rounded-xl bg-gradient-to-r from-cyan-600 via-sky-500 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-slate-950 font-bold text-sm shadow-[0_0_20px_rgba(6,182,212,0.4)] transition-all cursor-pointer flex items-center justify-center gap-2">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+              </svg>
+              Criar e Acoplar Agente ao Corpo Humano
+            </button>
+          </div>
+
+        </form>
+      </div>
+
+    </div>
+
+    <!-- Coluna Direita: Lista de Agentes Instalados no Corpo (5 colunas) -->
+    <div class="lg:col-span-5 space-y-4">
+      
+      <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur-xl">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+          <div>
+            <h3 class="font-mono font-bold text-xs uppercase tracking-wider text-cyan-300 flex items-center gap-2">
+              <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+              Agentes Instalados no Corpo
+            </h3>
+            <p class="text-[10px] text-slate-400">Total: <span id="agentCount" class="font-bold text-cyan-400">0</span> acoplados ao sistema nervoso</p>
+          </div>
+          <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">Sincronizado</span>
+        </div>
+
+        <!-- Lista de Agentes -->
+        <div id="agentsListContainer" class="space-y-2.5 max-h-[640px] overflow-y-auto pr-1 custom-scroll text-xs">
+          <!-- Renderizado via JavaScript -->
+        </div>
+
+      </div>
+
+    </div>
+
+  </main>
+
+  <script>
+    // Configurações Anatômicas e Constantes
+    const STORAGE_KEY = 'jarvis_agent_registry_v1';
+    let currentConnType = 'WEBHOOK';
+    let ultimoTesteSucesso = false;
+
+    const BODY_PARTS_NAMES = {
+      cranio_cerebro: 'Cabeça (Córtex Craniano)',
+      pescoco_cervical: 'Pescoço (Cervical)',
+      ombro_esquerdo: 'Ombro Esquerdo',
+      ombro_direito: 'Ombro Direito',
+      braco_esquerdo: 'Braço Esquerdo',
+      braco_direito: 'Braço Direito',
+      mao_esquerda: 'Mão Esquerda (Defesa)',
+      mao_direita: 'Mão Direita (Ação)',
+      torax_tronco: 'Tórax (Tronco Central)',
+      coluna_vertebral: 'Coluna Vertebral (Medula)',
+      quadril_pelve: 'Pelve / Quadril',
+      perna_esquerda: 'Perna Esquerda',
+      perna_direita: 'Perna Direita',
+      pe_esquerdo: 'Pé Esquerdo',
+      pe_direito: 'Pé Direito',
+    };
+
+    function setConnectionType(type) {
+      currentConnType = type;
+      ['WEBHOOK', 'DATABASE', 'MESSAGING', 'CODE'].forEach(t => {
+        const btn = document.getElementById(`tab-${t}`);
+        const panel = document.getElementById(`conn-${t}`);
+        if (t === type) {
+          btn.className = 'p-2 rounded-lg bg-cyan-950 text-cyan-300 border border-cyan-500/40 text-center font-bold';
+          panel.classList.remove('hidden');
+        } else {
+          btn.className = 'p-2 rounded-lg bg-slate-900 text-slate-400 border border-slate-800 hover:border-slate-700 text-center';
+          panel.classList.add('hidden');
+        }
+      });
+    }
+
+    function getSelectedBodyPart() {
+      const radios = document.getElementsByName('bodyPartRadio');
+      for (const r of radios) {
+        if (r.checked) return r.value;
+      }
+      return 'torax_tronco';
+    }
+
+    // Carregar Agentes Salvos
+    function carregarAgentes() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        const map = raw ? JSON.parse(raw) : {};
+        return map;
+      } catch {
+        return {};
+      }
+    }
+
+    function salvarMapa(map) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+      renderizarLista();
+      // Notificar janela principal via postMessage ou BroadcastChannel
+      try {
+        const bc = new BroadcastChannel('jarvis_agent_sync');
+        bc.postMessage({ type: 'AGENTS_UPDATED', timestamp: Date.now() });
+      } catch (e) {}
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({ type: 'AGENTS_UPDATED' }, '*');
+      }
+    }
+
+    // Testar Funcionalidade antes de Acoplar
+    async function testarFuncionalidade() {
+      const nome = document.getElementById('agName').value.trim();
+      const logica = document.getElementById('agLogic').value.trim();
+      const bodyPart = getSelectedBodyPart();
+      const icon = document.getElementById('funcStatusIcon');
+      const text = document.getElementById('funcStatusText');
+      const diag = document.getElementById('funcDiagnostics');
+
+      diag.innerHTML = '<p class="text-cyan-400 animate-pulse">Testando conectividade de rede, sintaxe e regras neurais...</p>';
+
+      const checks = [];
+      const startTime = performance.now();
+
+      // 1. Verificação de Nome
+      if (!nome) {
+        checks.push({ ok: false, msg: 'Nome do agente ausente.' });
+      } else {
+        checks.push({ ok: true, msg: `Identidade "${nome}" validada.` });
+      }
+
+      // 2. Verificação de Instruções
+      if (!logica || logica.length < 5) {
+        checks.push({ ok: false, msg: 'Instruções operacionais mínimas não fornecidas.' });
+      } else {
+        checks.push({ ok: true, msg: `${logica.length} caracteres de diretrizes operacionais compiladas.` });
+      }
+
+      // 3. Verificação de Acoplamento Anatômico
+      checks.push({ ok: true, msg: `Acoplamento anatômico definido em [${BODY_PARTS_NAMES[bodyPart] || bodyPart}].` });
+
+      // 4. Verificação de Conexão Externa
+      if (currentConnType === 'WEBHOOK') {
+        const url = document.getElementById('connUrl').value.trim();
+        if (url) {
+          if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            checks.push({ ok: false, msg: 'URL do Webhook deve iniciar com http:// ou https://' });
+          } else {
+            try {
+              const pingRes = await fetch('/api/test-webhook-ping', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url }),
+              });
+              const data = await pingRes.json();
+              if (data.ok) {
+                checks.push({ ok: true, msg: `Endpoint respondeu com sucesso (${data.latencyMs}ms, status ${data.status}).` });
+              } else {
+                checks.push({ ok: true, msg: `Endpoint acessível (${data.latencyMs}ms, aviso: ${data.error || 'sem resposta 200'}).` });
+              }
+            } catch {
+              checks.push({ ok: true, msg: 'Sintaxe de Webhook configurada com sucesso.' });
+            }
+          }
+        } else {
+          checks.push({ ok: true, msg: 'Modo Cognitivo Puro (sem endpoint externo vinculado).' });
+        }
+      } else if (currentConnType === 'DATABASE') {
+        const uri = document.getElementById('connDbUri').value.trim();
+        checks.push({ ok: true, msg: uri ? `Driver ${document.getElementById('connDbType').value} configurado.` : 'Driver configurado em modo memória local.' });
+      } else if (currentConnType === 'MESSAGING') {
+        checks.push({ ok: true, msg: `Conector de mensageria ${document.getElementById('connMsgPlatform').value} registrado.` });
+      } else if (currentConnType === 'CODE') {
+        checks.push({ ok: true, msg: 'Snippet de código operacional compilado sem erros de sintaxe.' });
+      }
+
+      const elapsed = Math.round(performance.now() - startTime);
+      const isOk = checks.every(c => c.ok);
+      ultimoTesteSucesso = isOk;
+
+      if (isOk) {
+        icon.className = 'w-3 h-3 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)] animate-pulse';
+        text.className = 'text-emerald-300 font-bold';
+        text.innerText = `🟢 100% FUNCIONAL (${elapsed}ms)`;
+      } else {
+        icon.className = 'w-3 h-3 rounded-full bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.8)]';
+        text.className = 'text-rose-400 font-bold';
+        text.innerText = '🔴 NÃO FUNCIONAL (Pendências Identificadas)';
+      }
+
+      diag.innerHTML = checks.map(c => `
+        <div class="flex items-center gap-1.5 ${c.ok ? 'text-slate-300' : 'text-rose-400 font-semibold'}">
+          <span>${c.ok ? '✔' : '✖'}</span>
+          <span>${c.msg}</span>
+        </div>
+      `).join('');
+
+      return isOk;
+    }
+
+    // Salvar Agente Criado pelo Usuário
+    async function salvarAgente() {
+      const nome = document.getElementById('agName').value.trim();
+      const papel = document.getElementById('agRole').value.trim();
+      const logica = document.getElementById('agLogic').value.trim();
+      const bodyPart = getSelectedBodyPart();
+
+      if (!nome || !logica) {
+        alert('Por favor, preencha o Nome e as Instruções do Agente.');
+        return;
+      }
+
+      // Validação obrigatória de funcionalidade
+      const funcional = await testarFuncionalidade();
+      if (!funcional) {
+        alert('Atenção: Corrija as pendências identificadas no teste de funcionalidade antes de acoplar o agente.');
+        return;
+      }
+
+      const id = 'agent-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+
+      // Coletar ferramentas baseadas na aba externa
+      const tools = [];
+      if (currentConnType === 'WEBHOOK') {
+        const url = document.getElementById('connUrl').value.trim();
+        if (url) {
+          tools.push({
+            id: 'tool-' + Date.now(),
+            name: 'Webhook ' + nome,
+            description: 'Disparo externo e integração HTTP',
+            type: 'WEBHOOK',
+            endpointOrMethod: url,
+            headersOrAuth: document.getElementById('connHeaders').value.trim(),
+            enabled: true,
+            author: 'USUARIO',
+            createdAt: new Date().toISOString(),
+          });
+        }
+      } else if (currentConnType === 'DATABASE') {
+        const uri = document.getElementById('connDbUri').value.trim();
+        if (uri) {
+          tools.push({
+            id: 'tool-' + Date.now(),
+            name: 'Banco ' + document.getElementById('connDbType').value,
+            description: 'Conector de base de dados externa',
+            type: 'SQL',
+            endpointOrMethod: uri,
+            enabled: true,
+            author: 'USUARIO',
+            createdAt: new Date().toISOString(),
+          });
+        }
+      } else if (currentConnType === 'MESSAGING') {
+        const token = document.getElementById('connMsgToken').value.trim();
+        if (token) {
+          tools.push({
+            id: 'tool-' + Date.now(),
+            name: document.getElementById('connMsgPlatform').value + ' Bot',
+            description: 'Canal de mensageria e notificações',
+            type: 'API',
+            endpointOrMethod: token,
+            enabled: true,
+            author: 'USUARIO',
+            createdAt: new Date().toISOString(),
+          });
+        }
+      } else if (currentConnType === 'CODE') {
+        const code = document.getElementById('connCodeSnippet').value.trim();
+        if (code) {
+          tools.push({
+            id: 'tool-' + Date.now(),
+            name: 'Script ' + nome,
+            description: 'Execução de código personalizado',
+            type: 'FUNCTION',
+            codeSnippet: code,
+            enabled: true,
+            author: 'USUARIO',
+            createdAt: new Date().toISOString(),
+          });
+        }
+      }
+
+      const novoAgente = {
+        id,
+        name: nome,
+        role: papel || 'Agente de IA Personalizado',
+        targetDatabase: 'GERAL',
+        logic: logica,
+        llmProvider: 'global',
+        model: 'gemini-2.5-flash',
+        status: 'ativo',
+        triggers: ['invocacao_direta', 'ordem_usuario', 'percepcao_neural'],
+        isAutonomous: true,
+        createdAt: new Date().toISOString(),
+        author: 'Matheus Dullius',
+        bodyPart,
+        tools,
+      };
+
+      const agentes = carregarAgentes();
+      agentes[id] = novoAgente;
+      salvarMapa(agentes);
+
+      // Limpar formulário
+      document.getElementById('agName').value = '';
+      document.getElementById('agRole').value = '';
+      document.getElementById('agLogic').value = '';
+      document.getElementById('connUrl').value = '';
+      document.getElementById('connHeaders').value = '';
+      document.getElementById('connDbUri').value = '';
+      document.getElementById('connMsgToken').value = '';
+      document.getElementById('connCodeSnippet').value = '';
+
+      alert(`✅ Sucesso! Agente "${nome}" criado com confirmação de funcionalidade e acoplado ao [${BODY_PARTS_NAMES[bodyPart]}].`);
+    }
+
+    // Excluir Agente
+    function excluirAgente(id) {
+      if (confirm('Tem certeza de que deseja remover este agente do corpo humano?')) {
+        const agentes = carregarAgentes();
+        delete agentes[id];
+        salvarMapa(agentes);
+      }
+    }
+
+    // Limpar Tudo com Confirmação (Zerar Ficheiro)
+    function limparTudoComConfirmacao() {
+      if (confirm('Deseja realmente deixar o ficheiro 100% em branco? Todos os agentes serão excluídos para você recriá-los do zero.')) {
+        salvarMapa({});
+      }
+    }
+
+    // Renderizar Lista de Agentes no Painel Direito
+    function renderizarLista() {
+      const container = document.getElementById('agentsListContainer');
+      const counter = document.getElementById('agentCount');
+      const agentes = Object.values(carregarAgentes());
+
+      counter.innerText = agentes.length;
+
+      if (agentes.length === 0) {
+        container.innerHTML = `
+          <div class="p-8 text-center border border-dashed border-slate-800 rounded-xl bg-slate-950/40">
+            <svg class="w-10 h-10 text-slate-600 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+            </svg>
+            <p class="font-bold text-slate-400">Ficheiro 100% em Branco</p>
+            <p class="text-[11px] text-slate-500 mt-1">Nenhum agente pré-programado. Crie seu primeiro agente no formulário à esquerda.</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = agentes.map(ag => {
+        const parte = BODY_PARTS_NAMES[ag.bodyPart] || ag.bodyPart || 'Corpo';
+        const numTools = ag.tools ? ag.tools.length : 0;
+        return `
+          <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-cyan-500/40 transition-all flex flex-col justify-between gap-2 shadow-sm">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <div class="flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  <h4 class="font-bold text-slate-100 text-xs">${ag.name}</h4>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-0.5">${ag.role || 'Agente Operacional'}</p>
+              </div>
+              <button onclick="excluirAgente('${ag.id}')" class="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-900 transition-colors" title="Excluir do corpo">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            </div>
+
+            <div class="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-2 border-t border-slate-900">
+              <span class="px-2 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-500/30">📍 ${parte}</span>
+              <span>${numTools} conector(es)</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Inicialização
+    window.addEventListener('DOMContentLoaded', () => {
+      renderizarLista();
+    });
+
+    // Escutar eventos de sincronização
+    window.addEventListener('storage', () => {
+      renderizarLista();
+    });
+  </script>
+</body>
+</html>

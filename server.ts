@@ -128,6 +128,45 @@ async function callGeminiSafe<T>(
   }
 }
 
+// Endpoint para validação e teste funcional de conexões externas e webhooks de Agentes
+app.post('/api/test-webhook-ping', async (req: Request, res: Response) => {
+  const { url, method = 'GET', headers = {} } = req.body;
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ ok: false, error: 'URL do conector externo não informada.' });
+  }
+
+  const start = performance.now();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+
+    const targetUrl = url.trim();
+    const response = await fetch(targetUrl, {
+      method: method.toUpperCase(),
+      headers: {
+        'User-Agent': 'Jarvis-Neural-Agent-Validator/1.0',
+        ...headers,
+      },
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
+
+    const latencyMs = Math.round(performance.now() - start);
+    return res.json({
+      ok: true,
+      status: response.status,
+      statusText: response.statusText,
+      latencyMs,
+    });
+  } catch (err: any) {
+    const latencyMs = Math.round(performance.now() - start);
+    return res.json({
+      ok: false,
+      error: err.name === 'AbortError' ? 'Tempo limite esgotado (timeout 4s)' : (err.message || 'Falha de conexão'),
+      latencyMs,
+    });
+  }
+});
+
 // Endpoint: Deliberação Oficial do CFO com Schema Rígido da Investimentos Dullius
 app.post('/api/cfo/deliberar', async (req: Request, res: Response) => {
   const { dossie } = req.body;

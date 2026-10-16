@@ -53,6 +53,32 @@ export interface LLMProviderConfig {
   maxTokens?: number;
 }
 
+export type BodyPartAnatomy =
+  | 'cranio_cerebro'     // Cabeça / Córtex Craniano
+  | 'pescoco_cervical'   // Pescoço / Cervical
+  | 'ombro_esquerdo'     // Ombro Esquerdo
+  | 'ombro_direito'      // Ombro Direito
+  | 'braco_esquerdo'     // Braço Esquerdo
+  | 'braco_direito'      // Braço Direito
+  | 'mao_esquerda'       // Mão Esquerda
+  | 'mao_direita'        // Mão Direita
+  | 'torax_tronco'       // Tórax / Peito
+  | 'coluna_vertebral'   // Coluna Vertebral / Eixo Central
+  | 'quadril_pelve'      // Pelve / Quadril
+  | 'perna_esquerda'     // Perna Esquerda / Joelho
+  | 'perna_direita'      // Perna Direita / Joelho
+  | 'pe_esquerdo'        // Pé Esquerdo
+  | 'pe_direito'         // Pé Direito
+  // Legados mantidos para compatibilidade
+  | 'coracao'
+  | 'pulmoes'
+  | 'coluna'
+  | 'estomago_plexo'
+  | 'figado'
+  | 'rins'
+  | 'pes'
+  | 'olhos_sentidos';
+
 export interface AgentDefinition {
   id: string;
   name: string;
@@ -69,6 +95,9 @@ export interface AgentDefinition {
   isAutonomous: boolean;
   createdAt: string;
   author: string; // 'Jarvis Auto' | 'LLM Autônoma (Avaliação Cognitiva)' | 'Matheus Dullius'
+  // Mapeamento Anatômico: cada parte do corpo representa um agente de IA no cérebro
+  bodyPart?: BodyPartAnatomy;
+  bodyCoordinates?: [number, number, number];
   cognitiveEvaluation?: {
     objective: string; // Objetivo avaliado pela LLM
     requiredInformation: string[]; // Que tipo de informação a LLM avaliou como indispensável
@@ -235,3 +264,28 @@ export const FAMILY_PROFILES: FamilyProfile[] = [
     voiceKeywords: ['casa', 'sala', 'tv', 'família'],
   },
 ];
+
+export interface AgentNerveSignal {
+  id: string;
+  agentId: string;
+  agentName: string;
+  bodyPart: BodyPartAnatomy;
+  direction: 'BRAIN_TO_AGENT' | 'AGENT_TO_BRAIN'; // BRAIN_TO_AGENT: moléculas vermelhas | AGENT_TO_BRAIN: vesícula amarela
+  colorHex: number; // 0xef4444 (vermelho) ou 0xfacc15 (amarelo)
+  message?: string;
+  timestamp: number;
+}
+
+export interface CognitiveClusterNode {
+  id: string;
+  label: string;
+  category: MemoryCategory;
+  bodyPartTarget: BodyPartAnatomy;
+  centerCoords: [number, number, number];
+  colorHex: number;
+  memoryCount: number;
+  agentCount: number;
+  description: string;
+}
+
+export type BodyViewPerspective = 'FULL_BODY' | 'BRAIN_FOCUS' | 'AGENT_ORGAN_FOCUS';
