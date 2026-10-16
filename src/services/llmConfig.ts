@@ -1,6 +1,7 @@
 import { LLMProviderConfig, LLMProviderType } from '../types/neural';
 
 const STORAGE_KEY = 'jarvis_universal_llm_config_v1';
+const PERMANENT_KEYS_STORAGE = 'jarvis_permanent_llm_keys_v1';
 
 export interface ProviderDefinition {
   id: LLMProviderType;
@@ -130,11 +131,15 @@ const DEFAULT_CONFIG: LLMProviderConfig = {
   model: 'gemini-2.5-flash',
   temperature: 0.2,
   maxTokens: 2048,
+  providerKeys: {},
+  providerEndpoints: {},
 };
 
 export class UniversalLLMService {
   private static instance: UniversalLLMService;
   private config: LLMProviderConfig = DEFAULT_CONFIG;
+  private providerKeys: Partial<Record<LLMProviderType, string>> = {};
+  private providerEndpoints: Partial<Record<LLMProviderType, string>> = {};
 
   private constructor() {
     this.carregarConfig();
@@ -150,9 +155,35 @@ export class UniversalLLMService {
   private carregarConfig() {
     if (typeof window === 'undefined') return;
     try {
+      // 1. Carrega chaves permanentes de todas as IAs salvas
+      const chavesSalvas = localStorage.getItem(PERMANENT_KEYS_STORAGE);
+      if (chavesSalvas) {
+        const parsed = JSON.parse(chavesSalvas);
+        this.providerKeys = parsed.keys || {};
+        this.providerEndpoints = parsed.endpoints || {};
+      }
+
+      // 2. Carrega configuração geral
       const salvo = localStorage.getItem(STORAGE_KEY);
       if (salvo) {
-        this.config = { ...DEFAULT_CONFIG, ...JSON.parse(salvo) };
+        const parsedConfig: LLMProviderConfig = JSON.parse(salvo);
+        this.config = {
+          ...DEFAULT_CONFIG,
+          ...parsedConfig,
+          providerKeys: { ...this.providerKeys, ...(parsedConfig.providerKeys || {}) },
+          providerEndpoints: { ...this.providerEndpoints, ...(parsedConfig.providerEndpoints || {}) },
+        };
+      } else {
+        this.config = {
+          ...DEFAULT_CONFIG,
+          providerKeys: this.providerKeys,
+          providerEndpoints: this.providerEndpoints,
+        };
+      }
+
+      // 3. Garante que a apiKey ativa corresponda à chave salva desse provedor
+      if (this.config.provider && this.providerKeys[this.config.provider]) {
+        this.config.apiKey = this.providerKeys[this.config.provider]!;
       }
     } catch (e) {
       console.warn('Erro ao carregar LLM config:', e);
@@ -160,19 +191,66 @@ export class UniversalLLMService {
   }
 
   public getConfig(): LLMProviderConfig {
-    return { ...this.config };
+    return {
+      ...this.config,
+      providerKeys: { ...this.providerKeys },
+      providerEndpoints: { ...this.providerEndpoints },
+    };
+  }
+
+  public getKeyForProvider(providerId: LLMProviderType): string {
+    return this.providerKeys[providerId] || '';
+  }
+
+  public getEndpointForProvider(providerId: LLMProviderType): string {
+    const def = this.getProviderDefinition(providerId);
+    return this.providerEndpoints[providerId] || def.defaultEndpoint || '';
   }
 
   public saveConfig(newConfig: Partial<LLMProviderConfig>): LLMProviderConfig {
+    const targetProvider = newConfig.provider || this.config.provider;
+
+    // Atualiza o mapa permanente da chave se informada
+    if (newConfig.apiKey !== undefined && targetProvider) {
+      this.providerKeys[targetProvider] = newConfig.apiKey;
+    }
+
+    // Atualiza endpoint se informado
+    if (newConfig.customEndpoint !== undefined && targetProvider) {
+      this.providerEndpoints[targetProvider] = newConfig.customEndpoint;
+    }
+
+    // Se mudou de provedor sem passar apiKey explícita, resgata a chave permanente salva para ele
+    const activeKey = newConfig.apiKey !== undefined
+      ? newConfig.apiKey
+      : (this.providerKeys[targetProvider] || '');
+
+    const activeEndpoint = newConfig.customEndpoint !== undefined
+      ? newConfig.customEndpoint
+      : (this.providerEndpoints[targetProvider] || this.getProviderDefinition(targetProvider).defaultEndpoint || '');
+
     this.config = {
       ...this.config,
       ...newConfig,
+      provider: targetProvider,
+      apiKey: activeKey,
+      customEndpoint: activeEndpoint,
+      providerKeys: { ...this.providerKeys },
+      providerEndpoints: { ...this.providerEndpoints },
     };
+
     if (typeof window !== 'undefined') {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(this.config));
+        localStorage.setItem(
+          PERMANENT_KEYS_STORAGE,
+          JSON.stringify({
+            keys: this.providerKeys,
+            endpoints: this.providerEndpoints,
+          })
+        );
       } catch (e) {
-        console.warn('Erro ao salvar LLM config:', e);
+        console.warn('Erro ao salvar LLM config permanente:', e);
       }
     }
     return { ...this.config };
@@ -181,5 +259,25 @@ export class UniversalLLMService {
   public getProviderDefinition(providerId: LLMProviderType): ProviderDefinition {
     const found = SUPPORTED_PROVIDERS.find((p) => p.id === providerId);
     return found || SUPPORTED_PROVIDERS[0];
+  }
+
+  // Relatório do status de todas as IAs disponíveis e chaves salvas
+  public getAllProvidersKeyStatus(): Array<{
+    id: LLMProviderType;
+    name: string;
+    hasKey: boolean;
+    isCurrent: boolean;
+    endpoint?: string;
+  }> {
+    return SUPPORTED_PROVIDERS.map((p) => {
+      const hasKey = Boolean(this.providerKeys[p.id]?.trim() || (p.id === 'gemini'));
+      return {
+        id: p.id,
+        name: p.name,
+        hasKey,
+        isCurrent: p.id === this.config.provider,
+        endpoint: this.providerEndpoints[p.id] || p.defaultEndpoint,
+      };
+    });
   }
 }

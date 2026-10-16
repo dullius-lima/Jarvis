@@ -86,7 +86,7 @@ export const BODY_PARTS_CONFIG: Record<
     label: 'Tórax (Peito)',
     organ: 'Caixa Torácica & Tronco',
     coords: [0, 1.35, 0.25],
-    colorHex: 0xef4444,
+    colorHex: 0x0ea5e9,
     description: 'Núcleo vital e sustentação de integridade sistêmica',
   },
   coluna_vertebral: {
@@ -151,7 +151,7 @@ export const BODY_PARTS_CONFIG: Record<
     label: 'Tórax (Núcleo)',
     organ: 'Tórax / Tronco',
     coords: [0, 1.35, 0.25],
-    colorHex: 0xef4444,
+    colorHex: 0x0ea5e9,
     description: 'Fluxo financeiro, alocação de capital e liquidez',
   },
   pulmoes: {
@@ -862,15 +862,15 @@ Auditar quebra de suportes institucionais e variações intradiárias superiores
       throw new Error(`Agente ${agentId} não encontrado.`);
     }
 
-    // 1. Sinalização Neural: Moléculas vermelhas viajam do cérebro central para o agente no corpo
+    // 1. Sinalização Neural: Pulso de fótons viaja do cérebro pela medula espinhal até o agente no corpo
     this.emitNerveSignal({
       id: `sig-inv-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       agentId: agent.id,
       agentName: agent.name,
-      bodyPart: agent.bodyPart || 'coracao',
+      bodyPart: agent.bodyPart || 'torax_tronco',
       direction: 'BRAIN_TO_AGENT',
-      colorHex: 0xef4444, // Vermelho da LLM para o agente
-      message: `Invocação da LLM -> [${agent.name}] (${BODY_PARTS_CONFIG[agent.bodyPart || 'coracao'].label})`,
+      colorHex: 0x00f5ff, // Pulso de fótons azul/ciano da LLM para o agente
+      message: `Invocação da LLM -> [${agent.name}] (${BODY_PARTS_CONFIG[agent.bodyPart || 'torax_tronco']?.label || 'Corpo'})`,
       timestamp: Date.now(),
     });
 
@@ -950,14 +950,14 @@ Auditar quebra de suportes institucionais e variações intradiárias superiores
 
     this.updateAgent(agentId, { status: 'em_auditoria' });
 
-    // 1. Sinalização Neural: Moléculas vermelhas da LLM para o agente no corpo
+    // 1. Sinalização Neural: Pulso de fótons da LLM para o agente no corpo
     this.emitNerveSignal({
       id: `sig-aud-inv-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       agentId: agent.id,
       agentName: agent.name,
-      bodyPart: agent.bodyPart || 'coracao',
+      bodyPart: agent.bodyPart || 'torax_tronco',
       direction: 'BRAIN_TO_AGENT',
-      colorHex: 0xef4444, // Vermelho
+      colorHex: 0x00f5ff, // Pulso azul/ciano
       message: `Auditoria Invocada: LLM -> [${agent.name}]`,
       timestamp: Date.now(),
     });

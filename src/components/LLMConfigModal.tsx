@@ -55,12 +55,21 @@ export const LLMConfigModal: React.FC<LLMConfigModalProps> = ({
   const currentProviderDef = llmService.getProviderDefinition(config.provider);
 
   const handleProviderChange = (providerId: LLMProviderType) => {
+    // 1. Garante que a chave atual fique gravada no mapa permanente antes de alternar
+    if (config.apiKey) {
+      llmService.saveConfig({ provider: config.provider, apiKey: config.apiKey, customEndpoint: config.customEndpoint });
+    }
+
     const provDef = llmService.getProviderDefinition(providerId);
+    const savedKey = llmService.getKeyForProvider(providerId);
+    const savedEndpoint = llmService.getEndpointForProvider(providerId);
+
     setConfig((prev) => ({
       ...prev,
       provider: providerId,
+      apiKey: savedKey,
       model: provDef.defaultModel,
-      customEndpoint: provDef.defaultEndpoint || '',
+      customEndpoint: savedEndpoint || provDef.defaultEndpoint || '',
     }));
     setTestResult(null);
   };
@@ -223,6 +232,7 @@ export const LLMConfigModal: React.FC<LLMConfigModalProps> = ({
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {SUPPORTED_PROVIDERS.map((prov) => {
                   const isSelected = config.provider === prov.id;
+                  const hasKey = Boolean(llmService.getKeyForProvider(prov.id)?.trim() || prov.id === 'gemini');
                   return (
                     <button
                       type="button"
@@ -237,16 +247,33 @@ export const LLMConfigModal: React.FC<LLMConfigModalProps> = ({
                       <div>
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-white">{prov.name}</span>
-                          {isSelected && <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />}
+                          {isSelected ? (
+                            <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />
+                          ) : hasKey ? (
+                            <span className="w-2 h-2 rounded-full bg-emerald-400" title="Chave salva" />
+                          ) : null}
                         </div>
                         <span className="text-[11px] text-slate-400 block mt-0.5">
                           {prov.company}
                         </span>
                       </div>
+                      <div className="mt-2 flex items-center justify-between">
+                        {hasKey ? (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/30 font-mono">
+                            {prov.id === 'gemini' ? 'Pronto' : 'Chave Salva'}
+                          </span>
+                        ) : (
+                          <span className="text-[9px] text-slate-500 font-mono">Pendente</span>
+                        )}
+                      </div>
                     </button>
                   );
                 })}
               </div>
+              <p className="text-[10px] text-slate-400 mt-2 font-mono flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>As chaves de todas as IAs ficam salvas permanentemente no dispositivo e só se alteram se você mudar.</span>
+              </p>
             </div>
 
             <div className="space-y-3 bg-slate-950/60 p-4 rounded-2xl border border-slate-800">

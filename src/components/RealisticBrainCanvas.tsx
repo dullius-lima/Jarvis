@@ -6,21 +6,10 @@ import {
   AgentDefinition,
   AgentNerveSignal,
   BodyPartAnatomy,
-  CognitiveClusterNode,
-  BodyViewPerspective,
 } from '../types/neural';
 import { BODY_PARTS_CONFIG } from '../services/agentRegistry';
-import {
-  ZoomIn,
-  ZoomOut,
-  Maximize2,
-  RotateCcw,
-  RotateCw,
-  User,
-  Bot,
-} from 'lucide-react';
 
-interface RealisticBrainCanvasProps {
+export interface RealisticBrainCanvasProps {
   memories: SynapseMemory[];
   selectedMemory: SynapseMemory | null;
   onSelectMemory: (mem: SynapseMemory) => void;
@@ -34,6 +23,7 @@ interface RealisticBrainCanvasProps {
   agents?: AgentDefinition[];
   onSelectAgent?: (agent: AgentDefinition) => void;
   activeNerveSignal?: AgentNerveSignal | null;
+  onBodyPartInteract?: (bodyPart: BodyPartAnatomy, agent?: AgentDefinition) => void;
 }
 
 interface MolecularParticle {
@@ -63,13 +53,15 @@ interface TargetedSynapseBridge {
 interface BodyNerveEnding {
   bodyPartId: BodyPartAnatomy;
   agent?: AgentDefinition;
-  curve: THREE.QuadraticBezierCurve3;
-  nerveTubeMesh: THREE.Mesh;
+  fullPathCurve: THREE.CatmullRomCurve3; // Trajeto contínuo: Agente -> Medula Espinhal -> Cérebro
+  limbCurve: THREE.QuadraticBezierCurve3;
+  nerveTubeMesh?: THREE.Mesh;
   socketMesh: THREE.Mesh;
   socketHaloMesh: THREE.Mesh;
   socketLabelSprite?: THREE.Sprite;
   targetCoords: THREE.Vector3;
-  redMolecules: Array<{ mesh: THREE.Mesh; progress: number; speed: number }>;
+  entryY: number;
+  brainToAgentPhotons: Array<{ mesh: THREE.Mesh; progress: number; speed: number }>;
   yellowVesicle: { mesh: THREE.Mesh; progress: number; speed: number; active: boolean };
 }
 
@@ -87,30 +79,24 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
   agents = [],
   onSelectAgent,
   activeNerveSignal,
+  onBodyPartInteract,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const isPointerDownRef = useRef<boolean>(false);
   const pointerPrevRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [hoveredMemory, setHoveredMemory] = useState<SynapseMemory | null>(null);
-  const [hoveredAgent, setHoveredAgent] = useState<AgentDefinition | null>(null);
-  const [viewPerspective, setViewPerspective] = useState<BodyViewPerspective>('FULL_BODY');
 
-  const memoriesRef = useRef(memories);
-  memoriesRef.current = memories;
-  const agentsRef = useRef(agents);
-  agentsRef.current = agents;
-  const activeNerveSignalRef = useRef(activeNerveSignal);
-  activeNerveSignalRef.current = activeNerveSignal;
+  const activeSignalRef = useRef<AgentNerveSignal | null>(null);
+  useEffect(() => {
+    activeSignalRef.current = activeNerveSignal || null;
+  }, [activeNerveSignal]);
 
-  const controlsRef = useRef({
-    zoomIn: () => {},
-    zoomOut: () => {},
-    resetView: () => {},
-    rotateLeft: () => {},
-    rotateRight: () => {},
-    focusBody: () => {},
-    focusBrain: () => {},
-  });
+  const onBodyPartInteractRef = useRef(onBodyPartInteract);
+  useEffect(() => {
+    onBodyPartInteractRef.current = onBodyPartInteract;
+  }, [onBodyPartInteract]);
+
+  // Flash neural ao receber sinal no cérebro
+  const corticalBurstRef = useRef<number>(0);
 
   useEffect(() => {
     const currentMount = mountRef.current;
@@ -121,38 +107,49 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
 
     // 1. Cena Three.js
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x02050e, 0.022);
+    scene.fog = new THREE.FogExp2(0x02050e, 0.045);
 
-    // 2. Câmera
+    // 2. Câmera Perspectiva
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-    camera.position.set(0, 0.6, 9.8);
+    camera.position.set(0, 0.6, 9.6);
     camera.lookAt(0, 0.2, 0);
 
-    // 3. Renderizador
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    // 3. Renderizador WebGL com Qualidade FullHD e Antialiasing de Alta Definição
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance',
+      stencil: false,
+      depth: true,
+      precision: 'highp',
+    });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Garantia de nitidez FullHD nativa (mínimo pixelRatio 2.0 para texturas ultra nítidas)
+    renderer.setPixelRatio(Math.max(window.devicePixelRatio || 1, 2.0));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.25;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setClearColor(0x02050e, 1.0);
     currentMount.appendChild(renderer.domElement);
 
-    // 4. Luzes
-    const ambientLight = new THREE.AmbientLight(0x032244, 1.2);
+    // 4. Iluminação Bioluminescente
+    const ambientLight = new THREE.AmbientLight(0x032244, 1.5);
     scene.add(ambientLight);
 
-    const cranialLight = new THREE.PointLight(0x00f5ff, 2.5, 12);
-    cranialLight.position.set(0, 2.8, 1.5);
+    const cranialLight = new THREE.PointLight(0x00f5ff, 2.8, 12);
+    cranialLight.position.set(0, 2.7, 1.2);
     scene.add(cranialLight);
 
-    const bodyLight = new THREE.PointLight(0x38bdf8, 1.8, 10);
-    bodyLight.position.set(0, 0.5, 2.0);
-    scene.add(bodyLight);
+    const spinalLight = new THREE.PointLight(0x38bdf8, 2.2, 10);
+    spinalLight.position.set(0, 0.8, 1.8);
+    scene.add(spinalLight);
 
-    // 5. Grupos Principais
+    // 5. Grupos da Cena
     const mainHumanoidGroup = new THREE.Group();
     scene.add(mainHumanoidGroup);
 
     const brainGroup = new THREE.Group();
-    brainGroup.position.set(0, 2.7, 0); // Posicionado no interior do crânio humano
+    brainGroup.position.set(0, 2.7, 0); // Posição do cérebro na cabeça
     mainHumanoidGroup.add(brainGroup);
 
     const pnsGroup = new THREE.Group(); // Sistema Nervoso Periférico
@@ -167,167 +164,143 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     const boneMaterial = new THREE.LineBasicMaterial({
       color: 0x0284c7,
       transparent: true,
-      opacity: 0.35,
+      opacity: 0.32,
       blending: THREE.AdditiveBlending,
     });
 
     const jointMaterial = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.55,
       blending: THREE.AdditiveBlending,
     });
 
-    // 1. Cabeça & Contorno Craniano
+    // 1. Contorno Craniano (Cabeça)
     const craniumPoints: THREE.Vector3[] = [];
     const craniumSegments = 40;
     for (let i = 0; i <= craniumSegments; i++) {
       const theta = (i / craniumSegments) * Math.PI * 2;
-      const rx = 0.52 * Math.cos(theta);
-      const ry = 0.64 * Math.sin(theta);
-      craniumPoints.push(new THREE.Vector3(rx, 2.75 + ry, 0.05 * Math.sin(theta)));
+      const rx = 0.50 * Math.cos(theta);
+      const ry = 0.62 * Math.sin(theta);
+      craniumPoints.push(new THREE.Vector3(rx, 2.72 + ry, 0.04 * Math.sin(theta)));
     }
     const craniumGeo = new THREE.BufferGeometry().setFromPoints(craniumPoints);
     skeletonGroup.add(new THREE.Line(craniumGeo, boneMaterial));
 
-    // Queixo e Mandíbula
+    // Mandíbula e Queixo
     const jawPoints = [
-      new THREE.Vector3(-0.35, 2.55, 0.1),
-      new THREE.Vector3(-0.2, 2.15, 0.22),
-      new THREE.Vector3(0, 2.08, 0.25),
-      new THREE.Vector3(0.2, 2.15, 0.22),
-      new THREE.Vector3(0.35, 2.55, 0.1),
+      new THREE.Vector3(-0.35, 2.52, 0.08),
+      new THREE.Vector3(-0.18, 2.12, 0.20),
+      new THREE.Vector3(0, 2.05, 0.22),
+      new THREE.Vector3(0.18, 2.12, 0.20),
+      new THREE.Vector3(0.35, 2.52, 0.08),
     ];
     skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(jawPoints), boneMaterial));
 
-    // 2. Coluna Vertebral & Vértebras Luminescentes (24 Vértebras da Cervical ao Sacro)
+    // 2. Coluna Vertebral & Medula Espinhal (24 vértebras luminosas C1 a L5/Sacro)
     const spineLength = 2.4;
     const numVertebrae = 24;
-    const spineStartY = 2.05;
-    const spineVertebraeMeshes: THREE.Mesh[] = [];
-    const vertGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.025, 10);
+    const spineStartY = 2.02;
+    const vertGeo = new THREE.CylinderGeometry(0.040, 0.040, 0.022, 10);
 
     for (let s = 0; s < numVertebrae; s++) {
       const progress = s / (numVertebrae - 1);
       const vY = spineStartY - progress * spineLength;
-      // Curvatura anatômica lordose/cifose
-      const vZ = -0.05 + Math.sin(progress * Math.PI * 2) * 0.06;
+      const vZ = -0.05 + Math.sin(progress * Math.PI * 2) * 0.05;
 
       const vMesh = new THREE.Mesh(vertGeo, jointMaterial);
       vMesh.position.set(0, vY, vZ);
       vMesh.rotation.x = Math.PI / 2;
       skeletonGroup.add(vMesh);
-      spineVertebraeMeshes.push(vMesh);
     }
 
-    // Cordão medular contínuo
+    // Canal medular central contínuo (feixe de axônios da Medula Espinhal)
     const unitCylinderGeo = new THREE.CylinderGeometry(1, 1, 1, 8, 1, true);
-    const spinalCordMat = new THREE.MeshBasicMaterial({ color: 0x0ea5e9, transparent: true, opacity: 0.5 });
+    const spinalCordMat = new THREE.MeshBasicMaterial({
+      color: 0x0ea5e9,
+      transparent: true,
+      opacity: 0.70,
+      blending: THREE.AdditiveBlending,
+    });
     const spinalCordMesh = new THREE.Mesh(unitCylinderGeo, spinalCordMat);
     spinalCordMesh.position.set(0, spineStartY - spineLength * 0.5, -0.04);
-    spinalCordMesh.scale.set(0.016, spineLength, 0.016);
+    spinalCordMesh.scale.set(0.018, spineLength, 0.018);
     skeletonGroup.add(spinalCordMesh);
 
-    // 3. Clavículas & Ombros
+    // 3. Clavículas e Ombros
     const claviclePoints = [
       new THREE.Vector3(-1.35, 1.75, 0.0),
-      new THREE.Vector3(-0.3, 1.85, 0.15),
-      new THREE.Vector3(0, 1.88, 0.16),
-      new THREE.Vector3(0.3, 1.85, 0.15),
+      new THREE.Vector3(-0.3, 1.84, 0.14),
+      new THREE.Vector3(0, 1.86, 0.16),
+      new THREE.Vector3(0.3, 1.84, 0.14),
       new THREE.Vector3(1.35, 1.75, 0.0),
     ];
     skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(claviclePoints), boneMaterial));
 
-    // 4. Caixa Torácica / Costelas Anatômicas (8 pares de arcos torácicos)
-    for (let r = 0; r < 8; r++) {
-      const ribY = 1.7 - r * 0.13;
-      const ribWidth = 0.55 + Math.sin((r / 8) * Math.PI) * 0.32;
-      const ribDepth = 0.22 + Math.sin((r / 8) * Math.PI) * 0.12;
-
-      const leftRibCurve = new THREE.QuadraticBezierCurve3(
-        new THREE.Vector3(0, ribY, -0.05),
-        new THREE.Vector3(-ribWidth * 1.1, ribY - 0.04, ribDepth * 0.8),
-        new THREE.Vector3(-0.05, ribY - 0.07, ribDepth)
-      );
-      skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(leftRibCurve.getPoints(12)), boneMaterial));
-
-      const rightRibCurve = new THREE.QuadraticBezierCurve3(
-        new THREE.Vector3(0, ribY, -0.05),
-        new THREE.Vector3(ribWidth * 1.1, ribY - 0.04, ribDepth * 0.8),
-        new THREE.Vector3(0.05, ribY - 0.07, ribDepth)
-      );
-      skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rightRibCurve.getPoints(12)), boneMaterial));
+    // 4. Caixa Torácica (Costelas Anatômicas)
+    const numRibs = 7;
+    for (let r = 0; r < numRibs; r++) {
+      const ribProgress = r / (numRibs - 1);
+      const ribY = 1.72 - ribProgress * 0.78;
+      const ribWidth = 0.55 + Math.sin(ribProgress * Math.PI) * 0.38;
+      const ribPoints: THREE.Vector3[] = [];
+      const ribSegs = 20;
+      for (let s = 0; s <= ribSegs; s++) {
+        const angle = -Math.PI * 0.5 + (s / ribSegs) * Math.PI;
+        const rx = Math.sin(angle) * ribWidth;
+        const rz = Math.cos(angle) * (0.28 + Math.sin(ribProgress * Math.PI) * 0.12);
+        ribPoints.push(new THREE.Vector3(rx, ribY - Math.abs(rx) * 0.08, rz - 0.04));
+      }
+      skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(ribPoints), boneMaterial));
     }
 
-    // 5. Braços e Mãos com Dedos Anatômicos
-    // Braço Esquerdo
+    // 5. Braços e Mãos
     const leftArmPoints = [
-      new THREE.Vector3(-1.35, 1.75, 0.0),  // Ombro
-      new THREE.Vector3(-1.95, 1.05, 0.05), // Cotovelo
-      new THREE.Vector3(-2.35, 0.25, 0.12), // Pulso
+      new THREE.Vector3(-1.35, 1.75, 0.0),
+      new THREE.Vector3(-1.95, 1.05, 0.05),
+      new THREE.Vector3(-2.35, 0.25, 0.12),
+      new THREE.Vector3(-2.45, 0.05, 0.14),
     ];
     skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(leftArmPoints), boneMaterial));
 
-    // Mão Esquerda (Falanges)
-    for (let f = 0; f < 5; f++) {
-      const angle = (f - 2) * 0.12;
-      const fingerPoints = [
-        new THREE.Vector3(-2.35, 0.25, 0.12),
-        new THREE.Vector3(-2.45 - Math.cos(angle) * 0.2, 0.15 - Math.sin(angle) * 0.12, 0.12 + (f - 2) * 0.03),
-      ];
-      skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(fingerPoints), boneMaterial));
-    }
-
-    // Braço Direito
     const rightArmPoints = [
-      new THREE.Vector3(1.35, 1.75, 0.0),   // Ombro
-      new THREE.Vector3(1.95, 1.05, 0.05),  // Cotovelo
-      new THREE.Vector3(2.35, 0.25, 0.12),  // Pulso
+      new THREE.Vector3(1.35, 1.75, 0.0),
+      new THREE.Vector3(1.95, 1.05, 0.05),
+      new THREE.Vector3(2.35, 0.25, 0.12),
+      new THREE.Vector3(2.45, 0.05, 0.14),
     ];
     skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rightArmPoints), boneMaterial));
 
-    // Mão Direita (Falanges)
-    for (let f = 0; f < 5; f++) {
-      const angle = (f - 2) * 0.12;
-      const fingerPoints = [
-        new THREE.Vector3(2.35, 0.25, 0.12),
-        new THREE.Vector3(2.45 + Math.cos(angle) * 0.2, 0.15 - Math.sin(angle) * 0.12, 0.12 + (f - 2) * 0.03),
-      ];
-      skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(fingerPoints), boneMaterial));
-    }
-
-    // 6. Pelve e Quadril Anatômico
+    // 6. Cintura Pélvica (Pelve / Quadril)
     const pelvisPoints = [
-      new THREE.Vector3(-0.65, 0.15, 0.05),
-      new THREE.Vector3(0, 0.25, 0.0),
-      new THREE.Vector3(0.65, 0.15, 0.05),
-      new THREE.Vector3(0.5, -0.25, 0.08),
-      new THREE.Vector3(0, -0.32, 0.12),
-      new THREE.Vector3(-0.5, -0.25, 0.08),
-      new THREE.Vector3(-0.65, 0.15, 0.05),
+      new THREE.Vector3(-0.75, 0.05, 0.02),
+      new THREE.Vector3(-0.45, -0.25, 0.08),
+      new THREE.Vector3(0, -0.32, 0.10),
+      new THREE.Vector3(0.45, -0.25, 0.08),
+      new THREE.Vector3(0.75, 0.05, 0.02),
+      new THREE.Vector3(0, 0.08, -0.05),
+      new THREE.Vector3(-0.75, 0.05, 0.02),
     ];
     skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pelvisPoints), boneMaterial));
 
     // 7. Pernas e Pés
-    // Perna Esquerda
     const leftLegPoints = [
-      new THREE.Vector3(-0.5, -0.25, 0.08), // Articulação do quadril
-      new THREE.Vector3(-0.75, -1.35, 0.08), // Joelho
-      new THREE.Vector3(-0.9, -2.55, 0.08),  // Tornozelo
-      new THREE.Vector3(-0.95, -2.7, 0.35),  // Ponta do Pé
+      new THREE.Vector3(-0.5, -0.25, 0.08),
+      new THREE.Vector3(-0.75, -1.35, 0.08),
+      new THREE.Vector3(-0.9, -2.55, 0.08),
+      new THREE.Vector3(-0.95, -2.7, 0.35),
     ];
     skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(leftLegPoints), boneMaterial));
 
-    // Perna Direita
     const rightLegPoints = [
-      new THREE.Vector3(0.5, -0.25, 0.08),  // Articulação do quadril
-      new THREE.Vector3(0.75, -1.35, 0.08),  // Joelho
-      new THREE.Vector3(0.9, -2.55, 0.08),   // Tornozelo
-      new THREE.Vector3(0.95, -2.7, 0.35),   // Ponta do Pé
+      new THREE.Vector3(0.5, -0.25, 0.08),
+      new THREE.Vector3(0.75, -1.35, 0.08),
+      new THREE.Vector3(0.9, -2.55, 0.08),
+      new THREE.Vector3(0.95, -2.7, 0.35),
     ];
     skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rightLegPoints), boneMaterial));
 
-    // Articulações luminosas
+    // Articulações
     const jointPositions = [
       new THREE.Vector3(-1.35, 1.75, 0.0),
       new THREE.Vector3(1.35, 1.75, 0.0),
@@ -340,7 +313,7 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       new THREE.Vector3(-0.9, -2.55, 0.08),
       new THREE.Vector3(0.9, -2.55, 0.08),
     ];
-    const jointSphereGeo = new THREE.SphereGeometry(0.045, 10, 10);
+    const jointSphereGeo = new THREE.SphereGeometry(0.036, 10, 10);
     jointPositions.forEach((pos) => {
       const jMesh = new THREE.Mesh(jointSphereGeo, jointMaterial);
       jMesh.position.copy(pos);
@@ -348,7 +321,7 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     });
 
     // =========================================================================
-    // B. CÉREBRO NEURAL BIOLUMINESCENTE NO CÓRTEX CRANIANO
+    // B. CÉREBRO NEURAL CRANIANO (CÓRTEX BIOLUMINESCENTE DENTRO DO CRÂNIO)
     // =========================================================================
     const brainNodes: THREE.Vector3[] = [];
     const brainParticleCount = 140;
@@ -359,33 +332,34 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       const v = Math.random();
       const theta = u * 2.0 * Math.PI;
       const phi = Math.acos(2.0 * v - 1.0);
-      const r = Math.cbrt(Math.random()) * 0.48;
+      const r = Math.cbrt(Math.random()) * 0.44;
 
       const isRight = Math.random() > 0.5;
-      const hemiOffset = isRight ? 0.08 : -0.08;
+      const hemiOffset = isRight ? 0.07 : -0.07;
 
       const x = r * Math.sin(phi) * Math.cos(theta) * 0.85 + hemiOffset;
-      const y = r * Math.sin(phi) * Math.sin(theta) * 0.75;
-      const z = r * Math.cos(phi) * 0.95;
+      const y = r * Math.sin(phi) * Math.sin(theta) * 0.72;
+      const z = r * Math.cos(phi) * 0.90;
 
       brainNodes.push(new THREE.Vector3(x, y, z));
     }
 
     const plexusGeo = new THREE.BufferGeometry().setFromPoints(brainNodes);
     const plexusMat = new THREE.PointsMaterial({
-      size: 0.04,
+      size: 0.036,
       color: 0x00f5ff,
       transparent: true,
       blending: THREE.AdditiveBlending,
-      opacity: 0.8,
+      opacity: 0.85,
     });
-    brainGroup.add(new THREE.Points(plexusGeo, plexusMat));
+    const plexusPoints = new THREE.Points(plexusGeo, plexusMat);
+    brainGroup.add(plexusPoints);
 
-    // Conexões sinápticas intracerebrais
+    // Conexões sinápticas intracranianas
     const brainLines: THREE.Vector3[] = [];
     for (let i = 0; i < brainNodes.length; i++) {
       for (let j = i + 1; j < brainNodes.length; j++) {
-        if (brainNodes[i].distanceTo(brainNodes[j]) < 0.28) {
+        if (brainNodes[i].distanceTo(brainNodes[j]) < 0.25) {
           brainLines.push(brainNodes[i], brainNodes[j]);
         }
       }
@@ -394,32 +368,44 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     const brainLinesMat = new THREE.LineBasicMaterial({
       color: 0x0284c7,
       transparent: true,
-      opacity: 0.35,
+      opacity: 0.30,
       blending: THREE.AdditiveBlending,
     });
     brainGroup.add(new THREE.LineSegments(brainLinesGeo, brainLinesMat));
 
     // =========================================================================
-    // C. MEMÓRIAS: BOTÕES AXÔNICOS PEQUENOS E VESÍCULAS LENTAS ESPECÍFICAS
+    // C. MEMÓRIAS: BOTÕES AXÔNICOS PEQUENOS E ESTREITAMENTE INTERNOS
+    // (CORREÇÃO TOTAL: ZERO RAMIFICAÇÕES OU PONTOS VERMELHOS NA CABEÇA!)
     // =========================================================================
     const memoryMeshes: THREE.Mesh[] = [];
     const targetedBridges: TargetedSynapseBridge[] = [];
     const bridgesGroup = new THREE.Group();
     brainGroup.add(bridgesGroup);
 
-    const axonBoutonGeo = new THREE.SphereGeometry(0.045, 12, 12);
-    const axonKernelGeo = new THREE.SphereGeometry(0.022, 8, 8);
+    const axonBoutonGeo = new THREE.SphereGeometry(0.026, 10, 10);
+    const axonKernelGeo = new THREE.SphereGeometry(0.012, 8, 8);
 
     memories.forEach((mem) => {
-      const memPos = new THREE.Vector3(...mem.coords);
+      // CLAMP RIGOROSO: Garantir que a coordenada da memória esteja 100% dentro do cérebro craniano!
+      let memPos = new THREE.Vector3(
+        Number.isFinite(mem.coords?.[0]) ? mem.coords[0] : (Math.random() - 0.5) * 0.2,
+        Number.isFinite(mem.coords?.[1]) ? mem.coords[1] : (Math.random() - 0.5) * 0.15,
+        Number.isFinite(mem.coords?.[2]) ? mem.coords[2] : (Math.random() - 0.5) * 0.2
+      );
+      if (memPos.length() > 0.22) {
+        memPos.normalize().multiplyScalar(0.12 + (Math.abs(memPos.x * 10) % 0.08));
+      }
+      memPos.y = Math.min(Math.max(memPos.y, -0.15), 0.15);
+      memPos.z = Math.min(Math.max(memPos.z, -0.18), 0.18);
+
       const memGroup = new THREE.Group();
       memGroup.position.copy(memPos);
 
-      // Pequena bolinha neural
+      // Bioluminescência Ciano/Azul (NUNCA vermelho saindo da cabeça!)
       const coreMat = new THREE.MeshBasicMaterial({
-        color: mem.color || 0x06b6d4,
+        color: 0x00f5ff,
         transparent: true,
-        opacity: 0.9,
+        opacity: 0.95,
       });
       const coreMesh = new THREE.Mesh(axonBoutonGeo, coreMat);
       coreMesh.userData = { memory: mem };
@@ -431,7 +417,7 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
 
       brainGroup.add(memGroup);
 
-      // Ponte axônica do centro para a memória
+      // Ponte axônica exclusivamente interna (do centro do cérebro ao nó)
       const p1 = centralCorePos.clone();
       const p2 = memPos.clone();
       const length = p1.distanceTo(p2);
@@ -443,36 +429,24 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       const bridgeCoreMat = new THREE.MeshBasicMaterial({
         color: 0x0284c7,
         transparent: true,
-        opacity: 0.16,
+        opacity: 0.20,
         blending: THREE.AdditiveBlending,
       });
       const bridgeCoreMesh = new THREE.Mesh(unitCylinderGeo, bridgeCoreMat);
       bridgeCoreMesh.position.copy(midpoint);
       bridgeCoreMesh.setRotationFromQuaternion(quaternion);
-      bridgeCoreMesh.scale.set(0.006, length, 0.006);
+      bridgeCoreMesh.scale.set(0.004, length, 0.004);
       bridgesGroup.add(bridgeCoreMesh);
 
-      const bridgeGlowMat = new THREE.MeshBasicMaterial({
-        color: 0x0369a1,
-        transparent: true,
-        opacity: 0.08,
-        blending: THREE.AdditiveBlending,
-      });
-      const bridgeGlowMesh = new THREE.Mesh(unitCylinderGeo, bridgeGlowMat);
-      bridgeGlowMesh.position.copy(midpoint);
-      bridgeGlowMesh.setRotationFromQuaternion(quaternion);
-      bridgeGlowMesh.scale.set(0.012, length, 0.012);
-      bridgesGroup.add(bridgeGlowMesh);
-
-      // Vesículas biológicas lentas de transporte (movem-se apenas para a memória buscada!)
+      // Vesículas lentas de transporte intracraniano (azul/ciano)
       const bridgeParticles: MolecularParticle[] = [];
-      const numVesicles = 5;
+      const numVesicles = 3;
 
       for (let k = 0; k < numVesicles; k++) {
-        const vesicleRadius = 0.018;
+        const vesicleRadius = 0.014;
         const particleGeo = new THREE.SphereGeometry(vesicleRadius, 8, 8);
         const particleMat = new THREE.MeshBasicMaterial({
-          color: 0xef4444,
+          color: 0x00f5ff,
           transparent: true,
           opacity: 0.0,
           blending: THREE.AdditiveBlending,
@@ -484,7 +458,7 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
 
         bridgeParticles.push({
           progress: initialProgress,
-          baseSpeed: 0.05 + Math.random() * 0.02, // Lentidão biológica requerida pelo usuário
+          baseSpeed: 0.04 + Math.random() * 0.02,
           mesh: pMesh,
           radius: vesicleRadius,
           wobblePhase: Math.random() * Math.PI * 2,
@@ -500,7 +474,7 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
         direction,
         midpoint,
         coreMesh: bridgeCoreMesh,
-        glowMesh: bridgeGlowMesh,
+        glowMesh: bridgeCoreMesh,
         particles: bridgeParticles,
         phaseOffset: Math.random() * Math.PI * 2,
         isDirectToCore: true,
@@ -508,12 +482,11 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     });
 
     // =========================================================================
-    // D. SISTEMA NERVOSO PERIFÉRICO & INSTALAÇÃO AUTOMÁTICA DOS AGENTES
+    // D. SISTEMA NERVOSO PERIFÉRICO: ÍCONES MENORES, MAIS BONITOS E SINAL PELA MEDULA ATÉ O CÉREBRO
     // =========================================================================
     const bodyNerveEndings: BodyNerveEnding[] = [];
-    const agentMeshes: THREE.Mesh[] = [];
+    const interactiveBodyMeshes: THREE.Mesh[] = [];
 
-    // Mapeamento dos agentes existentes para suas respectivas partes do corpo
     const agentByPart = new Map<BodyPartAnatomy, AgentDefinition>();
     agents.forEach((ag) => {
       if (ag.bodyPart) agentByPart.set(ag.bodyPart, ag);
@@ -524,105 +497,143 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       const associatedAgent = agentByPart.get(bPart);
       const targetCoords = new THREE.Vector3(...config.coords);
 
-      // Ponto de origem na medula espinhal
-      const nerveStartY = Math.min(Math.max(targetCoords.y + 0.35, -0.3), 1.95);
-      const nerveStart = new THREE.Vector3(0, nerveStartY, -0.04);
+      // Ponto de entrada na medula espinhal (canal central do esqueleto)
+      const entryY = Math.min(Math.max(targetCoords.y + 0.10, -0.25), 1.95);
+      const medulaEntry = new THREE.Vector3(0, entryY, -0.04);
+      const brainEntry = new THREE.Vector3(0, 2.70, 0.0); // Chegada no centro do cérebro
 
-      // Curva neural suave do tronco aos membros do corpo
-      const ctrlPoint = new THREE.Vector3(
-        targetCoords.x * 0.5,
-        (nerveStartY + targetCoords.y) * 0.5 + 0.1,
-        (nerveStart.z + targetCoords.z) * 0.5 + 0.05
+      // Curva do nervo periférico do membro até a medula
+      const limbCtrl = new THREE.Vector3(
+        targetCoords.x * 0.45,
+        (entryY + targetCoords.y) * 0.5 + 0.06,
+        (targetCoords.z - 0.04) * 0.5 + 0.04
       );
-      const curve = new THREE.QuadraticBezierCurve3(nerveStart, ctrlPoint, targetCoords);
+      const limbCurve = new THREE.QuadraticBezierCurve3(medulaEntry, limbCtrl, targetCoords);
 
-      // Tubo do feixe axônico (terminação nervosa periférica)
-      const tubeGeo = new THREE.TubeGeometry(curve, 18, associatedAgent ? 0.016 : 0.008, 6, false);
-      const tubeMat = new THREE.MeshBasicMaterial({
-        color: associatedAgent ? config.colorHex : 0x0284c7,
-        transparent: true,
-        opacity: associatedAgent ? 0.65 : 0.18,
-        blending: THREE.AdditiveBlending,
-      });
-      const tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
-      pnsGroup.add(tubeMesh);
+      // Tubo visual periférico (omitido na cabeça para não gerar ramificações no crânio)
+      let tubeMesh: THREE.Mesh | undefined;
+      if (bPart !== 'cranio_cerebro') {
+        const tubeGeo = new THREE.TubeGeometry(limbCurve, 16, associatedAgent ? 0.010 : 0.005, 6, false);
+        const tubeMat = new THREE.MeshBasicMaterial({
+          color: associatedAgent ? (config.colorHex === 0xef4444 ? 0x0ea5e9 : config.colorHex) : 0x0284c7,
+          transparent: true,
+          opacity: associatedAgent ? 0.70 : 0.18,
+          blending: THREE.AdditiveBlending,
+        });
+        tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
+        pnsGroup.add(tubeMesh);
+      }
 
-      // Receptor / Bio-socket do Agente no Corpo Humano
-      const socketGeo = new THREE.SphereGeometry(associatedAgent ? 0.085 : 0.045, 14, 14);
+      // TRAJETO COMPLETO QUE PASSA PELA MEDULA E SOBE ATÉ O CÉREBRO:
+      // Agente -> Nervo Periférico -> Medula Espinhal -> Tronco Encefálico -> Córtex Cerebral
+      const pathPoints: THREE.Vector3[] = [targetCoords.clone()];
+      if (bPart !== 'cranio_cerebro') {
+        pathPoints.push(
+          new THREE.Vector3(targetCoords.x * 0.45, (entryY + targetCoords.y) * 0.5, (targetCoords.z - 0.04) * 0.5 + 0.04),
+          medulaEntry.clone()
+        );
+        // Pontos verticais subindo estritamente pelo canal medular da medula espinhal
+        if (entryY < 0.8) pathPoints.push(new THREE.Vector3(0, 0.85, -0.04));
+        if (entryY < 1.6) pathPoints.push(new THREE.Vector3(0, 1.65, -0.04));
+        pathPoints.push(
+          new THREE.Vector3(0, 2.05, -0.04), // Cervical
+          new THREE.Vector3(0, 2.38, -0.02)  // Tronco encefálico
+        );
+      }
+      pathPoints.push(brainEntry.clone()); // Cérebro
+
+      const fullPathCurve = new THREE.CatmullRomCurve3(pathPoints);
+
+      // ÍCONE DE INTERAÇÃO DO AGENTE: MENOR, MAIS BONITO E ELEGANTE (Micro-Joia Cibernética)
+      const socketGeo = new THREE.SphereGeometry(associatedAgent ? 0.024 : 0.016, 12, 12);
+      const socketColor = associatedAgent
+        ? (config.colorHex === 0xef4444 ? 0x00f5ff : config.colorHex)
+        : 0x0284c7;
+
       const socketMat = new THREE.MeshBasicMaterial({
-        color: associatedAgent ? config.colorHex : 0x0284c7,
+        color: socketColor,
         transparent: true,
-        opacity: associatedAgent ? 0.95 : 0.35,
+        opacity: associatedAgent ? 0.95 : 0.40,
       });
       const socketMesh = new THREE.Mesh(socketGeo, socketMat);
       socketMesh.position.copy(targetCoords);
-      socketMesh.userData = { bodyPart: bPart, agent: associatedAgent };
+      socketMesh.userData = { bodyPart: bPart, agent: associatedAgent, isAgentSocket: true };
       pnsGroup.add(socketMesh);
-      agentMeshes.push(socketMesh);
+      interactiveBodyMeshes.push(socketMesh);
 
-      // Halo pulsante do bio-socket
-      const socketHaloGeo = new THREE.RingGeometry(0.10, 0.14, 16);
+      // Núcleo pontual brilhante interno
+      if (associatedAgent) {
+        const innerDotGeo = new THREE.SphereGeometry(0.010, 8, 8);
+        const innerDotMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const innerDot = new THREE.Mesh(innerDotGeo, innerDotMat);
+        socketMesh.add(innerDot);
+      }
+
+      // Anel orbital de neon fino e gracioso
+      const socketHaloGeo = new THREE.RingGeometry(0.038, 0.048, 20);
       const socketHaloMat = new THREE.MeshBasicMaterial({
-        color: associatedAgent ? config.colorHex : 0x0284c7,
+        color: socketColor,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: associatedAgent ? 0.7 : 0.0,
+        opacity: associatedAgent ? 0.65 : 0.0,
       });
       const socketHaloMesh = new THREE.Mesh(socketHaloGeo, socketHaloMat);
       socketHaloMesh.position.copy(targetCoords);
       pnsGroup.add(socketHaloMesh);
 
-      // Placa sutil caso agente esteja instalado
+      // Micro-Chip Holográfico Compacto e de Alta Resolução (FullHD)
       let socketLabelSprite: THREE.Sprite | undefined;
       if (associatedAgent) {
         const canvasTag = document.createElement('canvas');
-        canvasTag.width = 256;
-        canvasTag.height = 64;
+        canvasTag.width = 160;
+        canvasTag.height = 36;
         const ctxT = canvasTag.getContext('2d');
         if (ctxT) {
           ctxT.fillStyle = 'rgba(2, 6, 23, 0.85)';
-          ctxT.strokeStyle = `#${config.colorHex.toString(16).padStart(6, '0')}`;
-          ctxT.lineWidth = 2;
+          ctxT.strokeStyle = `#${socketColor.toString(16).padStart(6, '0')}`;
+          ctxT.lineWidth = 1.5;
           ctxT.beginPath();
-          ctxT.roundRect(8, 8, 240, 48, 8);
+          ctxT.roundRect(3, 3, 154, 30, 6);
           ctxT.fill();
           ctxT.stroke();
 
-          ctxT.font = 'bold 18px monospace';
+          ctxT.font = 'bold 13px monospace';
           ctxT.fillStyle = '#ffffff';
           ctxT.textAlign = 'center';
           ctxT.textBaseline = 'middle';
-          ctxT.fillText(associatedAgent.name.slice(0, 18), 128, 32);
+          ctxT.fillText(associatedAgent.name.slice(0, 15), 80, 18);
         }
         const tagTexture = new THREE.CanvasTexture(canvasTag);
-        const tagSpriteMat = new THREE.SpriteMaterial({ map: tagTexture, transparent: true, opacity: 0.9, depthTest: false });
+        const tagSpriteMat = new THREE.SpriteMaterial({ map: tagTexture, transparent: true, opacity: 0.90, depthTest: false });
         socketLabelSprite = new THREE.Sprite(tagSpriteMat);
-        socketLabelSprite.position.set(targetCoords.x, targetCoords.y + 0.16, targetCoords.z);
-        socketLabelSprite.scale.set(0.55, 0.14, 1.0);
+        const offsetX = targetCoords.x >= 0 ? 0.20 : -0.20;
+        socketLabelSprite.position.set(targetCoords.x + offsetX, targetCoords.y + 0.06, targetCoords.z);
+        socketLabelSprite.scale.set(0.36, 0.08, 1.0);
         pnsGroup.add(socketLabelSprite);
       }
 
-      // Moléculas Vermelhas (quando a LLM invoca o agente)
-      const redMolecules: Array<{ mesh: THREE.Mesh; progress: number; speed: number }> = [];
-      const redSphereGeo = new THREE.SphereGeometry(0.028, 8, 8);
-      const redSphereMat = new THREE.MeshBasicMaterial({
-        color: 0xef4444,
+      // SINAL SINÁPTICO QUE PASSA PELA MEDULA E SOBE ATÉ O CÉREBRO:
+      // 1. Fótons Bioluminescentes Ciano/Safira (Cérebro -> Medula -> Agente) - ZERO VERMELHO
+      const brainToAgentPhotons: Array<{ mesh: THREE.Mesh; progress: number; speed: number }> = [];
+      const photonGeo = new THREE.SphereGeometry(0.020, 8, 8);
+      const photonMat = new THREE.MeshBasicMaterial({
+        color: 0x00f5ff,
         transparent: true,
         opacity: 0.0,
         blending: THREE.AdditiveBlending,
       });
       for (let m = 0; m < 5; m++) {
-        const rMesh = new THREE.Mesh(redSphereGeo, redSphereMat.clone());
-        pnsGroup.add(rMesh);
-        redMolecules.push({
-          mesh: rMesh,
+        const pMesh = new THREE.Mesh(photonGeo, photonMat.clone());
+        pnsGroup.add(pMesh);
+        brainToAgentPhotons.push({
+          mesh: pMesh,
           progress: m / 5,
-          speed: 0.35 + Math.random() * 0.15,
+          speed: 0.45 + Math.random() * 0.10,
         });
       }
 
-      // Vesícula Amarela (quando o agente responde e se comunica com a LLM)
-      const yellowGeo = new THREE.SphereGeometry(0.045, 10, 10);
+      // 2. Vesícula Dourada Sináptica (Agente -> Medula Espinhal -> Cérebro)
+      const yellowGeo = new THREE.SphereGeometry(0.034, 10, 10);
       const yellowMat = new THREE.MeshBasicMaterial({
         color: 0xfacc15,
         transparent: true,
@@ -635,63 +646,31 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       bodyNerveEndings.push({
         bodyPartId: bPart,
         agent: associatedAgent,
-        curve,
+        fullPathCurve,
+        limbCurve,
         nerveTubeMesh: tubeMesh,
         socketMesh,
         socketHaloMesh,
         socketLabelSprite,
         targetCoords,
-        redMolecules,
+        entryY,
+        brainToAgentPhotons,
         yellowVesicle: {
           mesh: yMesh,
           progress: 0.0,
-          speed: 0.28,
+          speed: 0.40,
           active: false,
         },
       });
     });
 
     // =========================================================================
-    // E. CONTROLES DE CÂMERA & NAVEGAÇÃO 3D SUAVE
+    // E. CONTROLES DE INTERAÇÃO & CLIQUE (RAYCASTING)
     // =========================================================================
+    let targetRotY = 0;
     let targetCameraY = 0.6;
-    let targetCameraZ = 9.8;
-    let targetLookAtY = 0.2;
-    let targetRotY = 0.0;
+    let targetCameraZ = 9.6;
 
-    controlsRef.current.zoomIn = () => {
-      targetCameraZ = Math.max(targetCameraZ - 1.8, 3.2);
-    };
-    controlsRef.current.zoomOut = () => {
-      targetCameraZ = Math.min(targetCameraZ + 1.8, 14.0);
-    };
-    controlsRef.current.resetView = () => {
-      targetCameraY = 0.6;
-      targetCameraZ = 9.8;
-      targetLookAtY = 0.2;
-      targetRotY = 0.0;
-      setViewPerspective('FULL_BODY');
-    };
-    controlsRef.current.rotateLeft = () => {
-      targetRotY += 0.45;
-    };
-    controlsRef.current.rotateRight = () => {
-      targetRotY -= 0.45;
-    };
-    controlsRef.current.focusBody = () => {
-      targetCameraY = 0.4;
-      targetCameraZ = 8.5;
-      targetLookAtY = 0.0;
-      setViewPerspective('FULL_BODY');
-    };
-    controlsRef.current.focusBrain = () => {
-      targetCameraY = 2.7;
-      targetCameraZ = 4.2;
-      targetLookAtY = 2.7;
-      setViewPerspective('BRAIN_FOCUS');
-    };
-
-    // Eventos do mouse / touch para girar a visualização
     const handlePointerDown = (e: MouseEvent | TouchEvent) => {
       isPointerDownRef.current = true;
       const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
@@ -700,17 +679,26 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     };
 
     const handlePointerMove = (e: MouseEvent | TouchEvent) => {
-      if (!isPointerDownRef.current) return;
       const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
       const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
 
-      const deltaX = clientX - pointerPrevRef.current.x;
-      const deltaY = clientY - pointerPrevRef.current.y;
+      if (isPointerDownRef.current) {
+        const deltaX = clientX - pointerPrevRef.current.x;
+        const deltaY = clientY - pointerPrevRef.current.y;
+        targetRotY += deltaX * 0.005;
+        targetCameraY = Math.max(Math.min(targetCameraY - deltaY * 0.005, 3.5), -1.5);
+        pointerPrevRef.current = { x: clientX, y: clientY };
+      }
 
-      targetRotY += deltaX * 0.005;
-      targetCameraY = Math.max(Math.min(targetCameraY - deltaY * 0.005, 3.5), -1.5);
-
-      pointerPrevRef.current = { x: clientX, y: clientY };
+      // Cursor pointer ao passar o mouse sobre partes interativas
+      if (!('touches' in e)) {
+        const rect = currentMount.getBoundingClientRect();
+        mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects([...interactiveBodyMeshes, ...memoryMeshes], false);
+        currentMount.style.cursor = hits.length > 0 ? 'pointer' : 'default';
+      }
     };
 
     const handlePointerUp = () => {
@@ -721,7 +709,7 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       targetCameraZ = Math.max(Math.min(targetCameraZ + e.deltaY * 0.004, 15.0), 2.5);
     };
 
-    // Raycaster para seleção de memórias e agentes
+    // Raycasting para clique e interação com o corpo / agentes / memórias
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
@@ -732,17 +720,21 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
 
       raycaster.setFromCamera(mouse, camera);
 
-      // Verificar clique em agente
-      const agentHits = raycaster.intersectObjects(agentMeshes, false);
-      if (agentHits.length > 0) {
-        const hitData = agentHits[0].object.userData;
+      // Clique em socket de agente ou parte do corpo
+      const bodyHits = raycaster.intersectObjects(interactiveBodyMeshes, false);
+      if (bodyHits.length > 0) {
+        const hitData = bodyHits[0].object.userData;
+        if (hitData.bodyPart && onBodyPartInteractRef.current) {
+          onBodyPartInteractRef.current(hitData.bodyPart, hitData.agent);
+          return;
+        }
         if (hitData.agent && onSelectAgent) {
           onSelectAgent(hitData.agent);
           return;
         }
       }
 
-      // Verificar clique em memória
+      // Clique em memória interna do cérebro
       const memHits = raycaster.intersectObjects(memoryMeshes, false);
       if (memHits.length > 0) {
         const mem = memHits[0].object.userData.memory;
@@ -770,80 +762,86 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
 
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
+
       const delta = clock.getDelta();
       const elapsedTime = clock.getElapsedTime();
 
-      // Transição suave de câmera
-      camera.position.z += (targetCameraZ - camera.position.z) * 0.08;
-      camera.position.y += (targetCameraY - camera.position.y) * 0.08;
+      // Suavização da rotação e câmera
       mainHumanoidGroup.rotation.y += (targetRotY - mainHumanoidGroup.rotation.y) * 0.08;
+      camera.position.y += (targetCameraY - camera.position.y) * 0.08;
+      camera.position.z += (targetCameraZ - camera.position.z) * 0.08;
+      camera.lookAt(0, camera.position.y * 0.6, 0);
 
-      // Respiração sutil do corpo e cérebro
-      const breath = Math.sin(elapsedTime * 1.5) * 0.015;
-      skeletonGroup.scale.set(1 + breath * 0.5, 1 + breath, 1 + breath * 0.5);
+      // Pulsação suave do cérebro
+      const brainPulse = 1.0 + Math.sin(elapsedTime * 2.5) * 0.02;
+      brainGroup.scale.set(brainPulse, brainPulse, brainPulse);
 
-      // Animação das vértebras da coluna
-      spineVertebraeMeshes.forEach((vMesh, idx) => {
-        const mat = vMesh.material as THREE.MeshBasicMaterial;
-        mat.opacity = 0.45 + Math.sin(elapsedTime * 2.5 + idx * 0.25) * 0.25;
-      });
+      // Flash de recepção no córtex
+      if (corticalBurstRef.current > 0) {
+        corticalBurstRef.current = Math.max(0, corticalBurstRef.current - delta * 3.0);
+        cranialLight.intensity = 2.8 + corticalBurstRef.current * 4.0;
+        plexusMat.size = 0.036 + corticalBurstRef.current * 0.030;
+      } else {
+        cranialLight.intensity = 2.8;
+        plexusMat.size = 0.036;
+      }
 
-      // Animação de Sinapses e Vesículas Lentas das Memórias
-      const isPulseActive = Boolean(activeSynapsePulse);
+      // Animação de vesículas intracranianas
       targetedBridges.forEach((bridge) => {
-        const isTargeted = isPulseActive && activeTargetNodeId && (bridge.targetMemoryId === activeTargetNodeId || activeTargetNodeId.includes(bridge.targetMemoryId));
-
         bridge.particles.forEach((p) => {
-          if (isTargeted) {
-            p.progress += p.baseSpeed * delta;
-            if (p.progress > 1.0) p.progress = 0.0;
-            p.mesh.position.lerpVectors(bridge.p1, bridge.p2, p.progress);
-            (p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95;
-            p.mesh.scale.setScalar(1.4);
-          } else {
-            // Se não for o alvo buscado, fica dormente e imperceptível!
-            (p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0;
-          }
+          p.progress += p.baseSpeed * delta;
+          if (p.progress > 1.0) p.progress = 0.0;
+          p.mesh.position.lerpVectors(bridge.p1, bridge.p2, p.progress);
+          const mat = p.mesh.material as THREE.MeshBasicMaterial;
+          mat.opacity = 0.35 + Math.sin(p.progress * Math.PI) * 0.40;
         });
       });
 
-      // Animação de Sinais Nervosos nos Membros do Corpo (Moléculas Vermelhas vs Vesícula Amarela)
-      const currentSignal = activeNerveSignalRef.current;
+      // ANIMAÇÃO DE SINAIS NERVOSOS: TRAJETO COMPLETO PELA MEDULA ATÉ O CÉREBRO!
+      const currentSignal = activeSignalRef.current;
+
       bodyNerveEndings.forEach((ending) => {
         const isSignalForPart = currentSignal && currentSignal.bodyPart === ending.bodyPartId;
 
-        // Halo do bio-socket
-        if (ending.socketHaloMesh) {
+        // Rotação suave do anel orbital
+        if (ending.socketHaloMesh && ending.agent) {
           ending.socketHaloMesh.rotation.z += 0.02;
           const hMat = ending.socketHaloMesh.material as THREE.MeshBasicMaterial;
-          if (ending.agent) {
-            hMat.opacity = isSignalForPart ? 0.95 : 0.45 + Math.sin(elapsedTime * 3.0) * 0.2;
-          }
+          hMat.opacity = isSignalForPart ? 0.95 : 0.35 + Math.sin(elapsedTime * 2.5) * 0.15;
         }
 
-        // A. Moléculas Vermelhas (Cérebro -> Agente)
-        const isRedActive = isSignalForPart && currentSignal.direction === 'BRAIN_TO_AGENT';
-        ending.redMolecules.forEach((r) => {
-          if (isRedActive) {
+        // 1. Fótons Ciano: CÉREBRO (1.0) -> DESCENDE PELA MEDULA ESPINHAL -> AGENTE (0.0)
+        const isPhotonActive = isSignalForPart && currentSignal.direction === 'BRAIN_TO_AGENT';
+        ending.brainToAgentPhotons.forEach((r) => {
+          if (isPhotonActive) {
             r.progress += r.speed * delta;
             if (r.progress > 1.0) r.progress = 0.0;
-            const pt = ending.curve.getPoint(r.progress);
+            // Desce do cérebro (1.0) pela medula espinhal para o agente (0.0)
+            const pt = ending.fullPathCurve.getPoint(1.0 - r.progress);
             r.mesh.position.copy(pt);
             (r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95;
+            // Ilumina a medula espinhal durante a descida
+            spinalLight.intensity = 2.2 + Math.sin(r.progress * Math.PI) * 1.5;
           } else {
             (r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0;
           }
         });
 
-        // B. Vesícula Amarela (Agente -> Cérebro)
+        // 2. Vesícula Dourada: AGENTE (0.0) -> PASSA PELA MEDULA -> SOBE ATÉ O CÉREBRO (1.0)!
         const isYellowActive = isSignalForPart && currentSignal.direction === 'AGENT_TO_BRAIN';
         if (isYellowActive) {
           ending.yellowVesicle.progress += ending.yellowVesicle.speed * delta;
-          if (ending.yellowVesicle.progress > 1.0) ending.yellowVesicle.progress = 0.0;
-          // Caminha na direção contrária: do agente (1.0) para a medula/cérebro (0.0)
-          const pt = ending.curve.getPoint(1.0 - ending.yellowVesicle.progress);
+          if (ending.yellowVesicle.progress > 1.0) {
+            ending.yellowVesicle.progress = 0.0;
+            // Ao chegar ao cérebro (1.0), dispara burst cortical bioluminescente!
+            corticalBurstRef.current = 1.0;
+          }
+          // Sobe do agente (0.0), entra na medula, sobe a coluna e chega ao cérebro (1.0)
+          const pt = ending.fullPathCurve.getPoint(ending.yellowVesicle.progress);
           ending.yellowVesicle.mesh.position.copy(pt);
           (ending.yellowVesicle.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95;
+          // Ilumina a medula durante a subida
+          spinalLight.intensity = 2.2 + Math.sin(ending.yellowVesicle.progress * Math.PI) * 1.5;
         } else {
           (ending.yellowVesicle.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0;
         }
@@ -865,70 +863,27 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     window.addEventListener('resize', handleResize);
 
     return () => {
-      cancelAnimationFrame(animationFrameId);
       window.removeEventListener('resize', handleResize);
-      dom.removeEventListener('mousedown', handlePointerDown);
-      dom.removeEventListener('touchstart', handlePointerDown);
       window.removeEventListener('mousemove', handlePointerMove);
       window.removeEventListener('touchmove', handlePointerMove);
       window.removeEventListener('mouseup', handlePointerUp);
       window.removeEventListener('touchend', handlePointerUp);
+      dom.removeEventListener('mousedown', handlePointerDown);
+      dom.removeEventListener('touchstart', handlePointerDown);
       dom.removeEventListener('wheel', handleWheel);
       dom.removeEventListener('click', handleClick);
+      cancelAnimationFrame(animationFrameId);
 
+      renderer.dispose();
       if (currentMount.contains(renderer.domElement)) {
         currentMount.removeChild(renderer.domElement);
       }
-      renderer.dispose();
     };
   }, [memories, agents]);
 
   return (
-    <div className="relative w-full h-full min-h-[600px] flex items-center justify-center overflow-hidden select-none">
-      <div ref={mountRef} className="absolute inset-0 w-full h-full cursor-grab active:cursor-grabbing" />
-
-      {/* Controles Discretos de Ampliação e Diminuição (Sem Poluição Visual) */}
-      <div className="absolute bottom-6 right-6 flex flex-col gap-2 z-20">
-        <button
-          onClick={() => controlsRef.current.zoomIn()}
-          title="Ampliar (Zoom In)"
-          className="p-2.5 rounded-xl bg-slate-950/80 hover:bg-cyan-950 text-cyan-400 border border-cyan-500/30 hover:border-cyan-400 transition-all shadow-lg active:scale-95 cursor-pointer backdrop-blur-md"
-        >
-          <ZoomIn className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={() => controlsRef.current.zoomOut()}
-          title="Diminuir (Zoom Out)"
-          className="p-2.5 rounded-xl bg-slate-950/80 hover:bg-cyan-950 text-cyan-400 border border-cyan-500/30 hover:border-cyan-400 transition-all shadow-lg active:scale-95 cursor-pointer backdrop-blur-md"
-        >
-          <ZoomOut className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={() => controlsRef.current.resetView()}
-          title="Centralizar e Redefinir Vista"
-          className="p-2.5 rounded-xl bg-slate-950/80 hover:bg-slate-900 text-slate-400 hover:text-white border border-slate-700/50 transition-all shadow-lg active:scale-95 cursor-pointer backdrop-blur-md"
-        >
-          <Maximize2 className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={() => controlsRef.current.focusBrain()}
-          title="Foco no Cérebro Craniano"
-          className="p-2.5 rounded-xl bg-slate-950/80 hover:bg-cyan-950 text-cyan-400 border border-cyan-500/30 hover:border-cyan-400 transition-all shadow-lg active:scale-95 cursor-pointer backdrop-blur-md"
-        >
-          <Bot className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={() => controlsRef.current.focusBody()}
-          title="Foco no Corpo Inteiro"
-          className="p-2.5 rounded-xl bg-slate-950/80 hover:bg-cyan-950 text-cyan-400 border border-cyan-500/30 hover:border-cyan-400 transition-all shadow-lg active:scale-95 cursor-pointer backdrop-blur-md"
-        >
-          <User className="w-4 h-4" />
-        </button>
-      </div>
+    <div className="relative w-full h-full bg-[#02050e] overflow-hidden select-none">
+      <div ref={mountRef} className="w-full h-full" />
     </div>
   );
 };

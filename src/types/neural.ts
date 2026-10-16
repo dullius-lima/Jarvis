@@ -51,6 +51,9 @@ export interface LLMProviderConfig {
   customEndpoint?: string;
   temperature?: number;
   maxTokens?: number;
+  // Mapa permanente de chaves salvas por provedor (salvo para sempre no storage, só altera se o usuário mudar)
+  providerKeys?: Partial<Record<LLMProviderType, string>>;
+  providerEndpoints?: Partial<Record<LLMProviderType, string>>;
 }
 
 export type BodyPartAnatomy =
@@ -122,6 +125,25 @@ export interface AgentDefinition {
   };
   // Ferramentas & Funções integradas do Agente (API, MCP, Webhook, Funções de Código)
   tools?: AgentTool[];
+  // Processo Tradicional do n8n: Motor de Memória do Agente (Window Buffer / Datastore)
+  // O agente criado guarda suas memórias para que a LLM acesse e interprete
+  n8nMemoryStore?: AgentMemoryRecord[];
+}
+
+export interface AgentMemoryRecord {
+  id: string;
+  agentId: string;
+  agentName: string;
+  bodyPart?: BodyPartAnatomy;
+  timestamp: string;
+  sourceEvent: string; // 'webhook_trigger' | 'audit_run' | 'user_interaction' | 'sensor_sync' | 'mcp_feed'
+  rawPayload?: Record<string, any> | string;
+  storedSummary: string; // Memória gravada pelo próprio agente (processo tradicional n8n)
+  importance: 'critica' | 'alta' | 'media';
+  interpretedByLLM?: boolean; // Se a LLM já acessou e interpretou essa memória
+  interpretation?: string; // Interpretação cognitiva e diretrizes emitidas pela LLM
+  interpretedAt?: string;
+  synapseId?: string; // ID da sinapse gravada no cérebro 3D
 }
 
 export interface AgentTool {

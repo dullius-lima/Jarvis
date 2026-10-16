@@ -22,6 +22,7 @@ import {
   LLMProviderConfig,
   AgentDefinition,
   AgentNerveSignal,
+  BodyPartAnatomy,
 } from './types/neural';
 import { JarvisVoiceService } from './services/jarvisVoice';
 import { SentimentEngine } from './services/sentimentEngine';
@@ -54,13 +55,17 @@ import {
   User,
   Wrench,
   ExternalLink,
+  RefreshCw,
+  CheckCircle2,
 } from 'lucide-react';
+import { ApiSyncService, MultiApiSyncReport } from './services/apiSyncService';
 
 export default function App() {
   const microService = MicroDatastoresService.getInstance();
   const agentService = AgentRegistryService.getInstance();
   const llmService = UniversalLLMService.getInstance();
   const voiceService = JarvisVoiceService.getInstance();
+  const apiSyncService = ApiSyncService.getInstance();
 
   // Sistema de Proteção & Autenticação (Usuário padrão: matheus_dulius@hotmail.com / 123456)
   const [isUnlocked, setIsUnlocked] = useState<boolean>(() => authService.isAuthenticated());
@@ -72,9 +77,17 @@ export default function App() {
   // Sinalização Neural viva nos nervos do corpo (Moléculas Vermelhas / Vesícula Amarela)
   const [activeNerveSignal, setActiveNerveSignal] = useState<AgentNerveSignal | null>(null);
 
+  // Relatório de Sincronização Universal de APIs
+  const [apiSyncReport, setApiSyncReport] = useState<MultiApiSyncReport | null>(() => apiSyncService.getLastReport());
+  const [isSyncingApis, setIsSyncingApis] = useState<boolean>(false);
+
   useEffect(() => {
     const unsub = agentService.subscribeNerveSignal((sig) => {
       setActiveNerveSignal(sig);
+    });
+
+    const unsubApi = apiSyncService.subscribe((rep) => {
+      setApiSyncReport(rep);
     });
 
     // Sincronização viva quando o usuário criar agentes na página agents.html
@@ -95,28 +108,48 @@ export default function App() {
 
     return () => {
       unsub();
+      unsubApi();
       window.removeEventListener('storage', handleSyncAgents);
       window.removeEventListener('message', handleMsg);
       if (bc) bc.close();
     };
   }, []);
 
-  // Estado das Memórias e Sinapses Neurais (Inicia estritamente limpo sem itens pré-configurados)
+  // Estado das Memórias e Sinapses Neurais (Sanitização estrita para NUNCA sair da cabeça!)
   const [memories, setMemories] = useState<SynapseMemory[]>(() => {
     const saved = localStorage.getItem('jarvis_memories');
     if (!saved) return [];
     try {
       const parsed: SynapseMemory[] = JSON.parse(saved);
-      // Remove todos os IDs que correspondam a dados pré-configurados de teste
       const preconfigured = new Set([
         'mem-compras', 'mem-agenda', 'mem-matheus', 'mem-esposa', 'mem-filhos',
         'mem-b3', 'mem-bbas3', 'mem-taee11', 'mem-itub4', 'mem-vale3',
         'mem-btc', 'mem-saude', 'mem-seguranca', 'mem-investimentos', 'mem-financas',
         'mem-familia', 'mem-rotina', 'mem-wege3', 'mem-cfo'
       ]);
-      const limpas = parsed.filter(
-        (m) => !preconfigured.has(m.id) && !m.id.startsWith('mem-pre-') && !m.id.includes('mock')
-      );
+      const limpas = parsed
+        .filter((m) => !preconfigured.has(m.id) && !m.id.startsWith('mem-pre-') && !m.id.includes('mock'))
+        .map((m) => {
+          // CORREÇÃO CRÍTICA: Se a memória estiver fora do cérebro ou tiver cor vermelha antiga, normalizar para o interior da cabeça
+          const dist = Math.hypot(m.coords?.[0] || 0, m.coords?.[1] || 0, m.coords?.[2] || 0);
+          if (dist > 0.30 || Math.abs(m.coords?.[1] || 0) > 0.22 || isNaN(dist) || !m.coords) {
+            const u = Math.random();
+            const v = Math.random();
+            const theta = u * 2.0 * Math.PI;
+            const phi = Math.acos(2.0 * v - 1.0);
+            const r = Math.cbrt(Math.random()) * 0.22;
+            m.coords = [
+              r * Math.sin(phi) * Math.cos(theta) * 0.85,
+              r * Math.sin(phi) * Math.sin(theta) * 0.72,
+              r * Math.cos(phi) * 0.85,
+            ];
+          }
+          // Garante cor azul/ciano bioluminescente (elimina nós vermelhos flutuando acima da cabeça)
+          if (m.color === 0xef4444 || !m.color) {
+            m.color = 0x00f5ff;
+          }
+          return m;
+        });
       return limpas;
     } catch {
       return [];
@@ -339,26 +372,105 @@ export default function App() {
     await entrarModoOperacao();
   };
 
-  // Adicionar uma nova memória diretamente no cérebro 3D
+  // Sincronização em Múltiplos Endereços de API diferentes para o JARVIS
+  const handleSincronizarTodasApis = async () => {
+    setIsSyncingApis(true);
+    try {
+      const rep = await apiSyncService.syncAllEndpoints();
+      setApiSyncReport(rep);
+      voiceService.playBeepSound();
+      setJarvisResponseText(
+        `Todos os ${rep.totalEndpoints} endereços de API sincronizados com sucesso (${rep.syncedEndpoints}/${rep.totalEndpoints} ativos). Latência média de ${rep.averageLatencyMs}ms.`
+      );
+      setIsJarvisSpeaking(true);
+      setTimeout(() => setIsJarvisSpeaking(false), 4500);
+    } catch (e) {
+      console.warn('Erro ao sincronizar APIs:', e);
+    } finally {
+      setIsSyncingApis(false);
+    }
+  };
+
+  // Interação Somática com o Corpo Humano: a LLM controla, aprende e grava na memória do cérebro
+  const handleBodyInteraction = async (bodyPart: BodyPartAnatomy, agent?: AgentDefinition) => {
+    const partConfig = BODY_PARTS_CONFIG[bodyPart];
+    const parteLabel = partConfig?.label || bodyPart;
+
+    // 1. Sinal eferente: Fótons descem do Cérebro pela Medula Espinhal até o membro
+    agentService.emitNerveSignal({
+      id: `sig-cmd-${Date.now()}`,
+      agentId: agent?.id || `somatic-${bodyPart}`,
+      agentName: agent?.name || parteLabel,
+      bodyPart,
+      direction: 'BRAIN_TO_AGENT',
+      colorHex: 0x00f5ff,
+      message: `Comando da LLM -> ${parteLabel} (Descendo pela Medula Espinhal)`,
+      timestamp: Date.now(),
+    });
+
+    voiceService.playBeepSound();
+    setJarvisResponseText(`Disparando controle somático em ${parteLabel}. Impulso eferente descendo pelo canal medular...`);
+
+    // 2. Sinal aferente: Resposta somática sobe pela Medula Espinhal e entra no Cérebro
+    setTimeout(() => {
+      agentService.emitNerveSignal({
+        id: `sig-resp-${Date.now()}`,
+        agentId: agent?.id || `somatic-${bodyPart}`,
+        agentName: agent?.name || parteLabel,
+        bodyPart,
+        direction: 'AGENT_TO_BRAIN',
+        colorHex: 0xfacc15,
+        message: `Feedback somático [${parteLabel}] -> Medula Espinhal -> Cérebro`,
+        timestamp: Date.now(),
+      });
+
+      // 3. A LLM aprende e grava a experiência na memória profunda dentro do cérebro
+      const titulo = agent
+        ? `Controle & Aprendizado: ${agent.name} (${parteLabel})`
+        : `Aprendizado Somático: ${parteLabel}`;
+      const conteudo = agent
+        ? `Nó cibernético ${agent.name} auditado com sucesso. Agente ativo no corpo humano em ${parteLabel}. Silo: ${agent.targetDatabase}. Resposta aferente integrada ao córtex cerebral.`
+        : `Estímulo proprioceptivo e neuromotor concluído em ${parteLabel}. Trânsito pela medula espinhal íntegro e gravado no córtex.`;
+
+      adicionarNovaMemoria({
+        title: titulo,
+        category: 'investimento',
+        content: conteudo,
+        user: 'LLM Autônoma (Controle Somático)',
+        timestamp: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
+        importance: 'alta',
+        color: 0x00f5ff,
+        sentiment: 'analitico_racional',
+        isAutonomousLLM: true,
+        tokenPreservation: {
+          originalTokensEstimated: 2800,
+          preservedTokensEstimated: 45,
+          compressionRatio: '98.4%',
+          rationale: 'Síntese de feedback neural somático para memória perene.',
+        },
+      });
+
+      setJarvisResponseText(
+        `Interação neural estabelecida com ${parteLabel}. O sinal sináptico passou pela medula espinhal, foi processado pelo córtex e gravado com sucesso na memória dentro do cérebro.`
+      );
+      setIsJarvisSpeaking(true);
+      setTimeout(() => setIsJarvisSpeaking(false), 5000);
+    }, 700);
+  };
+
+  // Adicionar uma nova memória diretamente no cérebro 3D (Estritamente dentro do Córtex Craniano)
   const adicionarNovaMemoria = (
     mem: Omit<SynapseMemory, 'id' | 'coords' | 'firing' | 'connectionsCount'>
   ) => {
-    let coords: [number, number, number] = [0, 0, 0];
-    if (mem.category === 'investimento' || mem.category === 'cfo') {
-      coords = [
-        (Math.random() - 0.5) * 1.2,
-        1.0 + Math.random() * 0.6,
-        0.8 + Math.random() * 0.8,
-      ];
-    } else if (mem.category === 'saude') {
-      coords = [1.2 + Math.random() * 0.4, 0.2 + Math.random() * 0.5, 0.2];
-    } else {
-      coords = [
-        (Math.random() - 0.5) * 1.4,
-        Math.random() * 0.8,
-        (Math.random() - 0.5) * 1.5,
-      ];
-    }
+    // Coordenadas calculadas estritamente dentro da elipse do cérebro craniano (raio <= 0.18)
+    const theta = Math.random() * 2 * Math.PI;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = Math.cbrt(Math.random()) * 0.18;
+    const coords: [number, number, number] = [
+      r * Math.sin(phi) * Math.cos(theta) * 0.85,
+      r * Math.sin(phi) * Math.sin(theta) * 0.70,
+      r * Math.cos(phi) * 0.85,
+    ];
 
     const nova: SynapseMemory = {
       ...mem,
@@ -366,7 +478,7 @@ export default function App() {
       coords,
       firing: true,
       connectionsCount: Math.floor(4 + Math.random() * 8),
-      color: 0xef4444, // Sinapse vermelha
+      color: mem.color && mem.color !== 0xef4444 ? mem.color : 0x00f5ff, // Bioluminescência Ciano/Azul (NUNCA vermelho na cabeça)
     };
 
     setMemories((prev) => [nova, ...prev]);
@@ -428,6 +540,16 @@ export default function App() {
       tokensPreservados?: number;
       sinteseMemoria?: string;
     }>;
+    bodyInteractions?: Array<{
+      bodyPart: string;
+      action: 'controlar' | 'aprender' | 'estimular';
+      sensoryFeedback?: string;
+      learnedInsight?: string;
+      gravouMemoria?: boolean;
+      tituloMemoria?: string;
+      conteudoMemoria?: string;
+    }>;
+    apiSyncRequested?: boolean;
   }) => {
     if (!actions) return;
 
@@ -533,7 +655,7 @@ export default function App() {
           user: mem.user || 'LLM Autônoma (Zero Interferência)',
           timestamp: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
           importance: 'alta',
-          color: 0xef4444,
+          color: 0x00f5ff, // Bioluminescência ciano/azul (elimina nós vermelhos)
           sentiment: 'analitico_racional',
           isAutonomousLLM: true,
           tokenPreservation: mem.tokenPreservation || {
@@ -720,6 +842,18 @@ export default function App() {
         dispararSinapsePontual(null, `Dados MCP Transcritos para o Agente: ${tr.agentName || dbKey}`);
       });
     }
+
+    // 5. Interações Somáticas com o Corpo (Controle, Aprendizado e Gravação no Cérebro)
+    if (actions.bodyInteractions && actions.bodyInteractions.length > 0) {
+      actions.bodyInteractions.forEach((bi) => {
+        handleBodyInteraction(bi.bodyPart as BodyPartAnatomy);
+      });
+    }
+
+    // 6. Sincronização em Múltiplos Endereços de API
+    if (actions.apiSyncRequested) {
+      handleSincronizarTodasApis();
+    }
   };
 
   // Processar comando: Jarvis busca cirurgicamente o arquivo menor exato no cérebro
@@ -903,7 +1037,7 @@ export default function App() {
           user: speaker.name,
           timestamp: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
           importance: 'alta',
-          color: 0xef4444, // Sinapse vermelha pontual
+          color: 0x00f5ff, // Sinapse bioluminescente azul/ciano
           sentiment: emocao.sentimento,
         });
       }
@@ -1105,6 +1239,27 @@ export default function App() {
               <div className="text-[10px] text-slate-400">Auditorias e deliberações de IA</div>
             </div>
           </button>
+
+          {/* Sincronização em Múltiplos Endereços de API */}
+          <button
+            onClick={() => {
+              handleSincronizarTodasApis();
+              setSystemMenuExpanded(false);
+            }}
+            disabled={isSyncingApis}
+            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center justify-between text-slate-200 cursor-pointer"
+          >
+            <div className="flex items-center gap-2.5">
+              <RefreshCw className={`w-4 h-4 text-emerald-400 shrink-0 ${isSyncingApis ? 'animate-spin' : ''}`} />
+              <div>
+                <div className="font-bold text-slate-100">Sincronizar Todas as APIs</div>
+                <div className="text-[10px] text-slate-400">Gemini, Claude, GPT, Ollama, Webhooks</div>
+              </div>
+            </div>
+            <span className="text-[10px] bg-emerald-950 border border-emerald-500/40 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
+              {apiSyncReport ? `${apiSyncReport.syncedEndpoints}/${apiSyncReport.totalEndpoints}` : 'Sync'}
+            </span>
+          </button>
         </div>
       )}
 
@@ -1128,6 +1283,7 @@ export default function App() {
             setAgentRegistryModalOpen(true);
           }}
           activeNerveSignal={activeNerveSignal}
+          onBodyPartInteract={handleBodyInteraction}
         />
 
         {/* Resposta Flutuante Discreta do Jarvis (Sem Obstruir a Visualização) */}
