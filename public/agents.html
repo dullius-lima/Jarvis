@@ -176,6 +176,53 @@
             <textarea id="agLogic" rows="3" required placeholder="Instruções para o agente raciocinar: Ex: Analisar volatilidade a cada 5 min, filtrar ruídos de mercado, emitir veredito em JSON e disparar webhook se margem > 15%." class="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-xl p-3 text-slate-100 text-xs outline-none transition-all resize-y"></textarea>
           </div>
 
+          <!-- 3.1 Espaço para Escrever Prompt de Comportamento & IA Dedicada (Opcional) -->
+          <div class="border border-purple-500/30 bg-purple-950/20 rounded-xl p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-purple-300 flex items-center gap-1.5">
+                <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Espaço de Prompt & Comportamento da IA
+              </span>
+              <label class="flex items-center gap-2 cursor-pointer text-[11px] text-purple-300">
+                <input type="checkbox" id="agHasDedicatedLLM" onchange="toggleDedicatedLLM()" class="rounded text-purple-500">
+                <span>IA Dedicada (Opcional)</span>
+              </label>
+            </div>
+
+            <div>
+              <label class="block text-slate-300 text-[11px] font-semibold mb-1">Prompt de Comportamento Específico (System Persona)</label>
+              <textarea id="agCustomPrompt" rows="3" placeholder="Escreva exatamente como este agente deve pensar e se comportar. Ex: Você é um auditor contábil frio e estrito que calcula Preço-Teto Bazin..." class="w-full bg-slate-950 border border-slate-700 focus:border-purple-400 rounded-lg p-2.5 text-slate-100 text-xs font-mono outline-none"></textarea>
+            </div>
+
+            <!-- Bloco de Seleção de Todas as IAs Disponíveis -->
+            <div id="dedicatedLLMBlock" class="hidden space-y-2.5 pt-2 border-t border-purple-500/20">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-slate-400 text-[10px] mb-1">Provedor de IA (Todas Disponíveis)</label>
+                  <select id="agDedicatedProvider" onchange="onProviderChange()" class="w-full bg-slate-950 border border-slate-700 focus:border-purple-400 rounded-lg px-2.5 py-1.5 text-slate-100 text-[11px] outline-none">
+                    <option value="gemini">Google Gemini (Gemini 2.5 Flash / Pro)</option>
+                    <option value="openai">OpenAI (GPT-4o, o1-mini, o3-mini)</option>
+                    <option value="anthropic">Anthropic (Claude 3.5 Sonnet / Haiku)</option>
+                    <option value="deepseek">DeepSeek (V3, R1 / Reasoner)</option>
+                    <option value="groq">Groq LPU (LLaMA 3.3 70B, Mixtral)</option>
+                    <option value="mistral">Mistral AI (Mistral Large, Codestral)</option>
+                    <option value="ollama">Ollama (Local / Privado sem nuvem)</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-slate-400 text-[10px] mb-1">Modelo da IA</label>
+                  <input type="text" id="agDedicatedModel" value="gemini-2.5-flash" class="w-full bg-slate-950 border border-slate-700 focus:border-purple-400 rounded-lg px-2.5 py-1.5 text-cyan-300 font-mono text-[11px] outline-none">
+                </div>
+              </div>
+              <div>
+                <label class="block text-slate-400 text-[10px] mb-1">Chave de API do Provedor (Opcional - se vazio usa a chave global do Jarvis)</label>
+                <input type="password" id="agDedicatedKey" placeholder="Chave da IA..." class="w-full bg-slate-950 border border-slate-700 focus:border-purple-400 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono text-[11px] outline-none">
+              </div>
+            </div>
+          </div>
+
           <!-- 4. Seletor de Conexão Externa (Todas as Possibilidades de Conexão Externa) -->
           <div class="border border-slate-800 bg-slate-950/60 rounded-xl p-4 space-y-3">
             <div class="flex items-center justify-between">

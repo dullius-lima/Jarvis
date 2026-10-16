@@ -128,6 +128,14 @@ export interface AgentDefinition {
   // Processo Tradicional do n8n: Motor de Memória do Agente (Window Buffer / Datastore)
   // O agente criado guarda suas memórias para que a LLM acesse e interprete
   n8nMemoryStore?: AgentMemoryRecord[];
+  // Espaço para Prompt Customizado de Comportamento da IA
+  customPromptBehavior?: string;
+  // IA Opcional / Dedicada configurada para este agente
+  hasDedicatedLLM?: boolean;
+  dedicatedLLMConfig?: Partial<LLMProviderConfig>;
+  // Estado de Execução em Tempo Real (Aciona Sinapse no Córtex e Medula)
+  isExecuting?: boolean;
+  activeSynapseIntensity?: number; // 0.0 a 1.0 (intensidade dos dados que dita a cor da sinapse)
 }
 
 export interface AgentMemoryRecord {
@@ -292,10 +300,14 @@ export interface AgentNerveSignal {
   agentId: string;
   agentName: string;
   bodyPart: BodyPartAnatomy;
-  direction: 'BRAIN_TO_AGENT' | 'AGENT_TO_BRAIN'; // BRAIN_TO_AGENT: moléculas vermelhas | AGENT_TO_BRAIN: vesícula amarela
-  colorHex: number; // 0xef4444 (vermelho) ou 0xfacc15 (amarelo)
+  direction: 'BRAIN_TO_AGENT' | 'AGENT_TO_BRAIN';
+  colorHex: number; // Cor do sinal (dinâmica com base na intensidade dos dados)
   message?: string;
   timestamp: number;
+  intensity?: number; // 0.0 a 1.0 (intensidade dos dados que flui na sinapse)
+  intensityColorHex?: number; // Cor espectral Three.js baseada na intensidade
+  dataVolume?: string; // Ex: '18.4 KB', '3.8k tokens', 'Payload MCP'
+  isContinuousExecuting?: boolean; // Se o agente está em execução contínua
 }
 
 export interface CognitiveClusterNode {

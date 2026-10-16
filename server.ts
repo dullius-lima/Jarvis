@@ -853,43 +853,53 @@ ${JSON.stringify(memoriasContexto?.slice(0, 10) || [], null, 2)}
     }
   }
 
-  // Fallback / Provedor padrão: Gemini com salvaguarda 429
-  if (process.env.GEMINI_API_KEY) {
-    const response = await callGeminiSafe(
-      () =>
-        ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: promptUsuario,
-          config: {
-            systemInstruction: promptSistemaJarvis,
-            temperature: 0.25,
-            tools: [{ googleSearch: {} }],
-          },
-        }),
-      () =>
-        ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
-          contents: promptUsuario,
-          config: {
-            systemInstruction: promptSistemaJarvis,
-            temperature: 0.2,
-          },
-        }),
-      'JARVIS-Brain'
-    );
+  // Provedor Gemini (suporta chave customizada do cliente no llmConfig ou chave nativa do servidor)
+  const geminiKey = (llmConfig?.provider === 'gemini' && llmConfig?.apiKey) ? llmConfig.apiKey : process.env.GEMINI_API_KEY;
+  if (geminiKey) {
+    try {
+      const geminiClient = (llmConfig?.provider === 'gemini' && llmConfig?.apiKey)
+        ? new GoogleGenAI({ apiKey: geminiKey })
+        : ai;
 
-    if (response?.text) {
-      const fullText = response.text;
-      const parseResult = parseAutonomousActions(fullText, interlocutor);
+      const targetModel = (llmConfig?.provider === 'gemini' && llmConfig?.model) ? llmConfig.model : 'gemini-3.8-flash';
 
-      return res.json({
-        resposta: parseResult.respostaLimpa,
-        novaMemoria: parseResult.novaMemoria,
-        autonomousActions: parseResult.autonomousActions,
-        interlocutor,
-        timestamp: new Date().toISOString(),
-        providerUsed: 'gemini',
-      });
+      const response = await callGeminiSafe(
+        () =>
+          geminiClient.models.generateContent({
+            model: targetModel,
+            contents: promptUsuario,
+            config: {
+              systemInstruction: promptSistemaJarvis,
+              temperature: 0.25,
+            },
+          }),
+        () =>
+          geminiClient.models.generateContent({
+            model: 'gemini-3.1-flash-lite',
+            contents: promptUsuario,
+            config: {
+              systemInstruction: promptSistemaJarvis,
+              temperature: 0.2,
+            },
+          }),
+        'JARVIS-Brain'
+      );
+
+      if (response?.text) {
+        const fullText = response.text;
+        const parseResult = parseAutonomousActions(fullText, interlocutor);
+
+        return res.json({
+          resposta: parseResult.respostaLimpa,
+          novaMemoria: parseResult.novaMemoria,
+          autonomousActions: parseResult.autonomousActions,
+          interlocutor,
+          timestamp: new Date().toISOString(),
+          providerUsed: 'gemini',
+        });
+      }
+    } catch (gErr: any) {
+      console.warn('Erro na chamada direta ao Google Gemini:', gErr?.message || gErr);
     }
   }
 
@@ -1869,7 +1879,7 @@ DIRETRIZES:
       const response = await callGeminiSafe(
         () =>
           ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3.8-flash',
             contents: promptTranscribe,
             config: {
               temperature: 0.1,
@@ -2099,13 +2109,47 @@ app.post('/api/integrations/skills', (req, res) => {
 // Endpoint: Teste de Conexão com Provedor de LLM (Universal)
 app.post('/api/llm/test-connection', async (req: Request, res: Response) => {
   const { provider, apiKey, model, customEndpoint } = req.body;
+  const start = performance.now();
 
   try {
     if (provider === 'gemini') {
-      if (!process.env.GEMINI_API_KEY && !apiKey) {
-        return res.status(400).json({ success: false, error: 'Chave Gemini ausente no ambiente e no cliente.' });
+      const activeKey = (apiKey && typeof apiKey === 'string' && apiKey.trim().length > 0) ? apiKey.trim() : (process.env.GEMINI_API_KEY || '');
+      if (!activeKey) {
+        return res.status(400).json({
+          success: false,
+          error: 'Chave Gemini ausente. Insira sua chave de API gerada no Google AI Studio (https://aistudio.google.com/app/apikey).',
+        });
       }
-      return res.json({ success: true, message: `Conexão bem-sucedida com Google Gemini (${model || 'gemini-2.5-flash'})!` });
+
+      try {
+        const testClient = new GoogleGenAI({ apiKey: activeKey.trim() });
+        const targetModel = model || 'gemini-3.8-flash';
+        const pingRes = await testClient.models.generateContent({
+          model: targetModel,
+          contents: 'Ping',
+        });
+        const latencyMs = Math.round(performance.now() - start);
+        return res.json({
+          success: true,
+          message: `Conexão bem-sucedida com Google Gemini (${targetModel}) em ${latencyMs}ms!`,
+          latencyMs,
+        });
+      } catch (geminiErr: any) {
+        const rawMsg = geminiErr?.message || String(geminiErr);
+        let userMessage = 'Chave de API do Gemini inválida ou não autorizada.';
+        if (rawMsg.includes('ACCESS_TOKEN_TYPE_UNSUPPORTED') || rawMsg.includes('API_KEY_SERVICE_BLOCKED') || rawMsg.includes('API key not valid')) {
+          userMessage = 'Chave de API do Gemini inválida ou não informada. Gere sua chave gratuita no Google AI Studio (https://aistudio.google.com/app/apikey) e cole no campo "Chave de API".';
+        } else if (rawMsg.includes('429') || rawMsg.includes('RESOURCE_EXHAUSTED')) {
+          userMessage = 'Limite temporário de requisições do Gemini atingido (Cota 429). Aguarde alguns segundos ou utilize outro provedor.';
+        } else if (rawMsg.includes('NOT_FOUND') || rawMsg.includes('404')) {
+          userMessage = `O modelo ${model || 'gemini-3.8-flash'} não foi localizado. Selecione gemini-3.8-flash ou gemini-3.1-flash-lite.`;
+        }
+        return res.status(400).json({
+          success: false,
+          error: userMessage,
+          rawError: rawMsg,
+        });
+      }
     }
 
     if (provider === 'anthropic') {
@@ -2123,8 +2167,9 @@ app.post('/api/llm/test-connection', async (req: Request, res: Response) => {
           messages: [{ role: 'user', content: 'Ping' }],
         }),
       });
+      const latencyMs = Math.round(performance.now() - start);
       if (testRes.ok) {
-        return res.json({ success: true, message: `Conexão estabelecida com sucesso com Anthropic (${model})!` });
+        return res.json({ success: true, message: `Conexão estabelecida com sucesso com Anthropic (${model}) em ${latencyMs}ms!`, latencyMs });
       } else {
         const errData: any = await testRes.json().catch(() => ({}));
         return res.status(400).json({ success: false, error: errData.error?.message || 'Chave Anthropic recusada.' });
@@ -2152,20 +2197,107 @@ app.post('/api/llm/test-connection', async (req: Request, res: Response) => {
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
       body: JSON.stringify({
-        model: model || 'gpt-4o',
+        model: model || (provider === 'deepseek' ? 'deepseek-chat' : provider === 'groq' ? 'llama-3.3-70b-versatile' : 'gpt-4o'),
         messages: [{ role: 'user', content: 'Ping' }],
         max_tokens: 5,
       }),
     });
 
+    const latencyMs = Math.round(performance.now() - start);
     if (openAiRes.ok) {
-      return res.json({ success: true, message: `Conexão autenticada e validada com ${provider.toUpperCase()} (${model})!` });
+      return res.json({ success: true, message: `Conexão autenticada e validada com ${provider.toUpperCase()} (${model}) em ${latencyMs}ms!`, latencyMs });
     } else {
       const errData: any = await openAiRes.json().catch(() => ({}));
-      return res.status(400).json({ success: false, error: errData.error?.message || `Falha na autenticação com ${provider}.` });
+      return res.status(400).json({ success: false, error: errData.error?.message || `Falha na autenticação com ${provider}. Verifique chave e endpoint.` });
     }
   } catch (err: any) {
     return res.status(500).json({ success: false, error: `Erro de rede ao conectar com o endpoint: ${err.message}` });
+  }
+});
+
+// =========================================================================
+// INTEGRAÇÃO COM HOME ASSISTANT
+// =========================================================================
+app.post('/api/integrations/homeassistant/test', async (req: Request, res: Response) => {
+  const { baseUrl, accessToken } = req.body;
+  if (!baseUrl) return res.status(400).json({ success: false, error: 'URL do Home Assistant obrigatória.' });
+
+  try {
+    const target = `${baseUrl.replace(/\/+$/, '')}/api/`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+
+    const resp = await fetch(target, {
+      headers: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
+
+    if (resp.ok) {
+      const data: any = await resp.json().catch(() => ({ message: 'API running.' }));
+      return res.json({ success: true, message: data.message || 'API do Home Assistant operacional!', version: '2026.x' });
+    } else {
+      return res.status(resp.status).json({ success: false, error: `Home Assistant retornou HTTP ${resp.status}. Verifique o token.` });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.name === 'AbortError' ? 'Tempo limite esgotado ao contatar Home Assistant' : (err.message || 'Falha de conexão') });
+  }
+});
+
+app.post('/api/integrations/homeassistant/states', async (req: Request, res: Response) => {
+  const { baseUrl, accessToken } = req.body;
+  if (!baseUrl) return res.status(400).json({ error: 'URL ausente' });
+
+  try {
+    const target = `${baseUrl.replace(/\/+$/, '')}/api/states`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+
+    const resp = await fetch(target, {
+      headers: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
+
+    if (resp.ok) {
+      const states = await resp.json();
+      return res.json({ states });
+    }
+    return res.status(resp.status).json({ error: 'Falha ao buscar estados do Home Assistant' });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/integrations/homeassistant/service', async (req: Request, res: Response) => {
+  const { baseUrl, accessToken, domain, service, entityId, serviceData = {} } = req.body;
+  if (!baseUrl || !domain || !service) {
+    return res.status(400).json({ error: 'Parâmetros incompletos para acionar serviço.' });
+  }
+
+  try {
+    const target = `${baseUrl.replace(/\/+$/, '')}/api/services/${domain}/${service}`;
+    const resp = await fetch(target, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({
+        entity_id: entityId,
+        ...serviceData,
+      }),
+    });
+
+    if (resp.ok) {
+      const result = await resp.json().catch(() => ({ success: true }));
+      return res.json({ success: true, result });
+    }
+    return res.status(resp.status).json({ error: `Home Assistant retornou status ${resp.status}` });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
   }
 });
 

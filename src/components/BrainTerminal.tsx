@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { NeuralHub } from './NeuralBrainCanvas';
 import { Ativo, DossieConsolidado } from '../types';
 import { FinancialEngineClient } from '../services/financialEngine';
+import { UniversalLLMService } from '../services/llmConfig';
 import {
   Brain,
   Mic,
@@ -169,6 +170,7 @@ export const BrainTerminal: React.FC<BrainTerminalProps> = ({
             ativo: ativoSelecionado.ticker,
             classe: ativoSelecionado.classe,
           },
+          llmConfig: UniversalLLMService.getInstance().getConfig(),
         }),
       });
 

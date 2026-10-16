@@ -436,13 +436,14 @@ export class AgentRegistryService {
     this.salvar();
   }
 
-  public updateAgent(id: string, updates: Partial<AgentDefinition>): void {
-    if (!this.agents[id]) return;
+  public updateAgent(id: string, updates: Partial<AgentDefinition>): AgentDefinition | undefined {
+    if (!this.agents[id]) return undefined;
     this.agents[id] = {
       ...this.agents[id],
       ...updates,
     };
     this.salvar();
+    return this.agents[id];
   }
 
   public deleteAgent(id: string): boolean {
@@ -845,6 +846,51 @@ Auditar quebra de suportes institucionais e variações intradiárias superiores
   }
 
   /**
+   * Calcula dinamicamente a intensidade dos dados para ditar a cor e o fluxo da sinapse
+   */
+  public calculateDataIntensity(data: any): { intensity: number; hex: number; label: string; volumeStr: string } {
+    let size = 0;
+    if (typeof data === 'string') size = data.length;
+    else if (data) size = JSON.stringify(data).length;
+
+    let intensity = 0.25;
+    let volumeStr = `${Math.round(size)} B`;
+    if (size > 10000) {
+      intensity = 0.95;
+      volumeStr = `${(size / 1024).toFixed(1)} KB (Carga Crítica)`;
+    } else if (size > 3000) {
+      intensity = 0.80;
+      volumeStr = `${(size / 1024).toFixed(1)} KB (Alta Densidade)`;
+    } else if (size > 500) {
+      intensity = 0.55;
+      volumeStr = `${(size / 1024).toFixed(1)} KB (Densidade Média)`;
+    } else {
+      intensity = 0.25;
+      volumeStr = `${size} B (Baixa Densidade)`;
+    }
+
+    // Cores de acordo com a intensidade dos dados:
+    // Baixa: Ciano Elétrico (0x00f5ff)
+    // Média: Âmbar Ouro (0xfacc15)
+    // Alta: Magenta Elétrico (0xd946ef)
+    // Pico / Crítica: Rubi Neon Flamejante (0xff0055)
+    let hex = 0x00f5ff;
+    let label = 'Baixa Densidade';
+    if (intensity >= 0.90) {
+      hex = 0xff0055;
+      label = 'Pico de Dados / Crítica (Rubi Neon)';
+    } else if (intensity >= 0.70) {
+      hex = 0xd946ef;
+      label = 'Alta Densidade (Magenta Elétrico)';
+    } else if (intensity >= 0.35) {
+      hex = 0xfacc15;
+      label = 'Média Densidade (Âmbar Ouro)';
+    }
+
+    return { intensity, hex, label, volumeStr };
+  }
+
+  /**
    * Conversa interativa viva em tempo real com a persona e inteligência deste agente
    */
   public async chatWithAgent(
@@ -862,6 +908,18 @@ Auditar quebra de suportes institucionais e variações intradiárias superiores
       throw new Error(`Agente ${agentId} não encontrado.`);
     }
 
+    const microService = MicroDatastoresService.getInstance();
+    const particao = microService.obterParticao(agent.targetDatabase);
+
+    // Mede intensidade dos dados de entrada
+    const inputIntensity = this.calculateDataIntensity({ message, history, partition: particao?.dados });
+
+    // Marca o agente em execução contínua com intensidade dos dados
+    this.updateAgent(agentId, {
+      isExecuting: true,
+      activeSynapseIntensity: inputIntensity.intensity,
+    });
+
     // 1. Sinalização Neural: Pulso de fótons viaja do cérebro pela medula espinhal até o agente no corpo
     this.emitNerveSignal({
       id: `sig-inv-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
@@ -869,15 +927,19 @@ Auditar quebra de suportes institucionais e variações intradiárias superiores
       agentName: agent.name,
       bodyPart: agent.bodyPart || 'torax_tronco',
       direction: 'BRAIN_TO_AGENT',
-      colorHex: 0x00f5ff, // Pulso de fótons azul/ciano da LLM para o agente
-      message: `Invocação da LLM -> [${agent.name}] (${BODY_PARTS_CONFIG[agent.bodyPart || 'torax_tronco']?.label || 'Corpo'})`,
+      colorHex: inputIntensity.hex,
+      intensity: inputIntensity.intensity,
+      intensityColorHex: inputIntensity.hex,
+      dataVolume: inputIntensity.volumeStr,
+      isContinuousExecuting: true,
+      message: `Invocação [${agent.name}] - Intensidade: ${inputIntensity.label} (${inputIntensity.volumeStr})`,
       timestamp: Date.now(),
     });
 
-    const microService = MicroDatastoresService.getInstance();
-    const particao = microService.obterParticao(agent.targetDatabase);
-
-    const universalConfig = UniversalLLMService.getInstance().getConfig();
+    // Usa IA dedicada do agente se configurada, senão usa a global
+    const effectiveLLMConfig = (agent.hasDedicatedLLM && agent.dedicatedLLMConfig)
+      ? { ...UniversalLLMService.getInstance().getConfig(), ...agent.dedicatedLLMConfig }
+      : UniversalLLMService.getInstance().getConfig();
 
     try {
       const res = await fetch('/api/agent/chat', {
@@ -888,29 +950,42 @@ Auditar quebra de suportes institucionais e variações intradiárias superiores
           message,
           history: history || [],
           partitionData: particao?.dados || null,
-          llmConfig: universalConfig,
+          llmConfig: effectiveLLMConfig,
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
+        const outputIntensity = this.calculateDataIntensity(data.resposta || '');
 
-        // 2. Sinalização Neural: Vesícula amarela viaja do agente de volta para a LLM no cérebro
+        // 2. Sinalização Neural: Vesícula viaja do agente de volta para a LLM no cérebro
         this.emitNerveSignal({
           id: `sig-ret-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
           agentId: agent.id,
           agentName: agent.name,
-          bodyPart: agent.bodyPart || 'coracao',
+          bodyPart: agent.bodyPart || 'torax_tronco',
           direction: 'AGENT_TO_BRAIN',
-          colorHex: 0xfacc15, // Amarelo do agente para a LLM
-          message: `Retorno do Agente [${agent.name}] -> LLM Central`,
+          colorHex: outputIntensity.hex,
+          intensity: outputIntensity.intensity,
+          intensityColorHex: outputIntensity.hex,
+          dataVolume: outputIntensity.volumeStr,
+          message: `Retorno [${agent.name}] -> Cérebro Central (${outputIntensity.volumeStr})`,
           timestamp: Date.now(),
         });
+
+        // Libera status de execução após transmissão
+        setTimeout(() => {
+          this.updateAgent(agentId, { isExecuting: false });
+        }, 2500);
 
         return data;
       }
     } catch (e) {
       console.warn(`[AgentRegistry] Erro ao comunicar com /api/agent/chat:`, e);
+    } finally {
+      setTimeout(() => {
+        this.updateAgent(agentId, { isExecuting: false });
+      }, 3000);
     }
 
     // Fallback local seguro
@@ -948,24 +1023,36 @@ Auditar quebra de suportes institucionais e variações intradiárias superiores
       throw new Error(`Agente com ID ${agentId} não encontrado no registro.`);
     }
 
-    this.updateAgent(agentId, { status: 'em_auditoria' });
+    const microService = MicroDatastoresService.getInstance();
+    const particao = microService.obterParticao(agent.targetDatabase);
 
-    // 1. Sinalização Neural: Pulso de fótons da LLM para o agente no corpo
+    const inputIntensity = this.calculateDataIntensity({ targetDatabase: agent.targetDatabase, partition: particao?.dados, customInput });
+
+    this.updateAgent(agentId, {
+      status: 'em_auditoria',
+      isExecuting: true,
+      activeSynapseIntensity: inputIntensity.intensity,
+    });
+
+    // 1. Sinalização Neural: Pulso com cor dinâmica de acordo com a intensidade dos dados
     this.emitNerveSignal({
       id: `sig-aud-inv-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       agentId: agent.id,
       agentName: agent.name,
       bodyPart: agent.bodyPart || 'torax_tronco',
       direction: 'BRAIN_TO_AGENT',
-      colorHex: 0x00f5ff, // Pulso azul/ciano
-      message: `Auditoria Invocada: LLM -> [${agent.name}]`,
+      colorHex: inputIntensity.hex,
+      intensity: inputIntensity.intensity,
+      intensityColorHex: inputIntensity.hex,
+      dataVolume: inputIntensity.volumeStr,
+      isContinuousExecuting: true,
+      message: `Auditoria Invocada: LLM -> [${agent.name}] (${inputIntensity.volumeStr})`,
       timestamp: Date.now(),
     });
 
-    // Obter dados do banco isolado associado
-    const microService = MicroDatastoresService.getInstance();
-    const particao = microService.obterParticao(agent.targetDatabase);
-    const universalConfig = UniversalLLMService.getInstance().getConfig();
+    const effectiveLLMConfig = (agent.hasDedicatedLLM && agent.dedicatedLLMConfig)
+      ? { ...UniversalLLMService.getInstance().getConfig(), ...agent.dedicatedLLMConfig }
+      : UniversalLLMService.getInstance().getConfig();
 
     try {
       const res = await fetch('/api/agent/audit', {
@@ -975,32 +1062,41 @@ Auditar quebra de suportes institucionais e variações intradiárias superiores
           agent,
           partitionData: particao?.dados || null,
           customInput,
-          llmConfig: universalConfig,
+          llmConfig: effectiveLLMConfig,
         }),
       });
 
       if (res.ok) {
         const auditResult = await res.json();
         const agora = auditResult.timestamp || new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+        const outputIntensity = this.calculateDataIntensity(auditResult);
 
         this.updateAgent(agentId, {
           status: auditResult.alertTriggered ? 'alerta' : 'ativo',
           lastAuditVerdict: auditResult.verdict,
           lastAuditDetails: auditResult.details,
           lastAuditDate: agora,
+          activeSynapseIntensity: outputIntensity.intensity,
         });
 
-        // 2. Sinalização Neural: Vesícula amarela de retorno para a LLM
+        // 2. Sinalização Neural: Vesícula com cor de intensidade de retorno para a LLM
         this.emitNerveSignal({
           id: `sig-aud-ret-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
           agentId: agent.id,
           agentName: agent.name,
-          bodyPart: agent.bodyPart || 'coracao',
+          bodyPart: agent.bodyPart || 'torax_tronco',
           direction: 'AGENT_TO_BRAIN',
-          colorHex: 0xfacc15, // Amarelo
-          message: `Veredito [${agent.name}]: ${auditResult.verdict} -> LLM Central`,
+          colorHex: outputIntensity.hex,
+          intensity: outputIntensity.intensity,
+          intensityColorHex: outputIntensity.hex,
+          dataVolume: outputIntensity.volumeStr,
+          message: `Veredito [${agent.name}]: ${auditResult.verdict} (${outputIntensity.volumeStr})`,
           timestamp: Date.now(),
         });
+
+        setTimeout(() => {
+          this.updateAgent(agentId, { isExecuting: false });
+        }, 2500);
 
         return {
           agentId,

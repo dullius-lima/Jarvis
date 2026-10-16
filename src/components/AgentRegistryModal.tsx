@@ -38,6 +38,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { InvestmentAgentStudioModal } from './InvestmentAgentStudioModal';
+import { AgentPromptBehaviorModal } from './AgentPromptBehaviorModal';
 
 interface AgentRegistryModalProps {
   isOpen: boolean;
@@ -46,6 +47,7 @@ interface AgentRegistryModalProps {
   onAutonomousAction?: (actions: any) => void;
   onAddMemory?: (mem: any) => void;
   onOpenCfoDecisions?: () => void;
+  onOpenPromptBehavior?: (agentId?: string) => void;
 }
 
 export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
@@ -55,6 +57,7 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
   onAutonomousAction,
   onAddMemory,
   onOpenCfoDecisions,
+  onOpenPromptBehavior,
 }) => {
   const agentService = AgentRegistryService.getInstance();
   const microService = MicroDatastoresService.getInstance();
@@ -64,6 +67,8 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
   const [editingAgent, setEditingAgent] = useState<AgentDefinition | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showStudioModal, setShowStudioModal] = useState(false);
+  const [showPromptBehaviorModal, setShowPromptBehaviorModal] = useState(false);
+  const [selectedPromptAgentId, setSelectedPromptAgentId] = useState<string | null>(null);
   const [runningAuditId, setRunningAuditId] = useState<string | null>(null);
   const [lastAuditResult, setLastAuditResult] = useState<AgentAuditResult | null>(null);
   const [selectedAgentForTerminal, setSelectedAgentForTerminal] = useState<AgentDefinition | null>(null);
@@ -507,6 +512,19 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Manual</span>
+            </button>
+
+            {/* Espaço de Prompt & Comportamento da IA */}
+            <button
+              onClick={() => {
+                if (onOpenPromptBehavior) onOpenPromptBehavior();
+                else setShowPromptBehaviorModal(true);
+              }}
+              className="px-3 py-2 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 text-purple-200 text-xs font-mono font-bold flex items-center justify-center gap-1.5 transition-all shadow-md shrink-0"
+              title="Escrever prompt e definir comportamento da IA para agentes"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+              <span>Prompt & IA</span>
             </button>
 
             <button
@@ -1335,6 +1353,19 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
                       <span className="hidden sm:inline">Lógica</span>
                     </button>
 
+                    {/* Botão Prompt & IA Dedicada */}
+                    <button
+                      onClick={() => {
+                        setSelectedPromptAgentId(agent.id);
+                        setShowPromptBehaviorModal(true);
+                      }}
+                      className="px-2.5 py-1.5 rounded-xl bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 text-purple-200 text-xs font-mono font-bold flex items-center gap-1.5 transition-all shadow-sm"
+                      title="Editar prompt de comportamento e escolher IA opcional dedicada para este agente"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                      <span className="hidden sm:inline">Prompt & IA</span>
+                    </button>
+
                     {/* Botão Executar Auditoria */}
                     <button
                       disabled={isRunning}
@@ -1669,6 +1700,18 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
         }}
         onTriggerSynapse={onTriggerSynapse}
         onAddMemory={onAddMemory}
+      />
+
+      {/* Espaço de Prompt Customizado & IA Dedicada para Agentes */}
+      <AgentPromptBehaviorModal
+        isOpen={showPromptBehaviorModal}
+        onClose={() => setShowPromptBehaviorModal(false)}
+        selectedAgentId={selectedPromptAgentId}
+        onSaved={(ag) => {
+          recarregar();
+          onTriggerSynapse(`Prompt e IA do agente [${ag.name}] salvos com sucesso.`);
+        }}
+        onTriggerSynapse={onTriggerSynapse}
       />
     </div>
   );

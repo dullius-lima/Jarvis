@@ -95,6 +95,11 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     onBodyPartInteractRef.current = onBodyPartInteract;
   }, [onBodyPartInteract]);
 
+  const agentsRef = useRef<AgentDefinition[]>(agents);
+  useEffect(() => {
+    agentsRef.current = agents || [];
+  }, [agents]);
+
   // Flash neural ao receber sinal no cérebro
   const corticalBurstRef = useRef<number>(0);
 
@@ -401,9 +406,9 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       const memGroup = new THREE.Group();
       memGroup.position.copy(memPos);
 
-      // Bioluminescência Ciano/Azul (NUNCA vermelho saindo da cabeça!)
+      // Cada memória salva registrada como uma bolinha vermelha dentro do cérebro (conforme solicitado!)
       const coreMat = new THREE.MeshBasicMaterial({
-        color: 0x00f5ff,
+        color: 0xef4444, // Bolinha vermelha bioluminescente
         transparent: true,
         opacity: 0.95,
       });
@@ -412,8 +417,22 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       memGroup.add(coreMesh);
       memoryMeshes.push(coreMesh);
 
-      const innerMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 });
+      const innerMat = new THREE.MeshBasicMaterial({
+        color: 0xff4d4d, // Núcleo brilhante vermelho escarlate
+        transparent: true,
+        opacity: 0.95,
+      });
       memGroup.add(new THREE.Mesh(axonKernelGeo, innerMat));
+
+      // Auréola bioluminescente vermelha ao redor da bolinha de memória
+      const haloGeo = new THREE.SphereGeometry(0.036, 8, 8);
+      const haloMat = new THREE.MeshBasicMaterial({
+        color: 0xdc2626,
+        transparent: true,
+        opacity: 0.35,
+        blending: THREE.AdditiveBlending,
+      });
+      memGroup.add(new THREE.Mesh(haloGeo, haloMat));
 
       brainGroup.add(memGroup);
 
@@ -798,50 +817,98 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       });
 
       // ANIMAÇÃO DE SINAIS NERVOSOS: TRAJETO COMPLETO PELA MEDULA ATÉ O CÉREBRO!
+      // Sinapse ativa em tempo real para todo agente de IA em execução, com cores baseadas na intensidade dos dados
       const currentSignal = activeSignalRef.current;
+      const currentAgents = agentsRef.current || [];
 
       bodyNerveEndings.forEach((ending) => {
         const isSignalForPart = currentSignal && currentSignal.bodyPart === ending.bodyPartId;
+        const executingAgentForPart = currentAgents.find(
+          (a) => (a.bodyPart === ending.bodyPartId || (!a.bodyPart && ending.bodyPartId === 'torax_tronco')) && (a.isExecuting || a.status === 'em_auditoria')
+        );
 
-        // Rotação suave do anel orbital
+        const isActive = isSignalForPart || Boolean(executingAgentForPart);
+
+        // Determinar a Cor da Sinapse de acordo com a Intensidade dos Dados:
+        // Baixa (< 0.35): Ciano Elétrico (0x00f5ff)
+        // Média (0.35 a 0.70): Âmbar Ouro (0xfacc15)
+        // Alta (0.70 a 0.90): Magenta Elétrico (0xd946ef)
+        // Crítica / Pico (> 0.90): Rubi Neon / Vermelho Flamejante (0xff0055)
+        let activeSynapseColor = 0xfacc15;
+        let dataIntensity = 0.5;
+
+        if (currentSignal?.intensityColorHex) {
+          activeSynapseColor = currentSignal.intensityColorHex;
+          dataIntensity = currentSignal.intensity ?? 0.5;
+        } else if (currentSignal?.colorHex) {
+          activeSynapseColor = currentSignal.colorHex;
+        } else if (executingAgentForPart) {
+          dataIntensity = executingAgentForPart.activeSynapseIntensity ?? 0.75;
+          if (dataIntensity >= 0.90) activeSynapseColor = 0xff0055;
+          else if (dataIntensity >= 0.70) activeSynapseColor = 0xd946ef;
+          else if (dataIntensity >= 0.35) activeSynapseColor = 0xfacc15;
+          else activeSynapseColor = 0x00f5ff;
+        }
+
+        // Rotação suave do anel orbital do soquete do agente
         if (ending.socketHaloMesh && ending.agent) {
           ending.socketHaloMesh.rotation.z += 0.02;
           const hMat = ending.socketHaloMesh.material as THREE.MeshBasicMaterial;
-          hMat.opacity = isSignalForPart ? 0.95 : 0.35 + Math.sin(elapsedTime * 2.5) * 0.15;
+          if (isActive) {
+            hMat.color.setHex(activeSynapseColor);
+            hMat.opacity = 0.95;
+          } else {
+            hMat.opacity = 0.35 + Math.sin(elapsedTime * 2.5) * 0.15;
+          }
         }
 
-        // 1. Fótons Ciano: CÉREBRO (1.0) -> DESCENDE PELA MEDULA ESPINHAL -> AGENTE (0.0)
+        // Atualizar cor e luminescência do tubo nervoso de acordo com a intensidade
+        if (ending.nerveTubeMesh) {
+          const nerveMat = ending.nerveTubeMesh.material as THREE.MeshBasicMaterial;
+          if (isActive) {
+            nerveMat.color.setHex(activeSynapseColor);
+            nerveMat.opacity = 0.55 + Math.sin(elapsedTime * 4.0) * 0.25;
+          } else {
+            nerveMat.color.setHex(0x0284c7);
+            nerveMat.opacity = 0.16;
+          }
+        }
+
+        // 1. Fótons Cerebrais Descendentes: CÉREBRO (1.0) -> MEDULA -> AGENTE (0.0)
         const isPhotonActive = isSignalForPart && currentSignal.direction === 'BRAIN_TO_AGENT';
         ending.brainToAgentPhotons.forEach((r) => {
           if (isPhotonActive) {
             r.progress += r.speed * delta;
             if (r.progress > 1.0) r.progress = 0.0;
-            // Desce do cérebro (1.0) pela medula espinhal para o agente (0.0)
             const pt = ending.fullPathCurve.getPoint(1.0 - r.progress);
             r.mesh.position.copy(pt);
+            (r.mesh.material as THREE.MeshBasicMaterial).color.setHex(activeSynapseColor);
             (r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95;
-            // Ilumina a medula espinhal durante a descida
-            spinalLight.intensity = 2.2 + Math.sin(r.progress * Math.PI) * 1.5;
+            spinalLight.intensity = 2.4 + Math.sin(r.progress * Math.PI) * 1.8;
           } else {
             (r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0;
           }
         });
 
-        // 2. Vesícula Dourada: AGENTE (0.0) -> PASSA PELA MEDULA -> SOBE ATÉ O CÉREBRO (1.0)!
-        const isYellowActive = isSignalForPart && currentSignal.direction === 'AGENT_TO_BRAIN';
-        if (isYellowActive) {
-          ending.yellowVesicle.progress += ending.yellowVesicle.speed * delta;
+        // 2. Vesícula Sináptica Ascendente: AGENTE (0.0) -> MEDULA -> CÉREBRO (1.0)!
+        const isAscendingActive = (isSignalForPart && currentSignal.direction === 'AGENT_TO_BRAIN') || Boolean(executingAgentForPart);
+        if (isAscendingActive) {
+          const speedMultiplier = 1.0 + dataIntensity * 1.5;
+          ending.yellowVesicle.progress += ending.yellowVesicle.speed * speedMultiplier * delta;
           if (ending.yellowVesicle.progress > 1.0) {
             ending.yellowVesicle.progress = 0.0;
-            // Ao chegar ao cérebro (1.0), dispara burst cortical bioluminescente!
+            // Ao alcançar o cérebro (1.0), dispara burst cortical bioluminescente na cor da intensidade!
             corticalBurstRef.current = 1.0;
+            cranialLight.color.setHex(activeSynapseColor);
           }
-          // Sobe do agente (0.0), entra na medula, sobe a coluna e chega ao cérebro (1.0)
           const pt = ending.fullPathCurve.getPoint(ending.yellowVesicle.progress);
           ending.yellowVesicle.mesh.position.copy(pt);
-          (ending.yellowVesicle.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95;
-          // Ilumina a medula durante a subida
-          spinalLight.intensity = 2.2 + Math.sin(ending.yellowVesicle.progress * Math.PI) * 1.5;
+          const vesMat = ending.yellowVesicle.mesh.material as THREE.MeshBasicMaterial;
+          vesMat.color.setHex(activeSynapseColor);
+          vesMat.opacity = 0.98;
+          // Ilumina a medula espinhal durante o fluxo de dados
+          spinalLight.intensity = 2.4 + Math.sin(ending.yellowVesicle.progress * Math.PI) * 2.0;
+          spinalLight.color.setHex(activeSynapseColor);
         } else {
           (ending.yellowVesicle.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0;
         }

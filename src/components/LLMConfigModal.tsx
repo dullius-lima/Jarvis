@@ -285,7 +285,7 @@ export const LLMConfigModal: React.FC<LLMConfigModalProps> = ({
                   type="text"
                   value={config.model}
                   onChange={(e) => setConfig({ ...config, model: e.target.value })}
-                  placeholder="Ex: gemini-2.5-flash, claude-3-7-sonnet..."
+                  placeholder="Ex: gemini-3.8-flash, claude-3-5-sonnet, gpt-4o..."
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-cyan-500 outline-none"
                 />
               </div>

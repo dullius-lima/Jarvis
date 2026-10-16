@@ -6,6 +6,9 @@ import { MicroDatastoresModal } from './components/MicroDatastoresModal';
 import { AgentRegistryModal } from './components/AgentRegistryModal';
 import { LLMConfigModal } from './components/LLMConfigModal';
 import { CfoDecisionsModal } from './components/CfoDecisionsModal';
+import { HomeAssistantModal } from './components/HomeAssistantModal';
+import { AgentPromptBehaviorModal } from './components/AgentPromptBehaviorModal';
+import { GoogleWorkspaceModal } from './components/GoogleWorkspaceModal';
 import { AuthLockScreen } from './components/AuthLockScreen';
 import { SecuritySettingsModal } from './components/SecuritySettingsModal';
 import { authService } from './services/authService';
@@ -57,6 +60,7 @@ import {
   ExternalLink,
   RefreshCw,
   CheckCircle2,
+  FolderOpen,
 } from 'lucide-react';
 import { ApiSyncService, MultiApiSyncReport } from './services/apiSyncService';
 
@@ -144,10 +148,8 @@ export default function App() {
               r * Math.cos(phi) * 0.85,
             ];
           }
-          // Garante cor azul/ciano bioluminescente (elimina nós vermelhos flutuando acima da cabeça)
-          if (m.color === 0xef4444 || !m.color) {
-            m.color = 0x00f5ff;
-          }
+          // Cada memória salva registrada como uma bolinha vermelha (conforme solicitado pelo usuário!)
+          m.color = 0xef4444;
           return m;
         });
       return limpas;
@@ -199,6 +201,10 @@ export default function App() {
   const [databaseExplainerOpen, setDatabaseExplainerOpen] = useState<boolean>(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState<boolean>(false);
   const [cfoDecisionsModalOpen, setCfoDecisionsModalOpen] = useState<boolean>(false);
+  const [homeAssistantModalOpen, setHomeAssistantModalOpen] = useState<boolean>(false);
+  const [promptBehaviorModalOpen, setPromptBehaviorModalOpen] = useState<boolean>(false);
+  const [promptBehaviorAgentId, setPromptBehaviorAgentId] = useState<string | null>(null);
+  const [workspaceModalOpen, setWorkspaceModalOpen] = useState<boolean>(false);
 
   // Modo TV & Dispositivos
   const [tvMode, setTvMode] = useState<boolean>(false);
@@ -439,7 +445,7 @@ export default function App() {
         user: 'LLM Autônoma (Controle Somático)',
         timestamp: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
         importance: 'alta',
-        color: 0x00f5ff,
+        color: 0xef4444,
         sentiment: 'analitico_racional',
         isAutonomousLLM: true,
         tokenPreservation: {
@@ -478,7 +484,7 @@ export default function App() {
       coords,
       firing: true,
       connectionsCount: Math.floor(4 + Math.random() * 8),
-      color: mem.color && mem.color !== 0xef4444 ? mem.color : 0x00f5ff, // Bioluminescência Ciano/Azul (NUNCA vermelho na cabeça)
+      color: 0xef4444, // Cada memória salva registrada como uma bolinha vermelha no cérebro
     };
 
     setMemories((prev) => [nova, ...prev]);
@@ -1221,7 +1227,52 @@ export default function App() {
             <Cpu className="w-4 h-4 text-purple-400 shrink-0" />
             <div>
               <div className="font-bold text-slate-100">Motor de LLM Universal</div>
-              <div className="text-[10px] text-slate-400">Gemini, Claude, GPT, Ollama</div>
+              <div className="text-[10px] text-slate-400">Gemini, Claude, GPT, DeepSeek, Groq</div>
+            </div>
+          </button>
+
+          {/* Opção Espaço de Prompt & Comportamento da IA */}
+          <button
+            onClick={() => {
+              setPromptBehaviorModalOpen(true);
+              setSystemMenuExpanded(false);
+            }}
+            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
+          >
+            <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
+            <div>
+              <div className="font-bold text-slate-100">Prompt & Comportamento do Agente</div>
+              <div className="text-[10px] text-slate-400">Escreva regras e escolha a melhor IA por agente</div>
+            </div>
+          </button>
+
+          {/* Opção Home Assistant */}
+          <button
+            onClick={() => {
+              setHomeAssistantModalOpen(true);
+              setSystemMenuExpanded(false);
+            }}
+            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
+          >
+            <Database className="w-4 h-4 text-emerald-400 shrink-0" />
+            <div>
+              <div className="font-bold text-slate-100">Espaço Home Assistant</div>
+              <div className="text-[10px] text-slate-400">Automação residencial, luzes e sensores</div>
+            </div>
+          </button>
+
+          {/* Opção Google Workspace */}
+          <button
+            onClick={() => {
+              setWorkspaceModalOpen(true);
+              setSystemMenuExpanded(false);
+            }}
+            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
+          >
+            <FolderOpen className="w-4 h-4 text-blue-400 shrink-0" />
+            <div>
+              <div className="font-bold text-slate-100">Google Workspace</div>
+              <div className="text-[10px] text-slate-400">Google Sheets, Drive, Agenda e Gmail</div>
             </div>
           </button>
 
@@ -1482,6 +1533,32 @@ export default function App() {
       <SecuritySettingsModal
         isOpen={securityModalOpen}
         onClose={() => setSecurityModalOpen(false)}
+      />
+
+      {/* Modal: Espaço de Conexão com o Home Assistant */}
+      <HomeAssistantModal
+        isOpen={homeAssistantModalOpen}
+        onClose={() => setHomeAssistantModalOpen(false)}
+        onTriggerSynapse={(label) => dispararSinapsePontual(null, label)}
+      />
+
+      {/* Modal: Espaço para Escrever Prompt do Agente & Escolha da Melhor IA Opcional */}
+      <AgentPromptBehaviorModal
+        isOpen={promptBehaviorModalOpen}
+        onClose={() => setPromptBehaviorModalOpen(false)}
+        selectedAgentId={promptBehaviorAgentId}
+        onSaved={(ag) => {
+          setAgentsList(agentService.listAgents());
+          dispararSinapsePontual(null, `Prompt do Agente [${ag.name}] atualizado`);
+        }}
+        onTriggerSynapse={(label) => dispararSinapsePontual(null, label)}
+      />
+
+      {/* Modal: Google Workspace (Sheets, Drive, Calendar e Gmail) */}
+      <GoogleWorkspaceModal
+        isOpen={workspaceModalOpen}
+        onClose={() => setWorkspaceModalOpen(false)}
+        onTriggerSynapse={(label) => dispararSinapsePontual(null, label)}
       />
     </div>
   );

@@ -21,14 +21,14 @@ export const SUPPORTED_PROVIDERS: ProviderDefinition[] = [
     name: 'Google Gemini',
     company: 'Google DeepMind',
     description: 'Motor nativo de alta velocidade com raciocínio multimodal e grounding de dados.',
-    defaultModel: 'gemini-2.5-flash',
+    defaultModel: 'gemini-3.8-flash',
     models: [
-      'gemini-2.5-flash',
-      'gemini-2.5-pro',
-      'gemini-1.5-flash',
-      'gemini-1.5-pro',
+      'gemini-3.8-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-4-argon',
+      'gemini-flash-latest',
     ],
-    requiresApiKey: false, // Pode usar a chave já provida pelo ambiente ou uma personalizada
+    requiresApiKey: true,
     docsUrl: 'https://aistudio.google.com/app/apikey',
   },
   {
@@ -128,7 +128,7 @@ export const SUPPORTED_PROVIDERS: ProviderDefinition[] = [
 const DEFAULT_CONFIG: LLMProviderConfig = {
   provider: 'gemini',
   apiKey: '',
-  model: 'gemini-2.5-flash',
+  model: 'gemini-3.8-flash',
   temperature: 0.2,
   maxTokens: 2048,
   providerKeys: {},
@@ -173,6 +173,13 @@ export class UniversalLLMService {
           providerKeys: { ...this.providerKeys, ...(parsedConfig.providerKeys || {}) },
           providerEndpoints: { ...this.providerEndpoints, ...(parsedConfig.providerEndpoints || {}) },
         };
+
+        // Migração suave de modelos descontinuados ou incorretos
+        if (this.config.provider === 'gemini') {
+          if (!this.config.model || this.config.model.includes('1.5') || this.config.model.includes('2.5') || this.config.model.includes('2.0')) {
+            this.config.model = 'gemini-3.8-flash';
+          }
+        }
       } else {
         this.config = {
           ...DEFAULT_CONFIG,
