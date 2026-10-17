@@ -11,6 +11,7 @@ import { AgentPromptBehaviorModal } from './components/AgentPromptBehaviorModal'
 import { GoogleWorkspaceModal } from './components/GoogleWorkspaceModal';
 import { AuthLockScreen } from './components/AuthLockScreen';
 import { SecuritySettingsModal } from './components/SecuritySettingsModal';
+import { N8nNeuralStudioModal } from './components/N8nNeuralStudioModal';
 import { authService } from './services/authService';
 import { cfoDecisionService } from './services/cfoDecisionService';
 import { INITIAL_SYNAPSE_MEMORIES } from './data/synapseMemories';
@@ -205,6 +206,7 @@ export default function App() {
   const [promptBehaviorModalOpen, setPromptBehaviorModalOpen] = useState<boolean>(false);
   const [promptBehaviorAgentId, setPromptBehaviorAgentId] = useState<string | null>(null);
   const [workspaceModalOpen, setWorkspaceModalOpen] = useState<boolean>(false);
+  const [n8nStudioModalOpen, setN8nStudioModalOpen] = useState<boolean>(false);
 
   // Modo TV & Dispositivos
   const [tvMode, setTvMode] = useState<boolean>(false);
@@ -1129,8 +1131,19 @@ export default function App() {
           </button>
         </form>
 
-        {/* 3. Ícone de Ferramenta para Acessar as Funções & Criação de Agente em Outra HTML */}
+        {/* 3. Ações Rápidas: N8N Neural Studio & Ferramentas */}
         <div className="flex items-center gap-2 shrink-0">
+          {/* Botão N8N Neural Studio (Oracle VM & Grafo) */}
+          <button
+            type="button"
+            onClick={() => setN8nStudioModalOpen(true)}
+            className="px-3 py-2 rounded-2xl bg-gradient-to-r from-cyan-600/20 via-sky-500/20 to-blue-600/30 hover:from-cyan-500/30 hover:to-blue-500/40 border border-cyan-500/50 hover:border-cyan-400 text-cyan-300 transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5 text-xs font-mono font-bold"
+            title="Abrir Studio n8n Neural (Oracle Cloud VM, Biometria & Grafo de Nós)"
+          >
+            <Layers className="w-4 h-4 text-cyan-400" />
+            <span className="hidden md:inline">n8n Studio</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setSystemMenuExpanded(!systemMenuExpanded)}
@@ -1184,6 +1197,26 @@ export default function App() {
               </div>
             </div>
             <span className="text-[10px] bg-slate-950 text-cyan-300 px-2 py-0.5 rounded-full font-bold">HTML</span>
+          </button>
+
+          {/* Opção N8N Neural Studio & Grafo de Nós (Oracle VM) */}
+          <button
+            onClick={() => {
+              setN8nStudioModalOpen(true);
+              setSystemMenuExpanded(false);
+            }}
+            className="w-full p-2.5 rounded-xl bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-500/40 text-left transition-colors flex items-center justify-between text-cyan-200"
+          >
+            <div className="flex items-center gap-2.5">
+              <Layers className="w-4 h-4 text-cyan-400 shrink-0" />
+              <div>
+                <div className="font-bold text-white">N8N Neural Studio (Oracle VM)</div>
+                <div className="text-[10px] text-cyan-300/80">Grafo de 5 camadas, Biometria, RAG & Deploy</div>
+              </div>
+            </div>
+            <span className="text-[9px] bg-cyan-950 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded-full font-bold">
+              OCI
+            </span>
           </button>
 
           {/* Opção Ficheiro Interno */}
@@ -1558,6 +1591,13 @@ export default function App() {
       <GoogleWorkspaceModal
         isOpen={workspaceModalOpen}
         onClose={() => setWorkspaceModalOpen(false)}
+        onTriggerSynapse={(label) => dispararSinapsePontual(null, label)}
+      />
+
+      {/* Modal: N8N Neural Studio (Oracle Cloud VM, Biometria & Grafo de Nós) */}
+      <N8nNeuralStudioModal
+        isOpen={n8nStudioModalOpen}
+        onClose={() => setN8nStudioModalOpen(false)}
         onTriggerSynapse={(label) => dispararSinapsePontual(null, label)}
       />
     </div>
