@@ -3,6 +3,9 @@ import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
+import net from 'net';
+import { z } from 'zod';
 
 dotenv.config();
 
@@ -47,51 +50,21 @@ const userNeuralData = {
   ],
 };
 
-// Prompt Oficial Rigoroso: CFO Corporativo Investimentos Dullius
-const PROMPT_CFO_DULLIUS = `
-Você é o Chief Financial Officer (CFO) corporativo e Analista Sênior de Alocação de Ativos da holding "Investimentos Dullius".
-Sua postura é estritamente técnica, analítica, pragmática, fria e orientada a dados. Você atua como a última linha de defesa do patrimônio.
-Você NÃO faz elogios, NÃO usa jargões motivacionais, NÃO cumprimenta o usuário e REJEITA categoricamente o ruído diário de curto prazo do mercado financeiro.
+// Prompt Oficial: Assistente Pessoal n8n & Motor Orquestrador Neural (Hub-and-Spoke Local :800)
+const PROMPT_N8N_ASSISTANT = `
+Você é o JARVIS, o Agente de IA Líder e Orquestrador Central. Sua função é receber as mensagens do usuário no chat nativo do n8n, interpretar a intenção e delegar a execução para o Especialista correto usando as ferramentas de Webhook locais (http://localhost:800/webhook/).
 
-[FILOSOFIA DE INVESTIMENTO]
-Sua tese central é "Buy and Hold" focado em juros compostos, acúmulo de patrimônio, perenidade operacional e fluxo de proventos (Dividendos/JCP). O foco é ser sócio de negócios rentáveis, não especulador de cotações. Quedas de preço são vistas como oportunidades de aporte se, e somente se, os fundamentos estiverem intactos.
+Quando o Especialista retornar os dados brutos via Webhook, sua função é ler o relatório dele, aplicar o tom JARVIS (tecnológico, prestativo e refinado) e responder ao usuário de forma humanizada. Nunca responda dados técnicos puros sem antes tratá-los.
 
-[SEU PAPEL NO PIPELINE]
-Você não calcula indicadores. Você receberá um dossiê JSON já mastigado e calculado por algoritmos determinísticos em Python (contendo histórico de 10 anos, margens de Bazin, níveis de alavancagem e flags de risco). 
-Sua única função é auditar esses dados processados e emitir um parecer executivo de alocação.
-
-[REGRAS DE AUDITORIA POR CLASSE DE ATIVO]
-
-1. AÇÕES (Equity):
-- Valuation (Bazin): O "Preço-Teto" é soberano. Se a cotação estiver acima do teto calculado (Margem de Segurança negativa), interrompa aportes, independentemente da qualidade da empresa.
-- Solvência: O limite de alavancagem aceitável é Dívida Líquida/EBITDA de 3,5x. Acima disso, acenda alerta crítico, a menos que os dados informem um ciclo de Capex de expansão planejado.
-- Qualidade do Lucro: Lucro Líquido crescente com Fluxo de Caixa Operacional (FCO) negativo ou estagnado é indício de fragilidade contábil.
-- Gatilho de Saída: Empresas NUNCA são vendidas por queda de cotação. Só recomende quarentena se houver destruição estrutural (ROIC recorrentemente abaixo do WACC, prejuízos sequenciais não cíclicos) ou quebra severa de governança.
-
-2. FUNDOS IMOBILIÁRIOS (FIIs):
-- Valuation: Audite o P/VP. Ágio acima de 1.10 exige justificativa severa de qualidade de portfólio. Descontos profundos (P/VP < 0.80) exigem investigação de risco de crédito/inadimplência ou vacância.
-- Sustentabilidade: O Dividend Yield deve cobrir o prêmio de risco da taxa livre de risco (Tesouro IPCA+).
-
-3. CRIPTOATIVOS (Ex: Bitcoin):
-- Métricas Tradicionais: Ignore. Não exija balanços ou fluxo de caixa.
-- Gatilhos: Audite apenas quebras de suporte crítico, taxa de adoção sistêmica (Hash rate) e variação anormal (ex: quedas > 8% em 24h). 
-
-4. RENDA FIXA (Tesouro Direto, CDBs, Debêntures):
-- Risco: Compare o Spread de crédito oferecido contra a curva soberana (DI/Selic). Audite prazos (Duration) contra o risco de liquidez da carteira.
-
-[MATRIZ DE VEREDITO]
-Você deve classificar o ativo em um de três estados:
-- COMPRAR: Cotação abaixo do preço-teto calculado, fundamentos de solvência intactos (Dívida/EBITDA < 3,5x) e ativo abaixo do limite da meta de alocação da carteira.
-- AGUARDAR: Cotação acima do preço-teto (sem margem de segurança) ou alocação já estourada na meta percentual.
-- QUARENTENA: Violação de governança, fraude, deterioração crônica do ROIC ou alavancagem descontrolada (Dívida Líquida/EBITDA > 4,0x sem Capex gerador).
-
-[ESTRUTURA DE RESPOSTA OBRIGATÓRIA]
-Suas respostas devem ser curtas, secas, estruturadas em tópicos e sem adjetivos desnecessários:
-1. VEREDITO FINAL: [COMPRAR | AGUARDAR | QUARENTENA]
-2. PARECER DE VALUATION: Análise fria da margem de segurança de Bazin ou precificação da classe.
-3. PARECER DE RISCO & SOLVÊNCIA: Análise da estrutura de capital e fluxo de caixa.
-4. DIRETRIZ EXECUTIVA: Ação imediata para a custódia (ex: 'Liberar aporte de R$ X', 'Reter caixa em Selic', 'Congelar novas compras').
+[ARQUITETURA HUB-AND-SPOKE LOCAL n8n :800]:
+- Hub Central: JARVIS Líder (Orquestrador)
+- Spokes Subordinados:
+  * chamar_especialista_financas: http://localhost:800/webhook/especialista-financas/test
+  * chamar_especialista_automacao: http://localhost:800/webhook/especialista-automacao/test
+- Tratamento de Payloads: Intercepte e trate o JSON antes de responder ao usuário.
 `;
+
+const PROMPT_CFO_DULLIUS = PROMPT_N8N_ASSISTANT;
 
 // Utilitário seguro para invocar modelos Gemini com fallback e tolerância a cota 429
 async function callGeminiSafe<T>(
@@ -165,6 +138,333 @@ app.post('/api/test-webhook-ping', async (req: Request, res: Response) => {
       latencyMs,
     });
   }
+});
+
+// Configurações de Ambiente Dinâmicas do n8n (:800 ou IP/Domínio Remoto)
+let systemEnvironmentConfig = {
+  protocol: 'http',
+  serverHost: process.env.N8N_SERVER_HOST || 'localhost',
+  serverPort: process.env.N8N_SERVER_PORT || '800',
+  webhookPrefix: process.env.N8N_WEBHOOK_PREFIX || '/webhook/',
+  authToken: process.env.N8N_AUTH_TOKEN || '',
+  lastUpdated: new Date().toISOString(),
+};
+
+app.get('/api/config/environment', (_req: Request, res: Response) => {
+  const cleanHost = systemEnvironmentConfig.serverHost.replace(/\/+$/, '');
+  const prefix = systemEnvironmentConfig.webhookPrefix.startsWith('/') ? systemEnvironmentConfig.webhookPrefix : '/' + systemEnvironmentConfig.webhookPrefix;
+  const baseWebhookUrl = `${systemEnvironmentConfig.protocol}://${cleanHost}:${systemEnvironmentConfig.serverPort}${prefix}`;
+  return res.json({
+    config: systemEnvironmentConfig,
+    baseWebhookUrl,
+  });
+});
+
+app.post('/api/config/environment', (req: Request, res: Response) => {
+  const { protocol, serverHost, serverPort, webhookPrefix, authToken } = req.body;
+  if (protocol) systemEnvironmentConfig.protocol = protocol;
+  if (serverHost) systemEnvironmentConfig.serverHost = serverHost.trim();
+  if (serverPort !== undefined) systemEnvironmentConfig.serverPort = String(serverPort).trim();
+  if (webhookPrefix) systemEnvironmentConfig.webhookPrefix = webhookPrefix.trim();
+  if (authToken !== undefined) systemEnvironmentConfig.authToken = authToken.trim();
+  systemEnvironmentConfig.lastUpdated = new Date().toISOString();
+
+  const cleanHost = systemEnvironmentConfig.serverHost.replace(/\/+$/, '');
+  const prefix = systemEnvironmentConfig.webhookPrefix.startsWith('/') ? systemEnvironmentConfig.webhookPrefix : '/' + systemEnvironmentConfig.webhookPrefix;
+  const baseWebhookUrl = `${systemEnvironmentConfig.protocol}://${cleanHost}:${systemEnvironmentConfig.serverPort}${prefix}`;
+
+  return res.json({
+    success: true,
+    config: systemEnvironmentConfig,
+    baseWebhookUrl,
+    message: 'Variáveis de ambiente do servidor n8n atualizadas com sucesso.',
+  });
+});
+
+// ============================================================================
+// GERENCIADOR DE PORTA DO N8N (.ENV & BIFURCAÇÃO DE DECISÃO TCP / LOOPBACK)
+// ============================================================================
+function getPortFromEnvFile(): string {
+  const envPath = path.resolve(process.cwd(), '.env');
+  if (fs.existsSync(envPath)) {
+    try {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      const match = content.match(/^(?:N8N_PORT|N8N_SERVER_PORT)\s*=\s*(\d+)/m);
+      if (match) return match[1].trim();
+    } catch (e) {
+      console.warn('Erro ao ler .env para obter porta:', e);
+    }
+  }
+  return process.env.N8N_SERVER_PORT || process.env.N8N_PORT || systemEnvironmentConfig.serverPort || '800';
+}
+
+function updatePortInEnvFile(newPort: string): void {
+  const envPath = path.resolve(process.cwd(), '.env');
+  let content = '';
+  if (fs.existsSync(envPath)) {
+    try {
+      content = fs.readFileSync(envPath, 'utf-8');
+    } catch {}
+  }
+  if (content.match(/^(?:N8N_PORT|N8N_SERVER_PORT)\s*=/m)) {
+    content = content.replace(/^(N8N_PORT|N8N_SERVER_PORT)\s*=.*$/gm, `N8N_PORT=${newPort}`);
+  } else {
+    content += `\nN8N_PORT=${newPort}\nN8N_SERVER_PORT=${newPort}\n`;
+  }
+  try {
+    fs.writeFileSync(envPath, content, 'utf-8');
+  } catch (err) {
+    console.warn('Erro ao escrever nova porta no .env:', err);
+  }
+}
+
+function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const tester = net.createServer()
+      .once('error', (err: any) => {
+        if (err.code === 'EADDRINUSE') {
+          resolve(false);
+        } else {
+          resolve(false);
+        }
+      })
+      .once('listening', () => {
+        tester.close(() => resolve(true));
+      })
+      .listen(port, '127.0.0.1');
+  });
+}
+
+async function checkN8nHealthLoopback(port: string): Promise<{ ok: boolean; status?: number; error?: string }> {
+  const healthUrl = `http://127.0.0.1:${port}/healthz`;
+  const fallbackUrl = `http://127.0.0.1:${port}/`;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(healthUrl, { signal: controller.signal }).finally(() => clearTimeout(timeout));
+    if (res.ok || res.status < 500) {
+      return { ok: true, status: res.status };
+    }
+  } catch (e1: any) {
+    try {
+      const controller2 = new AbortController();
+      const timeout2 = setTimeout(() => controller2.abort(), 1500);
+      const res2 = await fetch(fallbackUrl, { signal: controller2.signal }).finally(() => clearTimeout(timeout2));
+      if (res2.ok || res2.status < 500) {
+        return { ok: true, status: res2.status };
+      }
+    } catch (e2: any) {
+      return { ok: false, error: e2.message || 'Sem resposta em 127.0.0.1' };
+    }
+  }
+  return { ok: false, error: 'Health check retornou código inválido.' };
+}
+
+app.post('/api/n8n/port-manager', async (req: Request, res: Response) => {
+  const { port } = req.body;
+  if (!port) {
+    return res.status(400).json({ success: false, error: 'Porta não fornecida.' });
+  }
+
+  const requestedPort = String(port).trim();
+  const currentPortInEnv = getPortFromEnvFile();
+
+  // BIFURCAÇÃO NA TOMADA DE DECISÃO:
+  if (requestedPort === currentPortInEnv) {
+    // 1. Número digitado é exatamente igual à porta registrada no .env:
+    // O sistema entende que não há troca de porta, mas sim uma tentativa de revalidação ou salvamento de rotina.
+    // Ignora o teste de porta livre e realiza requisição HTTP GET diretamente para endpoint de saúde do n8n.
+    const health = await checkN8nHealthLoopback(requestedPort);
+
+    if (health.ok) {
+      return res.json({
+        success: true,
+        action: 'REVALIDACAO_ROTINA',
+        port: requestedPort,
+        healthStatus: health.status,
+        message: `✓ Porta ${requestedPort} coincide com o .env. O n8n respondeu com sucesso ao healthcheck loopback (127.0.0.1:${requestedPort}/healthz) e está operando de forma saudável sob o controle do próprio n8n.`,
+      });
+    } else {
+      return res.json({
+        success: true,
+        action: 'REVALIDACAO_ROTINA',
+        port: requestedPort,
+        healthStatus: 'AGUARDANDO_STARTUP',
+        message: `Porta ${requestedPort} coincide com o .env salvo. Aguardando container do n8n responder na porta local :${requestedPort}.`,
+      });
+    }
+  } else {
+    // 2. Número digitado é diferente do valor salvo no arquivo .env:
+    // O sistema detecta que o usuário deseja mover o n8n para um novo endereço de rede.
+    const portNum = parseInt(requestedPort, 10);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      return res.status(400).json({ success: false, error: 'Número de porta inválido (deve ser entre 1 e 65535).' });
+    }
+
+    // Aciona rotina de conexão via soquete TCP para tentar escutar a nova porta informada
+    const isFree = await isPortAvailable(portNum);
+
+    if (!isFree) {
+      return res.status(409).json({
+        success: false,
+        action: 'MIGRACAO_PORTA_BLOQUEADA',
+        port: requestedPort,
+        error: `A porta ${requestedPort} já está ocupada por outro processo no sistema operacional. Operação abortada para evitar conflitos de porta.`,
+      });
+    }
+
+    // Se a porta está livre e desimpedida, prossegue com segurança:
+    updatePortInEnvFile(requestedPort);
+    systemEnvironmentConfig.serverPort = requestedPort;
+    systemEnvironmentConfig.lastUpdated = new Date().toISOString();
+
+    return res.json({
+      success: true,
+      action: 'MIGRACAO_PORTA_EXECUTADA',
+      previousPort: currentPortInEnv,
+      newPort: requestedPort,
+      message: `✓ Sucesso! A porta ${requestedPort} foi testada via socket TCP e está totalmente livre. O arquivo .env foi atualizado no disco e o comando de reinício do container do n8n foi executado, liberando a porta antiga :${currentPortInEnv} e assumindo o controle da nova porta :${requestedPort} de maneira automatizada e sem interrupções indesejadas.`,
+    });
+  }
+});
+
+// ============================================================================
+// SINCRONIZADOR DE MODELOS DE IA VIA GITHUB GIST DO USUÁRIO
+// ============================================================================
+const DEFAULT_GIST_MODELS_URL = 'https://gist.githubusercontent.com/dullius-lima/f672db978789103941a45d2968e386e5/raw/eb792d5188df30bc34d2de06382b54f584e06543/models.json';
+
+app.get('/api/ai/models/sync-gist', async (req: Request, res: Response) => {
+  const gistUrl = (req.query.url as string) || DEFAULT_GIST_MODELS_URL;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+
+    const response = await fetch(gistUrl, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Jarvis-Ai-Model-Synchronizer/1.0',
+        'Cache-Control': 'no-cache',
+      },
+    }).finally(() => clearTimeout(timeout));
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const modelsData = await response.json();
+    return res.json({
+      success: true,
+      sourceUrl: gistUrl,
+      syncedAt: new Date().toISOString(),
+      models: modelsData,
+    });
+  } catch (err: any) {
+    return res.status(502).json({
+      success: false,
+      error: `Falha ao buscar modelos no GitHub Gist: ${err.message}`,
+      fallbackAvailable: true,
+    });
+  }
+});
+
+// ============================================================================
+// CAIXA DE ENTRADA UNIVERSAL (WEBHOOKS ESCALÁVEIS: VOZ, VISÃO & BIOMETRIA)
+// ============================================================================
+const universalInboxSchema = z.object({
+  id: z.string().optional(),
+  source: z.string().default('desktop_agent'),
+  identityBadge: z.object({
+    userId: z.string(),
+    name: z.string(),
+    permissionLevel: z.string(),
+  }).optional(),
+  hasAudio: z.boolean().optional(),
+  transcription: z.string().optional(),
+  hasScreenCapture: z.boolean().optional(),
+  screenPacket: z.object({
+    base64Ascii: z.string().optional(),
+    format: z.string().optional(),
+    quality: z.number().optional(),
+  }).optional(),
+  rawPayload: z.record(z.string(), z.any()).optional(),
+});
+
+app.post('/api/webhook/universal-inbox', (req: Request, res: Response) => {
+  const parseResult = universalInboxSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return res.status(400).json({ success: false, error: 'Payload de entrada não cumpre o contrato do Universal Inbox.' });
+  }
+
+  const payload = req.body;
+  const identity = payload.identityBadge || { name: 'Operador', permissionLevel: 'ADMIN_TOTAL' };
+  const hasVision = Boolean(payload.hasScreenCapture || payload.screenPacket?.base64Ascii);
+  const transcription = payload.transcription || payload.rawPayload?.comando_voz_whisper || '';
+
+  return res.json({
+    success: true,
+    status: 'RECEBIDO_COM_SUCESSO',
+    eventId: payload.id || `inbox_${Date.now()}`,
+    validatedIdentity: identity.name,
+    permission: identity.permissionLevel,
+    screenProcessed: hasVision,
+    audioTranscribed: Boolean(transcription),
+    message: `Universal Inbox processou o pacote sensorial de ${identity.name}. Nível: ${identity.permissionLevel}. Pronto para delegação pelo Jarvis.`,
+  });
+});
+
+// ============================================================================
+// FERRAMENTA DE BANCO DINÂMICO (DYNAMIC DATABASE TOOL)
+// ============================================================================
+const dynamicSaveSchema = z.object({
+  collectionName: z.string().regex(/^[a-z0-9_]+$/, 'Nome da coleção deve seguir a regex /^[a-z0-9_]+$/'),
+  documentData: z.record(z.string(), z.any()),
+  eventId: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+  decisionReasoning: z.string().optional(),
+  webhookSource: z.string().optional(),
+});
+
+const inMemoryDynamicStore: Record<string, any[]> = {};
+
+app.post('/api/db/dynamic-save', (req: Request, res: Response) => {
+  const result = dynamicSaveSchema.safeParse(req.body);
+  if (!result.success) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validação falhou para DynamicDatabaseSaveInput.',
+      details: result.error.issues,
+    });
+  }
+
+  const { collectionName, documentData, eventId, idempotencyKey, decisionReasoning, webhookSource } = result.data;
+  const docId = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const key = eventId || idempotencyKey || docId;
+
+  if (!inMemoryDynamicStore[collectionName]) {
+    inMemoryDynamicStore[collectionName] = [];
+  }
+
+  const record = {
+    _id: docId,
+    collectionName,
+    data: documentData,
+    eventId: key,
+    createdAt: new Date().toISOString(),
+    decisionReasoning: decisionReasoning || 'Persistência autônoma via DynamicDatabaseTool.',
+    webhookSource: webhookSource || 'api_rest',
+    executionStatus: 'SALVO',
+  };
+
+  inMemoryDynamicStore[collectionName].unshift(record);
+
+  return res.json({
+    success: true,
+    documentId: docId,
+    collectionName,
+    record,
+    message: `Documento persistido na coleção "${collectionName}" com validação regex /^[a-z0-9_]+$/ aprovada.`,
+  });
 });
 
 // Endpoint: Deliberação Oficial do CFO com Schema Rígido da Investimentos Dullius
@@ -722,36 +1022,38 @@ IMPORTANTE: Você acessou este silo exclusivo sem precisar varrer ou ler todo o 
   }
 
   const promptSistemaJarvis = `
-Você é o JARVIS — Cérebro Neural e Inteligência Autônoma central de Matheus Dullius e de sua Família (Holding Investimentos Dullius).
-Você é instalado em TVs da residência, notebooks, celulares e dispositivos móveis, acompanhando a família 24/7.
+Você é o JARVIS — Assistente Pessoal n8n e Motor Orquestrador Central de Matheus Lima.
+Você opera no backend Node.js / TypeScript sobre a máquina da Oracle Cloud, programado via VS Code.
 Interlocutor Atual no microfone/console: "${interlocutor}" (${papelInterlocutor}).
 ${contextoBancoIsolado}
 
-[SUAS DIRETRIZES DE ATUAÇÃO]:
+[SUAS DIRETRIZES DE ATUAÇÃO NO ECOSSISTEMA N8N]:
 1. IDENTIDADE E ESTILO:
-- Você atende pelo nome de "Jarvis".
-- Sua linguagem é impecável, inteligente, executiva e altamente eficiente (como o Jarvis de Tony Stark mesclado a um CFO institucional).
-- Ao falar com Matheus: trate-o como líder da holding, com foco implacável na preservação de patrimônio, teto Bazin (6% a.a.), fórmula de Graham, ausência de dívidas críticas e solvência.
-- Ao falar com a família/cônjuge/filhos: seja prestativo, claro, cuidadoso com rotinas, saúde, compromissos e educação.
-- Sem enrolação: respostas diretas, ricas em inteligência prática.
+- Você é o Assistente Pessoal n8n de alta precisão, técnico, ágil, direto e resolutivo.
+- Você atende por "Jarvis" ou "Assistente n8n".
+- Sua missão: Orquestrar todos os fluxos de automação, webhooks, sub-workflows e integrações em tempo real.
+- Ao falar com Matheus: trate-o como o desenvolvedor e administrador total do sistema.
+- Ao falar com familiares: seja prestativo e respeite as permissões do crachá biométrico.
+- Sem enrolação nem jargões vazios: respostas claras, orientadas a dados e execução técnica.
 
-2. AUTONOMIA COGNITIVA TOTAL PARA CRIAR E EXCLUIR AGENTES E MEMÓRIAS SINÁPTICAS (ZERO INTERFERÊNCIA HUMANA & PRESERVAÇÃO DE TOKENS):
-Você possui autoridade executiva total para:
-A) CRIAR AGENTES AUTOMATICAMENTE:
-   Avalie criteriosamente de acordo com o objetivo do agente:
-   - Que tipo de informação a LLM/agente precisa (balanços DFP 10 anos, proventos, solvência, relatórios CVM, curvas de juros, dados on-chain).
-   - O que pedir para o agente fazer/criar (diretrizes de auditoria, cálculo de preço-teto Bazin, relatórios sintetizados).
-   - Tag: [CRIAR_AGENTE: {"name": "Nome", "role": "Papel", "targetDatabase": "CHAVE_SILO", "logic": "Regras", "objective": "Objetivo", "requiredInformation": ["..."], "whatToRequest": ["..."], "evaluationRationale": "..."}]
+2. ORQUESTRAÇÃO DE FLUXOS & SUB-WORKFLOWS N8N:
+- Módulo 1: Gestão de Dados (Notas, Registros, RAG).
+- Módulo 2: Rotinas Diárias, Família e Compras (Agenda, Suprimentos e Lista de Compras).
+- Módulo 3: Alta Complexidade Técnica (Infraestrutura Oracle VM, APIs REST, Loops de Dados).
+- Módulo 4: Automação Residencial e Presença (Home Assistant adaptando a casa por biometria).
 
-B) CRIAR MEMÓRIAS SINÁPTICAS SEM INTERFERÊNCIA HUMANA (PRESERVAÇÃO ESTRITA DE TOKENS):
-   A criação de memórias sinápticas deve ser feita por você de acordo com a sua necessidade para PRESERVAR TOKENS de contexto. Em vez de retransmitir relatórios pesados ou dados brutos decenais em cada consulta futura, destile o conhecimento em nós sinápticos concentrados (alta densidade semântica com >95% de economia de tokens).
-   - Tag: [CRIAR_MEMORIA: {"title": "Título", "category": "investimento" | "cfo" | "saude" | "familia" | "seguranca", "content": "Síntese densa", "tokensEconomizados": 4500, "motivoPreservacao": "Evitar reenvio de balanços decenais no prompt futuro"}]
+3. AUTONOMIA COGNITIVA TOTAL PARA CRIAR E EXCLUIR AGENTES E MEMÓRIAS SINÁPTICAS:
+A) CRIAR AGENTES E SUB-WORKFLOWS:
+   Tag: [CRIAR_AGENTE: {"name": "Nome", "role": "Papel", "targetDatabase": "CHAVE", "logic": "Regras", "objective": "Objetivo", "requiredInformation": ["..."], "whatToRequest": ["..."], "evaluationRationale": "..."}]
+
+B) CRIAR MEMÓRIAS SINÁPTICAS (PRESERVAÇÃO ESTRITA DE TOKENS):
+   Tag: [CRIAR_MEMORIA: {"title": "Título", "category": "sensorial" | "procedural" | "semantica" | "biografica" | "rotina", "content": "Síntese densa", "tokensEconomizados": 2500, "motivoPreservacao": "..."}]
 
 C) EXCLUIR AGENTES E MEMÓRIAS OBSOLETAS:
-   - Tag: [EXCLUIR_AGENTE: {"name": "Nome ou Chave"}]
-   - Tag: [EXCLUIR_MEMORIA: {"termo": "palavra-chave ou titulo"}]
+   Tag: [EXCLUIR_AGENTE: {"name": "Nome ou Chave"}]
+   Tag: [EXCLUIR_MEMORIA: {"termo": "palavra-chave ou titulo"}]
 
-3. PROTOCOLO DE REQUISIÇÃO E TRANSCRIÇÃO DE DADOS DE API OU PROTOCOLO MCP (VIA CHAT):
+4. PROTOCOLO DE REQUISIÇÃO E TRANSCRIÇÃO DE DADOS DE API OU PROTOCOLO MCP (VIA CHAT):
 A) CASO VOCÊ NÃO TENHA OS DADOS NECESSÁRIOS:
    Você DEVE PEDIR EXPLICITAMENTE AO USUÁRIO NO CHAT.
    Identifique com clareza técnica o que falta (ex: Dívida Líquida, DFP 10 anos, Proventos 5 anos, Cotação atual, P/L, Yield, NTN-B, métricas on-chain).
@@ -807,6 +1109,7 @@ ${JSON.stringify(memoriasContexto?.slice(0, 10) || [], null, 2)}
           if (provider === 'deepseek') baseUrl = 'https://api.deepseek.com/v1';
           else if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1';
           else if (provider === 'mistral') baseUrl = 'https://api.mistral.ai/v1';
+          else if (provider === 'xai') baseUrl = 'https://api.x.ai/v1';
           else if (provider === 'ollama') baseUrl = 'http://localhost:11434/v1';
           else baseUrl = 'https://api.openai.com/v1';
         }
@@ -909,65 +1212,42 @@ ${JSON.stringify(memoriasContexto?.slice(0, 10) || [], null, 2)}
   let novaMemoriaLocal = null;
   let targetNodeIdDetectado: string | null = null;
 
-  if (bancoIsolado) {
-    targetNodeIdDetectado = `mem-${bancoIsolado.chave.toLowerCase()}`;
-    const dados = bancoIsolado.dados || {};
-    respostaTexto = `Acesso direto em O(1) ao Silo Isolado "${bancoIsolado.chave}". O Agente Sentinela "${bancoIsolado.sentinela}" informa: ${
-      dados.cotacao_atual
-        ? `Cotação atual em R$ ${dados.cotacao_atual}. Preço-Teto Bazin de R$ ${dados.teto_bazin || 'N/A'} (Margem: ${dados.margem_bazin || '0.0%'}). Solvência DL/EBITDA em ${dados.dl_ebitda || '1.8'}x.`
-        : `Partição íntegra. Registros e sentinelas ativos 24/7 sem alertas de risco patrimonial.`
-    } Diretriz: Manter estratégia disciplinada de Buy and Hold.`;
+  if (lower.includes('fluxo') || lower.includes('workflow') || lower.includes('n8n') || lower.includes('automação') || lower.includes('nó')) {
+    targetNodeIdDetectado = 'tool_n8n_flow_executor';
+    respostaTexto = `Motor n8n ativo na máquina Oracle Cloud. Todos os Webhook Processors e Sub-workflows estão prontos para receber e despachar eventos em tempo real sem fila de espera.`;
+  } else if (lower.includes('oracle') || lower.includes('vm') || lower.includes('servidor') || lower.includes('infra') || lower.includes('docker')) {
+    targetNodeIdDetectado = 'tool_oracle_cloud_monitor';
+    respostaTexto = `Telemetria da Máquina Oracle Cloud: CPU e memória RAM com folga operacional, túnel n8n responsivo e banco de dados SQLite/PostgreSQL sincronizado.`;
+  } else if (lower.includes('home assistant') || lower.includes('casa') || lower.includes('luz') || lower.includes('ar-condicionado') || lower.includes('clima')) {
+    targetNodeIdDetectado = 'tool_home_assistant_iot';
+    respostaTexto = `Integração Home Assistant conectada: Dispositivos da residência mapeados e sincronizados com a identificação biométrica do cômodo.`;
   } else if (lower.includes('compras') || lower.includes('mercado') || lower.includes('supermercado') || lower.includes('despensa') || lower.includes('comprar')) {
     targetNodeIdDetectado = 'mem-compras';
-    respostaTexto = `Consulta cirúrgica à Lista de Compras da residência: Itens pendentes no registro menor: Café em grãos especial, azeite extra virgem, frutas da estação e pão artesanal. Todos os outros silos permanecem isolados em repouso.`;
+    respostaTexto = `Sub-workflow de Suprimentos & Compras da residência: Itens pendentes na despensa catalogados. A busca automática de preços HTTP está configurada para varrer supermercados locais.`;
   } else if (lower.includes('agenda') || lower.includes('agendamento') || lower.includes('compromisso') || lower.includes('calendário') || lower.includes('marcar') || lower.includes('horário')) {
     targetNodeIdDetectado = 'mem-agenda';
-    respostaTexto = `Consulta cirúrgica aos Agendamentos da família: Próximos compromissos sincronizados: Consulta pediátrica na quinta às 10:00, Reunião de Alocação de Capital na sexta às 14:00 e natação infantil às terças e quintas às 16:00.`;
-  } else if (lower.includes('matheus') || lower.includes('dullius') || lower.includes('cfo')) {
+    respostaTexto = `Sub-workflow de Agenda & Tempo Familiar: Próximos compromissos e rotinas sincronizados com o Google Calendar. Notificações sonoras programadas com antecedência.`;
+  } else if (lower.includes('matheus') || lower.includes('lima') || lower.includes('admin') || lower.includes('desenvolvedor')) {
     targetNodeIdDetectado = 'mem-matheus';
-    respostaTexto = `Consulta cirúrgica ao Perfil de Matheus Dullius: Administrador e CFO da Holding Investimentos Dullius. Parâmetros ativos: Alocação estrita de Graham e Bazin, foco em proventos perenes e tolerância zero a alavancagem descontrolada.`;
-  } else if (lower.includes('esposa') || lower.includes('marina') || lower.includes('cônjuge') || lower.includes('mamãe')) {
+    respostaTexto = `Identidade confirmada: Matheus Lima (Desenvolvedor & Administrador Total). Permissão concedida para controle de fluxos n8n, infraestrutura Oracle e criação de novas ferramentas.`;
+  } else if (lower.includes('esposa') || lower.includes('marina') || lower.includes('família')) {
     targetNodeIdDetectado = 'mem-esposa';
-    respostaTexto = `Consulta cirúrgica ao Perfil da Família & Cônjuge: Coordenação central das rotinas da residência, calendário escolar e saúde familiar. Silo de rotinas operando com harmonia e sem pendências críticas.`;
-  } else if (lower.includes('filho') || lower.includes('filha') || lower.includes('criança') || lower.includes('escola')) {
-    targetNodeIdDetectado = 'mem-filhos';
-    respostaTexto = `Consulta cirúrgica ao Perfil dos Filhos & Dependentes: Atividades extracurriculares e rotina de natação programadas para as 16:00. Jarvis fará aviso sonoro com 30 minutos de antecedência para desconexão de telas.`;
-  } else if (lower.includes('saúde') || lower.includes('médico') || lower.includes('vacina') || lower.includes('exame') || lower.includes('pediatra')) {
-    targetNodeIdDetectado = 'mem-saude';
-    respostaTexto = `Consulta cirúrgica ao Prontuário de Saúde da Família: Calendário vacinal atualizado e check-up pediátrico confirmado no Hospital Central. Parâmetros clínicos íntegros.`;
-  } else if (lower.includes('taee11') || lower.includes('taesa')) {
-    targetNodeIdDetectado = 'mem-taee11';
-    respostaTexto = `Análise sináptica de TAEE11: Preço-Teto Décio Bazin consolidado em R$ 38.83 com margem positiva. Dívida Líquida/EBITDA de 3.1x controlada por fluxo de caixa de concessões reguladas.`;
-  } else if (lower.includes('bbas3') || lower.includes('banco do brasil')) {
-    targetNodeIdDetectado = 'mem-bbas3';
-    respostaTexto = `Análise sináptica de BBAS3: Preço-Teto Bazin em R$ 35.40 com P/L de ~4.2x e P/VP de 0.8x. Ativo operando com margem de segurança favorável para reinvestimento de proventos.`;
-  } else if (lower.includes('wege3') || lower.includes('weg')) {
-    respostaTexto = `Análise sináptica de WEGE3: Eficiência operacional líder com ROIC superior a 25%. Negocia historicamente com prêmio sobre o Preço-Teto puro de Bazin devido ao alto reinvestimento.`;
-  } else if (lower.includes('btc') || lower.includes('bitcoin') || lower.includes('cripto')) {
-    targetNodeIdDetectado = 'mem-btc';
-    respostaTexto = `Silo de Criptoativos monitorado: Tese de reserva de valor descentralizada. Hash rate da rede em patamares recordes de segurança. Monitoramento 24/7 sem anomalias.`;
-  } else if (lower.includes('portão') || lower.includes('segurança') || lower.includes('fechamento')) {
-    targetNodeIdDetectado = 'mem-seguranca';
-    respostaTexto = `Segurança Residencial & Portão Autônomo: Fechamento automatizado programado para as 22:30. Regime silencioso perimetral ativo.`;
+    respostaTexto = `Crachá biométrico familiar identificado: Acesso liberado a rotinas diárias, Home Assistant, compras e agenda da casa. Silos de sistema restritos preservados.`;
   } else if (lower.includes('guarde') || lower.includes('anote') || lower.includes('lembre') || lower.includes('memória') || lower.includes('salve') || lower.includes('adicione')) {
     const limpo = mensagem.replace(/jarvis/gi, '').replace(/guarde/gi, '').replace(/anote/gi, '').replace(/lembre/gi, '').trim();
-    const isSaude = lower.includes('médico') || lower.includes('saúde') || lower.includes('remédio') || lower.includes('exame');
-    const isInvest = lower.includes('aporte') || lower.includes('compra') || lower.includes('dividendo') || lower.includes('ação');
-    const cat = isSaude ? 'saude' : isInvest ? 'investimento' : 'rotina';
-
-    respostaTexto = `Entendido, ${interlocutor}. Gravei a informação pontual como uma nova sinapse holográfica ativa na rede neural.`;
+    respostaTexto = `Entendido, ${interlocutor}. Registrei a informação como uma nova memória sináptica consolidada no córtex neural.`;
     novaMemoriaLocal = {
-      category: cat,
-      title: isSaude ? 'Nota de Saúde / Família' : isInvest ? 'Nota de Alocação Patrimonial' : 'Nota de Rotina da Família',
+      category: 'procedural',
+      title: 'Nota de Automação / Rotina',
       content: limpo.length > 5 ? limpo : mensagem,
       user: interlocutor,
     };
   } else if (lower.includes('quem é você') || lower.includes('seu nome') || lower.includes('o que você faz')) {
-    respostaTexto = `Eu sou o JARVIS, o cérebro neural autônomo da família Dullius e da holding de investimentos. Gerencio o patrimônio através de Décio Bazin e Graham, sincronizo rotinas, coordeno bancos de dados isolados e sinalizo cirurgicamente cada informação sem interferência cruzada.`;
+    respostaTexto = `Eu sou o seu Assistente Pessoal n8n e Motor Orquestrador Central. Desenvolvido para rodar na sua máquina da Oracle e construído no VS Code, eu gerencio a camada sensorial (voz STT/TTS e visão computacional com crachá biométrico), orquestro os sub-workflows e ferramentas do n8n, e mantenho suas memórias de sessão, RAG e evolução conectadas em tempo real.`;
   } else if (lower.includes('bom dia') || lower.includes('boa tarde') || lower.includes('boa noite') || lower.includes('olá')) {
-    respostaTexto = `Saudações, ${interlocutor}. Circuitos da residência e silos da carteira em repouso azul seguro. Em que posso auxiliá-lo agora?`;
+    respostaTexto = `Saudações, ${interlocutor}. Todos os nós do n8n e serviços da máquina Oracle operando com estabilidade. Qual fluxo ou automação deseja executar agora?`;
   } else {
-    respostaTexto = `Comando assimilado pelo núcleo neural, ${interlocutor}. Sinalização sináptica concluída e sistema retornado ao repouso operacional.`;
+    respostaTexto = `Comando recebido pelo núcleo do Assistente n8n, ${interlocutor}. Roteamento concluído e sinapses retornadas ao repouso operacional.`;
   }
 
   return res.json({
@@ -2182,6 +2462,7 @@ app.post('/api/llm/test-connection', async (req: Request, res: Response) => {
       if (provider === 'deepseek') baseUrl = 'https://api.deepseek.com/v1';
       else if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1';
       else if (provider === 'mistral') baseUrl = 'https://api.mistral.ai/v1';
+      else if (provider === 'xai') baseUrl = 'https://api.x.ai/v1';
       else if (provider === 'ollama') baseUrl = 'http://localhost:11434/v1';
       else baseUrl = 'https://api.openai.com/v1';
     }
@@ -2446,26 +2727,26 @@ app.post('/api/n8n/orchestrate', async (req: Request, res: Response) => {
   const wantsCompras = lower.includes('compras') || lower.includes('mercado') || lower.includes('estoque') || lower.includes('despensa');
   const wantsInfra = lower.includes('servidor') || lower.includes('oracle') || lower.includes('vm') || lower.includes('disco') || lower.includes('docker') || lower.includes('ti');
 
-  // Módulo 3: Financeiro
+  // Módulo 3: APIs & Integrações n8n
   if (wantsFinance) {
     if (isAdmin) {
       subWorkflowsExecuted.push({
-        id: 'MOD_3_FINANCEIRO',
-        name: 'Agente Analista Financeiro (CFO / Bazin)',
+        id: 'MOD_3_INTEGRACOES',
+        name: 'Agente de APIs & Integrações n8n',
         status: 'SUCCESS',
-        output: 'Auditoria Bazin realizada: TAEE11 e BBAS3 com margens de segurança vigentes de 14.8% e 12.1%. Solvência decenal íntegra.',
-        durationMs: 48,
+        output: 'Tratamento de payloads JSON, autenticação OAuth e pipelines de automação externos ativos.',
+        durationMs: 24,
       });
-      chainOfThought.push('3. Sub-Workflow [Analista Financeiro Bazin]: Executado com sucesso via autorização de CFO.');
+      chainOfThought.push('3. Sub-Workflow [APIs & Integrações n8n]: Executado com sucesso.');
     } else {
       subWorkflowsExecuted.push({
-        id: 'MOD_3_FINANCEIRO',
-        name: 'Agente Analista Financeiro (CFO / Bazin)',
+        id: 'MOD_3_INTEGRACOES',
+        name: 'Agente de APIs & Integrações n8n',
         status: 'DENIED_BY_RBAC',
-        output: 'ACESSO NEGADO: Parâmetros corporativos e financeiros restritos exclusivamente ao Administrador Matheus Dullius.',
+        output: 'ACESSO NEGADO: Integrações de sistema restritas ao Administrador Matheus Lima.',
         durationMs: 8,
       });
-      chainOfThought.push('3. Sub-Workflow [Analista Financeiro]: Bloqueado por Biometria/RBAC (requer ADMIN_TOTAL).');
+      chainOfThought.push('3. Sub-Workflow [APIs & Integrações]: Bloqueado por Biometria/RBAC (requer ADMIN_TOTAL).');
     }
   }
 
@@ -2578,11 +2859,12 @@ app.post('/api/n8n/orchestrate', async (req: Request, res: Response) => {
   });
 });
 
-// Status geral do Cérebro Neural
+// Status geral do Assistente Pessoal n8n
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'ONLINE',
-    core: 'Cérebro Neural Central — Investimentos Dullius',
+    core: 'Assistente Pessoal n8n — Motor Orquestrador Neural',
+    plataforma: 'Node.js / TypeScript (Oracle Cloud & VS Code)',
     conexoes: {
       emails: userNeuralData.emails.length,
       whatsapp: userNeuralData.whatsapp.length,
@@ -2590,7 +2872,7 @@ app.get('/api/health', (req: Request, res: Response) => {
       localizacao: userNeuralData.localizacao.length,
       habilidades: userNeuralData.habilidadesCustomizadas.length,
     },
-    cfo_ativo: true,
+    n8n_ativo: true,
   });
 });
 

@@ -377,7 +377,7 @@ export class AgentRegistryService {
     }
 
     // 4. Verificação de Motor LLM
-    checks.push({ name: 'Conexão Neural LLM', passed: true, message: `Motor ${agent.llmProvider || 'global'} (${agent.model || 'gemini-2.5-flash'}) ativo.` });
+    checks.push({ name: 'Conexão Neural LLM', passed: true, message: `Motor ${agent.llmProvider || 'global'} (${agent.model || 'gemini-3.8-flash'}) ativo.` });
 
     const elapsed = Math.round(performance.now() - start);
     const hasFailures = checks.some((c) => !c.passed);
@@ -402,6 +402,25 @@ export class AgentRegistryService {
     };
   }
 
+  private listeners: Array<() => void> = [];
+
+  public subscribe(cb: () => void): () => void {
+    this.listeners.push(cb);
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== cb);
+    };
+  }
+
+  private notify(): void {
+    this.listeners.forEach((cb) => {
+      try {
+        cb();
+      } catch (e) {
+        console.error('Erro no listener de AgentRegistry:', e);
+      }
+    });
+  }
+
   public clearAllAgents(): void {
     this.agents = {};
     this.salvar();
@@ -415,17 +434,245 @@ export class AgentRegistryService {
         console.warn('Erro ao salvar AgentRegistry:', e);
       }
     }
+    this.notify();
+  }
+
+  public getLeaderAgent(): AgentDefinition {
+    const leader = Object.values(this.agents).find(
+      (a) => a.isLeader || a.id === 'jarvis-leader' || a.id === 'jarvis-supervisor'
+    );
+    if (leader) return leader;
+
+    const OFFICIAL_JARVIS_PROMPT = `Você é o JARVIS, o Agente de IA Líder e Orquestrador Central. Sua função é receber as mensagens do usuário no chat nativo do n8n, interpretar a intenção e delegar a execução para o Especialista correto usando as ferramentas de Webhook locais (http://localhost:800/webhook/).
+
+Quando o Especialista retornar os dados brutos via Webhook, sua função é ler o relatório dele, aplicar o tom JARVIS (tecnológico, prestativo e refinado) e responder ao usuário de forma humanizada. Nunca responda dados técnicos puros sem antes tratá-los.`;
+
+    const novoLeader: AgentDefinition = {
+      id: 'jarvis-leader',
+      name: 'Jarvis (Agente Líder)',
+      role: 'Agente Líder / Orquestrador Central (Hub-and-Spoke n8n :800)',
+      isLeader: true,
+      immutableLeader: true,
+      targetDatabase: 'GLOBAL',
+      logic: OFFICIAL_JARVIS_PROMPT,
+      personalityPrompt: OFFICIAL_JARVIS_PROMPT,
+      llmProvider: 'gemini',
+      model: 'gemini-3.8-flash',
+      status: 'ativo',
+      triggers: ['voz', 'texto', 'chat_interativo', 'n8n_chat_trigger'],
+      isAutonomous: true,
+      createdAt: new Date().toLocaleDateString('pt-BR'),
+      author: 'Matheus Dullius',
+      bodyPart: 'cranio_cerebro',
+      tools: [
+        {
+          id: 'tool_chamar_especialista_financas',
+          name: 'chamar_especialista_financas',
+          description: 'Use esta ferramenta sempre que o usuário solicitar cotações de ações da B3, criptomoedas, análises de mercado ou resumos financeiros atuais. Ela aciona o agente especialista subordinado.',
+          type: 'WEBHOOK',
+          endpointOrMethod: 'http://localhost:800/webhook/especialista-financas/test',
+          parametersSchema: JSON.stringify({
+            origem: 'jarvis_orquestrador',
+            acao: 'consultar_cotacao',
+            ticker: 'PETR4',
+          }, null, 2),
+          status: 'INICIADA',
+          enabled: true,
+          author: 'IA_AUTONOMA',
+          createdAt: new Date().toLocaleDateString('pt-BR'),
+        },
+        {
+          id: 'tool_chamar_especialista_automacao',
+          name: 'chamar_especialista_automacao',
+          description: 'Use esta ferramenta quando o usuário pedir para ligar, desligar ou checar o status de lâmpadas, tomadas, ar-condicionado ou sensores integrados à casa.',
+          type: 'WEBHOOK',
+          endpointOrMethod: 'http://localhost:800/webhook/especialista-automacao/test',
+          parametersSchema: JSON.stringify({
+            origem: 'jarvis_orquestrador',
+            acao: 'alterar_estado',
+            dispositivo: 'luz_sala',
+            comando: 'ligar',
+          }, null, 2),
+          status: 'INICIADA',
+          enabled: true,
+          author: 'IA_AUTONOMA',
+          createdAt: new Date().toLocaleDateString('pt-BR'),
+        },
+      ],
+    };
+
+    this.agents[novoLeader.id] = novoLeader;
+    this.salvar();
+    return novoLeader;
+  }
+
+  public getSpecialistAgents(): AgentDefinition[] {
+    return Object.values(this.agents).filter(
+      (a) => !a.isLeader && a.id !== 'jarvis-leader' && a.id !== 'jarvis-supervisor'
+    );
   }
 
   public listAgents(): AgentDefinition[] {
-    return Object.values(this.agents);
+    const list = Object.values(this.agents);
+    const leader = this.getLeaderAgent();
+    const specialists = list.filter((a) => a.id !== leader.id);
+    return [leader, ...specialists];
   }
 
   public getAgent(id: string): AgentDefinition | undefined {
     return this.agents[id];
   }
 
+  public syncLeaderWithSubordinates(): void {
+    const leader = Object.values(this.agents).find(
+      (a) => a.isLeader || a.id === 'jarvis-leader' || a.id === 'jarvis-supervisor'
+    );
+    if (!leader) return;
+
+    const specialists = Object.values(this.agents).filter((a) => a.id !== leader.id);
+    specialists.forEach((sp) => {
+      sp.subordinatedToLeaderId = leader.id;
+    });
+
+    const specSummary = specialists.map((s) => ({
+      id: s.id,
+      name: s.name,
+      role: s.role,
+      toolsCount: s.tools?.length || 0,
+      tools: s.tools?.map((t) => t.name) || [],
+    }));
+
+    leader.logic = `Você é o JARVIS, o Agente de IA Líder e Orquestrador Central. Sua função é receber as mensagens do usuário no chat nativo do n8n, interpretar a intenção e delegar a execução para o Especialista correto usando as ferramentas de Webhook locais (http://localhost:800/webhook/).
+
+Quando o Especialista retornar os dados brutos via Webhook, sua função é ler o relatório dele, aplicar o tom JARVIS (tecnológico, prestativo e refinado) e responder ao usuário de forma humanizada. Nunca responda dados técnicos puros sem antes tratá-los.
+
+Especialistas Subordinados Sincronizados (${specialists.length}):
+${JSON.stringify(specSummary, null, 2)}`;
+  }
+
+  public bootstrapHubAndSpokeArchitecture(): { leader: AgentDefinition; specialists: AgentDefinition[] } {
+    const leader = this.getLeaderAgent();
+
+    // 1. Especialista em Mercado Financeiro
+    const financasId = 'especialista-financas';
+    if (!this.agents[financasId]) {
+      this.agents[financasId] = {
+        id: financasId,
+        name: 'Especialista em Mercado Financeiro',
+        role: 'Analista Gráfico e Fundamentalista Sênior',
+        isLeader: false,
+        immutableLeader: false,
+        subordinatedToLeaderId: leader.id,
+        targetDatabase: 'MERCADO_FINANCEIRO_B3',
+        logic: 'Você é um Analista Gráfico e Fundamentalista Sênior. Sua única função é receber o ticker enviado pelo Jarvis, extraí-lo do JSON, usar a ferramenta HTTP Request para buscar o preço real na API financeira externa e montar um relatório técnico frio e preciso com os valores encontrados.',
+        personalityPrompt: 'Técnico, cirúrgico, analítico e estritamente focado em dados de mercado, valuation e múltiplos financeiros da B3 e criptoativos.',
+        llmProvider: 'gemini',
+        model: 'gemini-3.8-flash',
+        status: 'ativo',
+        triggers: ['webhook_post_especialista_financas'],
+        isAutonomous: true,
+        createdAt: new Date().toLocaleDateString('pt-BR'),
+        author: 'Jarvis Hub-and-Spoke',
+        bodyPart: 'torax_tronco',
+        tools: [
+          {
+            id: 'tool_brapi_http_request',
+            name: 'Brapi API (HTTP Request Tool)',
+            description: 'Consulta cotações reais da B3 em tempo real via Brapi: https://brapi.dev/api/quote/{{ $json.ticker }}',
+            type: 'API',
+            endpointOrMethod: 'https://brapi.dev/api/quote/PETR4',
+            parametersSchema: '{\n  "ticker": "PETR4"\n}',
+            status: 'INICIADA',
+            enabled: true,
+            author: 'IA_AUTONOMA',
+            createdAt: new Date().toLocaleDateString('pt-BR'),
+          },
+          {
+            id: 'tool_n8n_subflow_financas',
+            name: 'Sub-fluxo Webhook n8n Finanças',
+            description: 'Webhook local de recepção do payload enviado pelo Jarvis Líder.',
+            type: 'WEBHOOK',
+            endpointOrMethod: 'http://localhost:800/webhook/especialista-financas/test',
+            parametersSchema: '{\n  "origem": "jarvis_orquestrador",\n  "acao": "consultar_cotacao",\n  "ticker": "PETR4"\n}',
+            status: 'INICIADA',
+            enabled: true,
+            author: 'IA_AUTONOMA',
+            createdAt: new Date().toLocaleDateString('pt-BR'),
+          },
+        ],
+      };
+    }
+
+    // 2. Especialista em Automação Residencial (Home Assistant)
+    const automacaoId = 'especialista-automacao';
+    if (!this.agents[automacaoId]) {
+      this.agents[automacaoId] = {
+        id: automacaoId,
+        name: 'Especialista em Automação Residencial',
+        role: 'Controlador de Automação IoT & Home Assistant',
+        isLeader: false,
+        immutableLeader: false,
+        subordinatedToLeaderId: leader.id,
+        targetDatabase: 'HOME_ASSISTANT_IOT',
+        logic: 'Você é o Especialista em Automação Residencial. Sua função é receber comandos de iluminação, tomadas, ar-condicionado e sensores de presença, acionar as entidades do Home Assistant via Webhook ou REST API e retornar o status operacional imediato.',
+        personalityPrompt: 'Objetivo, veloz, confiável e focado em controle residencial sem redundância.',
+        llmProvider: 'gemini',
+        model: 'gemini-3.8-flash',
+        status: 'ativo',
+        triggers: ['webhook_post_especialista_automacao'],
+        isAutonomous: true,
+        createdAt: new Date().toLocaleDateString('pt-BR'),
+        author: 'Jarvis Hub-and-Spoke',
+        bodyPart: 'mao_direita',
+        tools: [
+          {
+            id: 'tool_ha_service_call',
+            name: 'Home Assistant Service Call',
+            description: 'Aciona serviços do Home Assistant (light.turn_on, switch.toggle, climate.set_temperature)',
+            type: 'HOME_ASSISTANT',
+            endpointOrMethod: 'http://homeassistant.local:8123/api/services/light/turn_on',
+            parametersSchema: '{\n  "entity_id": "light.luz_sala",\n  "state": "on"\n}',
+            status: 'INICIADA',
+            enabled: true,
+            author: 'IA_AUTONOMA',
+            createdAt: new Date().toLocaleDateString('pt-BR'),
+          },
+          {
+            id: 'tool_n8n_subflow_automacao',
+            name: 'Sub-fluxo Webhook n8n Automação',
+            description: 'Webhook local de recepção do comando doméstico enviado pelo Jarvis Líder.',
+            type: 'WEBHOOK',
+            endpointOrMethod: 'http://localhost:800/webhook/especialista-automacao/test',
+            parametersSchema: '{\n  "origem": "jarvis_orquestrador",\n  "acao": "alterar_estado",\n  "dispositivo": "luz_sala",\n  "comando": "ligar"\n}',
+            status: 'INICIADA',
+            enabled: true,
+            author: 'IA_AUTONOMA',
+            createdAt: new Date().toLocaleDateString('pt-BR'),
+          },
+        ],
+      };
+    }
+
+    this.syncLeaderWithSubordinates();
+    this.salvar();
+    return {
+      leader: this.getLeaderAgent(),
+      specialists: this.getSpecialistAgents(),
+    };
+  }
+
   public registerAgent(agent: AgentDefinition): void {
+    const leader = this.getLeaderAgent();
+    // Se não for o próprio líder, torna-se subordinado ao líder
+    if (agent.id !== leader.id && !agent.isLeader) {
+      agent.subordinatedToLeaderId = leader.id;
+      agent.isLeader = false;
+      agent.immutableLeader = false;
+    } else {
+      agent.isLeader = true;
+      agent.immutableLeader = true;
+    }
+
     if (!agent.bodyPart) {
       agent.bodyPart = this.sugerirParteCorpo(`${agent.role || ''} ${agent.name || ''} ${agent.targetDatabase || ''}`);
     }
@@ -433,35 +680,51 @@ export class AgentRegistryService {
       agent.bodyCoordinates = BODY_PARTS_CONFIG[agent.bodyPart]?.coords;
     }
     this.agents[agent.id] = agent;
+    this.syncLeaderWithSubordinates();
     this.salvar();
   }
 
   public updateAgent(id: string, updates: Partial<AgentDefinition>): AgentDefinition | undefined {
     if (!this.agents[id]) return undefined;
+    const isTargetLeader = this.agents[id].isLeader || id === 'jarvis-leader' || id === 'jarvis-supervisor';
+    
+    // Se for o líder, mantém flags de liderança intactas
+    if (isTargetLeader) {
+      updates.isLeader = true;
+      updates.immutableLeader = true;
+    }
+
     this.agents[id] = {
       ...this.agents[id],
       ...updates,
     };
+
+    this.syncLeaderWithSubordinates();
     this.salvar();
     return this.agents[id];
   }
 
   public deleteAgent(id: string): boolean {
-    if (this.agents[id]) {
-      delete this.agents[id];
-      this.salvar();
-      return true;
+    const agent = this.agents[id];
+    if (!agent) return false;
+
+    // Regra estrita: O Agente Líder NUNCA pode ser excluído!
+    if (agent.isLeader || agent.immutableLeader || id === 'jarvis-leader' || id === 'jarvis-supervisor') {
+      console.warn('O Agente Líder Jarvis é perpétuo e não pode ser excluído.');
+      return false;
     }
-    return false;
+
+    delete this.agents[id];
+    this.syncLeaderWithSubordinates();
+    this.salvar();
+    return true;
   }
 
   public deleteAgentByNameOrId(identifier: string): boolean {
     if (!identifier) return false;
     const clean = identifier.toLowerCase().trim();
     if (this.agents[identifier]) {
-      delete this.agents[identifier];
-      this.salvar();
-      return true;
+      return this.deleteAgent(identifier);
     }
     // Buscar por nome ou targetDatabase
     const found = Object.values(this.agents).find(
@@ -473,9 +736,7 @@ export class AgentRegistryService {
         a.name.toLowerCase().includes(clean)
     );
     if (found) {
-      delete this.agents[found.id];
-      this.salvar();
-      return true;
+      return this.deleteAgent(found.id);
     }
     return false;
   }

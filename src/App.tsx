@@ -12,6 +12,7 @@ import { GoogleWorkspaceModal } from './components/GoogleWorkspaceModal';
 import { AuthLockScreen } from './components/AuthLockScreen';
 import { SecuritySettingsModal } from './components/SecuritySettingsModal';
 import { N8nNeuralStudioModal } from './components/N8nNeuralStudioModal';
+import { AgentToolStudioModal, AgentToolStudioTab } from './components/AgentToolStudioModal';
 import { authService } from './services/authService';
 import { cfoDecisionService } from './services/cfoDecisionService';
 import { INITIAL_SYNAPSE_MEMORIES } from './data/synapseMemories';
@@ -62,6 +63,8 @@ import {
   RefreshCw,
   CheckCircle2,
   FolderOpen,
+  GitBranch,
+  MessageSquare,
 } from 'lucide-react';
 import { ApiSyncService, MultiApiSyncReport } from './services/apiSyncService';
 
@@ -111,9 +114,12 @@ export default function App() {
       bc.onmessage = handleSyncAgents;
     } catch {}
 
+    const unsubAgent = agentService.subscribe(handleSyncAgents);
+
     return () => {
       unsub();
       unsubApi();
+      unsubAgent();
       window.removeEventListener('storage', handleSyncAgents);
       window.removeEventListener('message', handleMsg);
       if (bc) bc.close();
@@ -194,6 +200,8 @@ export default function App() {
   const [loadingAI, setLoadingAI] = useState<boolean>(false);
 
   // Modais e Painéis
+  const [agentToolStudioOpen, setAgentToolStudioOpen] = useState<boolean>(false);
+  const [agentToolStudioTab, setAgentToolStudioTab] = useState<AgentToolStudioTab>('overview');
   const [agentRegistryModalOpen, setAgentRegistryModalOpen] = useState<boolean>(false);
   const [llmConfigModalOpen, setLlmConfigModalOpen] = useState<boolean>(false);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState<boolean>(false);
@@ -1144,13 +1152,63 @@ export default function App() {
             <span className="hidden md:inline">n8n Studio</span>
           </button>
 
+          {/* Botão Chave de Ferramentas: Agentes & Ferramentas */}
           <button
             type="button"
-            onClick={() => setSystemMenuExpanded(!systemMenuExpanded)}
-            className="p-2.5 rounded-2xl bg-slate-900/90 hover:bg-cyan-950/70 border border-cyan-500/30 hover:border-cyan-400 text-cyan-300 transition-all shadow-lg active:scale-95 cursor-pointer"
-            title="Ferramentas & Criação de Agentes de IA"
+            onClick={() => {
+              setAgentToolStudioTab('overview');
+              setAgentToolStudioOpen(true);
+            }}
+            className="p-2.5 rounded-2xl bg-gradient-to-r from-cyan-600/30 to-blue-600/30 hover:from-cyan-500/40 hover:to-blue-500/40 border border-cyan-500/50 hover:border-cyan-400 text-cyan-300 transition-all shadow-lg active:scale-95 cursor-pointer flex items-center gap-1.5"
+            title="Studio de Criação de Agentes & Ferramentas (Sincronizado ao Cérebro 3D)"
           >
             <Wrench className="w-5 h-5 text-cyan-400" />
+            <span className="hidden sm:inline text-xs font-mono font-bold text-cyan-300">Agentes & Tools</span>
+          </button>
+
+          {/* Botão Dedicado: Gist de Modelos de IA */}
+          <button
+            type="button"
+            onClick={() => {
+              setAgentToolStudioTab('gist_models');
+              setAgentToolStudioOpen(true);
+            }}
+            className="px-2.5 py-2 rounded-2xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 hover:border-amber-400 text-amber-300 transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1 text-xs font-mono font-bold"
+            title="Sincronizador Dinâmico de Provedores e Modelos de IA via GitHub Gist"
+          >
+            <Bot className="w-4 h-4 text-amber-400" />
+            <span className="hidden xl:inline">Gist IA</span>
+          </button>
+
+          {/* Botão Dedicado: Memória & Sessões (Session ID) */}
+          <button
+            type="button"
+            onClick={() => {
+              setAgentToolStudioTab('memory_manager');
+              setAgentToolStudioOpen(true);
+            }}
+            className="px-2.5 py-2 rounded-2xl bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/40 hover:border-blue-400 text-blue-300 transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1 text-xs font-mono font-bold"
+            title="Gerenciador de Memória Dinâmica, Sessões (Session ID) e Contexto dos Especialistas"
+          >
+            <MessageSquare className="w-4 h-4 text-blue-400" />
+            <span className="hidden xl:inline">Sessões</span>
+          </button>
+
+          {/* Botão Dedicado: Arquitetura Hub-and-Spoke n8n Local (:800) */}
+          <button
+            type="button"
+            onClick={() => {
+              setAgentToolStudioTab('hub_spoke_n8n');
+              setAgentToolStudioOpen(true);
+            }}
+            className="px-3 py-2 rounded-2xl bg-gradient-to-r from-purple-600/25 via-indigo-600/25 to-blue-600/30 hover:from-purple-500/35 hover:to-blue-500/40 border border-purple-500/50 hover:border-purple-400 text-purple-300 transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5 text-xs font-mono font-bold"
+            title="Abrir Desenho Técnico & Arquitetura Hub-and-Spoke n8n Local (:800)"
+          >
+            <GitBranch className="w-4 h-4 text-purple-400" />
+            <span className="hidden lg:inline">Hub-and-Spoke</span>
+            <span className="text-[10px] bg-purple-950 text-purple-300 px-1.5 py-0.5 rounded border border-purple-500/40 font-mono">
+              :800
+            </span>
           </button>
 
           {/* Bloqueio de Acesso / Segurança */}
@@ -1168,187 +1226,8 @@ export default function App() {
         </div>
       </header>
 
-      {/* Menu Desdobrável das Ferramentas (Ao clicar no ícone de ferramentas) */}
-      {systemMenuExpanded && (
-        <div className="absolute top-16 right-4 z-50 max-w-md w-[92%] sm:w-96 bg-slate-950/95 border border-cyan-500/40 rounded-2xl p-4 shadow-[0_0_35px_rgba(6,182,212,0.25)] backdrop-blur-2xl animate-in fade-in slide-in-from-top-2 space-y-2 text-xs font-mono">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
-            <span className="font-bold text-cyan-400 flex items-center gap-1.5">
-              <Wrench className="w-4 h-4" />
-              FUNÇÕES & AGENTES DE IA
-            </span>
-            <button onClick={() => setSystemMenuExpanded(false)} className="text-slate-400 hover:text-white">✕</button>
-          </div>
-
-          {/* Botão em Destaque: Abrir Página HTML Dedicada com todas as conexões externas */}
-          <button
-            onClick={() => {
-              window.open('/agents.html', '_blank');
-              setSystemMenuExpanded(false);
-            }}
-            className="w-full p-3 rounded-xl bg-gradient-to-r from-cyan-600 via-sky-500 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-slate-950 font-bold text-left transition-all flex items-center justify-between shadow-lg cursor-pointer"
-          >
-            <div>
-              <div className="flex items-center gap-1.5 text-xs font-extrabold uppercase">
-                <ExternalLink className="w-4 h-4" />
-                Criar Agente de IA (agents.html)
-              </div>
-              <div className="text-[10px] font-normal text-slate-950/80 mt-0.5">
-                Abre em nova janela com Webhooks, Bancos de Dados e Teste Funcional
-              </div>
-            </div>
-            <span className="text-[10px] bg-slate-950 text-cyan-300 px-2 py-0.5 rounded-full font-bold">HTML</span>
-          </button>
-
-          {/* Opção N8N Neural Studio & Grafo de Nós (Oracle VM) */}
-          <button
-            onClick={() => {
-              setN8nStudioModalOpen(true);
-              setSystemMenuExpanded(false);
-            }}
-            className="w-full p-2.5 rounded-xl bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-500/40 text-left transition-colors flex items-center justify-between text-cyan-200"
-          >
-            <div className="flex items-center gap-2.5">
-              <Layers className="w-4 h-4 text-cyan-400 shrink-0" />
-              <div>
-                <div className="font-bold text-white">N8N Neural Studio (Oracle VM)</div>
-                <div className="text-[10px] text-cyan-300/80">Grafo de 5 camadas, Biometria, RAG & Deploy</div>
-              </div>
-            </div>
-            <span className="text-[9px] bg-cyan-950 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded-full font-bold">
-              OCI
-            </span>
-          </button>
-
-          {/* Opção Ficheiro Interno */}
-          <button
-            onClick={() => {
-              setAgentRegistryModalOpen(true);
-              setSystemMenuExpanded(false);
-            }}
-            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
-          >
-            <Bot className="w-4 h-4 text-cyan-400 shrink-0" />
-            <div>
-              <div className="font-bold text-slate-100">Ficheiro no Modal</div>
-              <div className="text-[10px] text-slate-400">Ver agentes acoplados ao corpo</div>
-            </div>
-          </button>
-
-          {/* Opção Segurança & Senha */}
-          <button
-            onClick={() => {
-              setSecurityModalOpen(true);
-              setSystemMenuExpanded(false);
-            }}
-            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
-          >
-            <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
-            <div>
-              <div className="font-bold text-slate-100">Segurança & Troca de Senha</div>
-              <div className="text-[10px] text-slate-400">matheus_dulius@hotmail.com</div>
-            </div>
-          </button>
-
-          {/* Opção Provedor de LLM */}
-          <button
-            onClick={() => {
-              setLlmConfigModalOpen(true);
-              setSystemMenuExpanded(false);
-            }}
-            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
-          >
-            <Cpu className="w-4 h-4 text-purple-400 shrink-0" />
-            <div>
-              <div className="font-bold text-slate-100">Motor de LLM Universal</div>
-              <div className="text-[10px] text-slate-400">Gemini, Claude, GPT, DeepSeek, Groq</div>
-            </div>
-          </button>
-
-          {/* Opção Espaço de Prompt & Comportamento da IA */}
-          <button
-            onClick={() => {
-              setPromptBehaviorModalOpen(true);
-              setSystemMenuExpanded(false);
-            }}
-            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
-          >
-            <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
-            <div>
-              <div className="font-bold text-slate-100">Prompt & Comportamento do Agente</div>
-              <div className="text-[10px] text-slate-400">Escreva regras e escolha a melhor IA por agente</div>
-            </div>
-          </button>
-
-          {/* Opção Home Assistant */}
-          <button
-            onClick={() => {
-              setHomeAssistantModalOpen(true);
-              setSystemMenuExpanded(false);
-            }}
-            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
-          >
-            <Database className="w-4 h-4 text-emerald-400 shrink-0" />
-            <div>
-              <div className="font-bold text-slate-100">Espaço Home Assistant</div>
-              <div className="text-[10px] text-slate-400">Automação residencial, luzes e sensores</div>
-            </div>
-          </button>
-
-          {/* Opção Google Workspace */}
-          <button
-            onClick={() => {
-              setWorkspaceModalOpen(true);
-              setSystemMenuExpanded(false);
-            }}
-            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
-          >
-            <FolderOpen className="w-4 h-4 text-blue-400 shrink-0" />
-            <div>
-              <div className="font-bold text-slate-100">Google Workspace</div>
-              <div className="text-[10px] text-slate-400">Google Sheets, Drive, Agenda e Gmail</div>
-            </div>
-          </button>
-
-          {/* Decisões CFO */}
-          <button
-            onClick={() => {
-              setCfoDecisionsModalOpen(true);
-              setSystemMenuExpanded(false);
-            }}
-            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center gap-2.5 text-slate-200"
-          >
-            <History className="w-4 h-4 text-amber-400 shrink-0" />
-            <div>
-              <div className="font-bold text-slate-100">Decisões Autônomas CFO</div>
-              <div className="text-[10px] text-slate-400">Auditorias e deliberações de IA</div>
-            </div>
-          </button>
-
-          {/* Sincronização em Múltiplos Endereços de API */}
-          <button
-            onClick={() => {
-              handleSincronizarTodasApis();
-              setSystemMenuExpanded(false);
-            }}
-            disabled={isSyncingApis}
-            className="w-full p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-left transition-colors flex items-center justify-between text-slate-200 cursor-pointer"
-          >
-            <div className="flex items-center gap-2.5">
-              <RefreshCw className={`w-4 h-4 text-emerald-400 shrink-0 ${isSyncingApis ? 'animate-spin' : ''}`} />
-              <div>
-                <div className="font-bold text-slate-100">Sincronizar Todas as APIs</div>
-                <div className="text-[10px] text-slate-400">Gemini, Claude, GPT, Ollama, Webhooks</div>
-              </div>
-            </div>
-            <span className="text-[10px] bg-emerald-950 border border-emerald-500/40 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
-              {apiSyncReport ? `${apiSyncReport.syncedEndpoints}/${apiSyncReport.totalEndpoints}` : 'Sync'}
-            </span>
-          </button>
-        </div>
-      )}
-
       {/* ==================================================================== */}
-      {/* ÁREA PRINCIPAL: SILHUETA HUMANA, CÉREBRO 3D E SISTEMA NERVOSO        */}
+      {/* ÁREA PRINCIPAL: CÉREBRO 3D BIOLUMINESCENTE — NÚCLEO & CÓRTEX          */}
       {/* ==================================================================== */}
       <main className="flex-1 w-full h-[calc(100vh-64px)] relative overflow-hidden">
         <RealisticBrainCanvas
@@ -1364,7 +1243,7 @@ export default function App() {
           onForceRest={forcarRepousoNeural}
           agents={agentsList}
           onSelectAgent={(ag) => {
-            setAgentRegistryModalOpen(true);
+            setAgentToolStudioOpen(true);
           }}
           activeNerveSignal={activeNerveSignal}
           onBodyPartInteract={handleBodyInteraction}
@@ -1599,6 +1478,19 @@ export default function App() {
         isOpen={n8nStudioModalOpen}
         onClose={() => setN8nStudioModalOpen(false)}
         onTriggerSynapse={(label) => dispararSinapsePontual(null, label)}
+      />
+
+      {/* Modal Dedicado: Studio de Criação de Agentes & Ferramentas (Sincronizado ao Cérebro 3D) */}
+      <AgentToolStudioModal
+        isOpen={agentToolStudioOpen}
+        initialTab={agentToolStudioTab}
+        onClose={() => setAgentToolStudioOpen(false)}
+        onTriggerSynapse={(label, agentId, toolId) => {
+          dispararSinapsePontual(null, label);
+          setActiveSynapsePulse(label);
+          setTimeout(() => setActiveSynapsePulse(null), 3000);
+        }}
+        onAddMemory={adicionarNovaMemoria}
       />
     </div>
   );

@@ -1,3 +1,12 @@
+export type CognitiveMemoryType =
+  | 'sensorial'              // Ultracurta: Áudio capturado (STT), retina de tela, OCR imediato
+  | 'curto_prazo_trabalho'  // Trabalho / Sessão ativa isolada por crachá biométrico
+  | 'episodica'             // Autobiográfica: acontecimentos, data/hora, emoções e participantes
+  | 'semantica_rag'         // Conhecimento factual, contratos, manuais, valuation Bazin/Graham
+  | 'procedural'            // Operacional / Rotinas: como fazer, scripts n8n, regras condicionais
+  | 'emocional_afetiva'     // Vínculos, preferências de voz, tolerância a estresse, empatia
+  | 'biografica_evolutiva'; // Longo prazo: auto-treinamento, épocas evolutivas da LLM integrada
+
 export type MemoryCategory =
   | 'investimento'
   | 'rotina'
@@ -5,7 +14,11 @@ export type MemoryCategory =
   | 'familia'
   | 'aprendizado'
   | 'cfo'
-  | 'seguranca';
+  | 'seguranca'
+  | 'sensorial'
+  | 'procedural'
+  | 'episodica'
+  | 'semantica';
 
 export type SentimentType =
   | 'analitico_racional' // Ciano Elétrico (Frio, matemático, dados Bazin)
@@ -42,7 +55,8 @@ export type LLMProviderType =
   | 'deepseek'
   | 'groq'
   | 'mistral'
-  | 'ollama';
+  | 'ollama'
+  | 'xai';
 
 export interface LLMProviderConfig {
   provider: LLMProviderType;
@@ -96,6 +110,10 @@ export interface AgentDefinition {
   lastAuditDate?: string;
   triggers: string[];
   isAutonomous: boolean;
+  isLeader?: boolean; // Agente Líder único (Jarvis com quem o usuário conversa)
+  immutableLeader?: boolean; // O líder é perpétuo e não pode ser excluído pelo usuário
+  subordinatedToLeaderId?: string; // ID do Agente Líder ao qual este especialista é subordinado
+  personalityPrompt?: string; // Prompt de personalidade do líder ou especialista
   createdAt: string;
   author: string; // 'Jarvis Auto' | 'LLM Autônoma (Avaliação Cognitiva)' | 'Matheus Dullius'
   // Mapeamento Anatômico: cada parte do corpo representa um agente de IA no cérebro
@@ -158,12 +176,17 @@ export interface AgentTool {
   id: string;
   name: string;
   description: string;
-  type: 'API' | 'MCP' | 'WEBHOOK' | 'FUNCTION' | 'WORKSPACE' | 'SQL';
+  type: 'API' | 'MCP' | 'WEBHOOK' | 'FUNCTION' | 'WORKSPACE' | 'SQL' | 'LLM' | 'SENSORY' | 'HOME_ASSISTANT';
   endpointOrMethod?: string;
   parametersSchema?: string;
   codeSnippet?: string;
   headersOrAuth?: string;
   enabled: boolean;
+  status?: 'PENDENTE_TESTE' | 'INICIADA' | 'FALHA';
+  testPayload?: string;
+  associatedAgentId?: string;
+  associatedAgentName?: string;
+  connectionConfig?: Record<string, any>;
   author: 'IA_AUTONOMA' | 'USUARIO';
   createdAt: string;
   lastExecutedAt?: string;
@@ -228,6 +251,7 @@ export interface SynapseMemory {
   connectionsCount: number;
   sentiment?: SentimentType;
   particaoId?: string;
+  memoryType?: CognitiveMemoryType; // Classificação cognitiva estrita (Sensorial, Curto Prazo, Episódica, Semântica, Procedural, Emocional, Biográfica)
   // Campos de Criação Autônoma da LLM & Preservação de Tokens (Zero Interferência Humana)
   isAutonomousLLM?: boolean;
   tokenPreservation?: {
@@ -237,6 +261,36 @@ export interface SynapseMemory {
     rationale: string; // Justificativa da LLM de por que criou a memória para poupar contexto
   };
   autonomousNeedReason?: string;
+}
+
+export interface DelegatedAgentTask {
+  id: string;
+  agentId: string;
+  agentName: string;
+  assignedRole: string;
+  bodyPartAttached?: BodyPartAnatomy;
+  targetDatabase?: string;
+  taskInstruction: string;
+  modelUsed: string;
+  providerUsed: string;
+  status: 'PENDENTE' | 'EXECUTANDO' | 'CONCLUIDO' | 'BLOQUEADO_RBAC' | 'FALHA';
+  executionResult?: string;
+  executionDurationMs?: number;
+  tokensConsumed?: number;
+  tokensPreserved?: number;
+}
+
+export interface SupervisorJarvisConfig {
+  systemPersonalityPrompt: string;
+  archetype: 'MORDOMO_BRITANICO' | 'CFO_ESTRATEGICO' | 'SENTINELA_PROTETOR' | 'CUSTOMIZADO';
+  toneOfVoice: 'formal' | 'executivo' | 'amigavel_conciso' | 'direto_frio';
+  decisionAutonomy: 'total' | 'confirmar_alto_impacto' | 'supervisionada';
+  activeRules: string[];
+  forbiddenBehaviors: string[];
+  supervisorModel: string;
+  supervisorProvider: LLMProviderType;
+  maxParallelSubAgents: number;
+  lastUpdated: string;
 }
 
 export interface VoiceConfig {

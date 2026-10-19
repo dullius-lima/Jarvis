@@ -7,7 +7,23 @@ import {
   AgentNerveSignal,
   BodyPartAnatomy,
 } from '../types/neural';
-import { BODY_PARTS_CONFIG } from '../services/agentRegistry';
+import { toolService, ToolDefinition } from '../services/toolService';
+import {
+  Play,
+  Sparkles,
+  Maximize2,
+  Minimize2,
+  Compass,
+  Layers,
+  ChevronDown,
+  ChevronUp,
+  Cpu,
+  Wrench,
+  Database,
+  ZoomIn,
+  ZoomOut,
+  RotateCw,
+} from 'lucide-react';
 
 export interface RealisticBrainCanvasProps {
   memories: SynapseMemory[];
@@ -26,43 +42,15 @@ export interface RealisticBrainCanvasProps {
   onBodyPartInteract?: (bodyPart: BodyPartAnatomy, agent?: AgentDefinition) => void;
 }
 
-interface MolecularParticle {
-  progress: number;
-  baseSpeed: number;
+export type SynapseCyclePhase = 'idle' | 'agent_to_tool' | 'tool_to_agent' | 'agent_to_memory';
+
+interface SynapsePhoton {
   mesh: THREE.Mesh;
-  radius: number;
-  wobblePhase: number;
-  lateralSpread: THREE.Vector3;
-}
-
-interface TargetedSynapseBridge {
-  targetMemoryId: string;
-  sourceMemoryId?: string;
-  p1: THREE.Vector3;
-  p2: THREE.Vector3;
-  length: number;
-  direction: THREE.Vector3;
-  midpoint: THREE.Vector3;
-  coreMesh: THREE.Mesh;
-  glowMesh: THREE.Mesh;
-  particles: MolecularParticle[];
-  phaseOffset: number;
-  isDirectToCore: boolean;
-}
-
-interface BodyNerveEnding {
-  bodyPartId: BodyPartAnatomy;
-  agent?: AgentDefinition;
-  fullPathCurve: THREE.CatmullRomCurve3; // Trajeto contínuo: Agente -> Medula Espinhal -> Cérebro
-  limbCurve: THREE.QuadraticBezierCurve3;
-  nerveTubeMesh?: THREE.Mesh;
-  socketMesh: THREE.Mesh;
-  socketHaloMesh: THREE.Mesh;
-  socketLabelSprite?: THREE.Sprite;
-  targetCoords: THREE.Vector3;
-  entryY: number;
-  brainToAgentPhotons: Array<{ mesh: THREE.Mesh; progress: number; speed: number }>;
-  yellowVesicle: { mesh: THREE.Mesh; progress: number; speed: number; active: boolean };
+  progress: number;
+  speed: number;
+  color: number;
+  curve: THREE.Curve<THREE.Vector3>;
+  active: boolean;
 }
 
 export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
@@ -82,27 +70,226 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
   onBodyPartInteract,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Lista de ferramentas do córtex carregadas do ToolService
+  const [toolsList, setToolsList] = useState<ToolDefinition[]>(() => toolService.listTools());
+
+  useEffect(() => {
+    const unsub = toolService.subscribe(() => {
+      setToolsList(toolService.listTools());
+    });
+    return () => unsub();
+  }, []);
+
+  // Estado do ciclo sináptico interativo de 3 fases
+  const [currentPhase, setCurrentPhase] = useState<SynapseCyclePhase>('idle');
+  const [phaseProgress, setPhaseProgress] = useState<number>(0);
+  const [autoCycle, setAutoCycle] = useState<boolean>(true);
+  const [selectedAgentId, setSelectedAgentId] = useState<string>('');
+  const [selectedToolId, setSelectedToolId] = useState<string>('');
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string>('');
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isUiCollapsed, setIsUiCollapsed] = useState<boolean>(false);
+  const [currentCameraView, setCurrentCameraView] = useState<'iso' | 'top' | 'front' | 'side'>('iso');
+
+  const [hoveredNode, setHoveredNode] = useState<{
+    type: 'agent' | 'tool' | 'memory';
+    name: string;
+    description?: string;
+    details?: string;
+    location: 'NÚCLEO' | 'CÓRTEX';
+    color: string;
+  } | null>(null);
+
+  // Referências para controle Three.js e animação
+  const cyclePhaseRef = useRef<SynapseCyclePhase>('idle');
+  const cycleTimerRef = useRef<number>(0);
+  const autoCycleRef = useRef<boolean>(true);
+  autoCycleRef.current = autoCycle;
+
+  // Interação de Câmera Orbital com Mouse / Touch
   const isPointerDownRef = useRef<boolean>(false);
   const pointerPrevRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const cameraTargetPosRef = useRef<{ theta: number; phi: number; radius: number }>({
+    theta: 0.35,
+    phi: 1.30,
+    radius: 6.2,
+  });
+  const autoRotateRef = useRef<boolean>(true);
+  const updateCameraFnRef = useRef<(() => void) | null>(null);
 
-  const activeSignalRef = useRef<AgentNerveSignal | null>(null);
-  useEffect(() => {
-    activeSignalRef.current = activeNerveSignal || null;
-  }, [activeNerveSignal]);
-
-  const onBodyPartInteractRef = useRef(onBodyPartInteract);
-  useEffect(() => {
-    onBodyPartInteractRef.current = onBodyPartInteract;
-  }, [onBodyPartInteract]);
-
-  const agentsRef = useRef<AgentDefinition[]>(agents);
-  useEffect(() => {
-    agentsRef.current = agents || [];
+  // Lista de nós ativos para seleção
+  const effectiveAgents = useMemo(() => {
+    if (agents && agents.length > 0) return agents;
+    return [
+      {
+        id: 'jarvis-supervisor',
+        name: 'Jarvis Supervisor',
+        role: 'Orquestrador Geral do Núcleo',
+        targetDatabase: 'GLOBAL',
+        logic: 'Decisão e roteamento de inteligência híbrida',
+        llmProvider: 'gemini' as const,
+        model: 'gemini-3.8-flash',
+        status: 'ativo' as const,
+        triggers: ['voz', 'texto', 'rotina'],
+        isAutonomous: true,
+        createdAt: '2026',
+        author: 'Sistema',
+      },
+      {
+        id: 'automacoes-webhooks',
+        name: 'Agente de Automações & Webhooks',
+        role: 'Recepção e Disparo de Eventos n8n',
+        targetDatabase: 'N8N_WORKFLOWS',
+        logic: 'Orquestração de nós, disparos HTTP e tratamento de payloads',
+        llmProvider: 'gemini' as const,
+        model: 'gemini-3.8-flash',
+        status: 'ativo' as const,
+        triggers: ['webhook', 'api', 'evento'],
+        isAutonomous: true,
+        createdAt: '2026',
+        author: 'Sistema',
+      },
+      {
+        id: 'infraestrutura-ti',
+        name: 'Agente TI & Oracle Cloud',
+        role: 'Telemetria & Servidores VM',
+        targetDatabase: 'ORACLE_VM',
+        logic: 'Monitoramento de nós n8n e hardware',
+        llmProvider: 'gemini' as const,
+        model: 'gemini-3.8-flash',
+        status: 'ativo' as const,
+        triggers: ['telemetria'],
+        isAutonomous: true,
+        createdAt: '2026',
+        author: 'Sistema',
+      },
+      {
+        id: 'ambiente-home',
+        name: 'Agente Home Assistant',
+        role: 'Automação Residencial & Presença',
+        targetDatabase: 'HOME_IOT',
+        logic: 'Luzes, climatização e robô aspirador',
+        llmProvider: 'gemini' as const,
+        model: 'gemini-3.8-flash',
+        status: 'ativo' as const,
+        triggers: ['biometria', 'câmera'],
+        isAutonomous: true,
+        createdAt: '2026',
+        author: 'Sistema',
+      },
+      {
+        id: 'suprimentos-compras',
+        name: 'Agente Suprimentos & Compras',
+        role: 'Estoque Doméstico & Cotações',
+        targetDatabase: 'DESPENSA',
+        logic: 'Monitor de itens e busca de menores preços',
+        llmProvider: 'gemini' as const,
+        model: 'gemini-3.8-flash',
+        status: 'ativo' as const,
+        triggers: ['estoque'],
+        isAutonomous: true,
+        createdAt: '2026',
+        author: 'Sistema',
+      },
+      {
+        id: 'pesquisador-docs',
+        name: 'Agente Pesquisador & RAG',
+        role: 'Extração Documental e Resumos',
+        targetDatabase: 'VECTOR_STORE',
+        logic: 'Busca semântica em PDFs e contratos',
+        llmProvider: 'gemini' as const,
+        model: 'gemini-3.8-flash',
+        status: 'ativo' as const,
+        triggers: ['documento'],
+        isAutonomous: true,
+        createdAt: '2026',
+        author: 'Sistema',
+      },
+    ];
   }, [agents]);
 
-  // Flash neural ao receber sinal no cérebro
-  const corticalBurstRef = useRef<number>(0);
+  // Inicializar nós selecionados padrão
+  useEffect(() => {
+    if (!selectedAgentId && effectiveAgents.length > 0) {
+      setSelectedAgentId(effectiveAgents[0].id);
+    }
+  }, [effectiveAgents, selectedAgentId]);
 
+  useEffect(() => {
+    if (!selectedToolId && toolsList.length > 0) {
+      setSelectedToolId(toolsList[0].id);
+    }
+  }, [toolsList, selectedToolId]);
+
+  useEffect(() => {
+    if (!selectedMemoryId && memories.length > 0) {
+      setSelectedMemoryId(memories[0].id);
+    }
+  }, [memories, selectedMemoryId]);
+
+  // Função para acionar o ciclo completo manual
+  const triggerSynapseCycle = (
+    agentId?: string,
+    toolId?: string,
+    memoryId?: string
+  ) => {
+    if (agentId) setSelectedAgentId(agentId);
+    if (toolId) setSelectedToolId(toolId);
+    if (memoryId) setSelectedMemoryId(memoryId);
+
+    cyclePhaseRef.current = 'agent_to_tool';
+    cycleTimerRef.current = 0;
+    setCurrentPhase('agent_to_tool');
+    setPhaseProgress(0);
+  };
+
+  // Reação ao pulso sináptico emitido pelo terminal/Jarvis/CFO
+  useEffect(() => {
+    if (activeSynapsePulse) {
+      triggerSynapseCycle();
+    }
+  }, [activeSynapsePulse]);
+
+  // Função para alternar modos de câmera para ajuste de tela
+  const setCameraPreset = (view: 'iso' | 'top' | 'front' | 'side') => {
+    setCurrentCameraView(view);
+    const r = cameraTargetPosRef.current.radius;
+    if (view === 'iso') {
+      cameraTargetPosRef.current = { theta: 0.35, phi: 1.30, radius: r };
+    } else if (view === 'top') {
+      cameraTargetPosRef.current = { theta: 0.0, phi: 0.15, radius: r };
+    } else if (view === 'front') {
+      cameraTargetPosRef.current = { theta: 0.0, phi: Math.PI * 0.5, radius: r };
+    } else if (view === 'side') {
+      cameraTargetPosRef.current = { theta: Math.PI * 0.5, phi: Math.PI * 0.5, radius: r };
+    }
+    updateCameraFnRef.current?.();
+  };
+
+  // Ajuste de zoom via botões
+  const adjustZoom = (deltaRadius: number) => {
+    cameraTargetPosRef.current.radius = Math.max(
+      3.2,
+      Math.min(10.5, cameraTargetPosRef.current.radius + deltaRadius)
+    );
+    updateCameraFnRef.current?.();
+  };
+
+  // Alternar tela cheia
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+    }
+  };
+
+  // =========================================================================
+  // SETUP THREE.JS — CÉREBRO 3D ANATÔMICO COM NÚCLEO E CÓRTEX
+  // =========================================================================
   useEffect(() => {
     const currentMount = mountRef.current;
     if (!currentMount) return;
@@ -110,585 +297,684 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     const width = currentMount.clientWidth || window.innerWidth;
     const height = currentMount.clientHeight || window.innerHeight;
 
+    // Ajuste dinâmico do enquadramento de acordo com a proporção da tela
+    const aspect = width / height;
+    const optimalRadius = aspect < 0.8 ? 8.2 : aspect < 1.3 ? 6.8 : 5.8;
+    cameraTargetPosRef.current.radius = optimalRadius;
+
     // 1. Cena Three.js
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x02050e, 0.045);
+    scene.fog = new THREE.FogExp2(0x02050e, 0.038);
 
     // 2. Câmera Perspectiva
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-    camera.position.set(0, 0.6, 9.6);
-    camera.lookAt(0, 0.2, 0);
+    const updateCameraPos = () => {
+      const { theta, phi, radius } = cameraTargetPosRef.current;
+      camera.position.x = radius * Math.sin(phi) * Math.sin(theta);
+      camera.position.y = radius * Math.cos(phi);
+      camera.position.z = radius * Math.sin(phi) * Math.cos(theta);
+      camera.lookAt(0, 0, 0);
+    };
+    updateCameraFnRef.current = updateCameraPos;
+    updateCameraPos();
 
-    // 3. Renderizador WebGL com Qualidade FullHD e Antialiasing de Alta Definição
+    // 3. Renderizador WebGL de Alta Fidelidade
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
       powerPreference: 'high-performance',
-      stencil: false,
-      depth: true,
       precision: 'highp',
     });
     renderer.setSize(width, height);
-    // Garantia de nitidez FullHD nativa (mínimo pixelRatio 2.0 para texturas ultra nítidas)
     renderer.setPixelRatio(Math.max(window.devicePixelRatio || 1, 2.0));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.25;
+    renderer.toneMappingExposure = 1.35;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setClearColor(0x02050e, 1.0);
     currentMount.appendChild(renderer.domElement);
 
-    // 4. Iluminação Bioluminescente
-    const ambientLight = new THREE.AmbientLight(0x032244, 1.5);
+    // 4. Luzes Anatômicas e Bioluminescentes
+    const ambientLight = new THREE.AmbientLight(0x041b33, 1.8);
     scene.add(ambientLight);
 
-    const cranialLight = new THREE.PointLight(0x00f5ff, 2.8, 12);
-    cranialLight.position.set(0, 2.7, 1.2);
-    scene.add(cranialLight);
+    // Luz Central no Núcleo (Vermelha)
+    const coreLight = new THREE.PointLight(0xef4444, 3.4, 9);
+    coreLight.position.set(0, 0, 0);
+    scene.add(coreLight);
 
-    const spinalLight = new THREE.PointLight(0x38bdf8, 2.2, 10);
-    spinalLight.position.set(0, 0.8, 1.8);
-    scene.add(spinalLight);
+    // Luz Cortical Superior (Ciano Elétrico)
+    const cortexTopLight = new THREE.PointLight(0x00f5ff, 2.6, 12);
+    cortexTopLight.position.set(0, 2.8, 1.2);
+    scene.add(cortexTopLight);
 
-    // 5. Grupos da Cena
-    const mainHumanoidGroup = new THREE.Group();
-    scene.add(mainHumanoidGroup);
+    // Luz Cortical Lateral Dourada
+    const cortexGoldLight = new THREE.PointLight(0xfacc15, 2.0, 10);
+    cortexGoldLight.position.set(2.4, -1.0, 1.5);
+    scene.add(cortexGoldLight);
 
-    const brainGroup = new THREE.Group();
-    brainGroup.position.set(0, 2.7, 0); // Posição do cérebro na cabeça
-    mainHumanoidGroup.add(brainGroup);
+    // 5. Grupos da Anatomia Cerebral
+    const brainMasterGroup = new THREE.Group();
+    scene.add(brainMasterGroup);
 
-    const pnsGroup = new THREE.Group(); // Sistema Nervoso Periférico
-    mainHumanoidGroup.add(pnsGroup);
+    const cortexGroup = new THREE.Group();
+    brainMasterGroup.add(cortexGroup);
 
-    const skeletonGroup = new THREE.Group(); // Esqueleto & Silhueta Humana
-    mainHumanoidGroup.add(skeletonGroup);
+    const coreGroup = new THREE.Group();
+    brainMasterGroup.add(coreGroup);
 
-    // =========================================================================
-    // A. SILHUETA HUMANA ANATÔMICA & ESQUELETO CIBERNÉTICO
-    // =========================================================================
-    const boneMaterial = new THREE.LineBasicMaterial({
-      color: 0x0284c7,
-      transparent: true,
-      opacity: 0.32,
-      blending: THREE.AdditiveBlending,
-    });
-
-    const jointMaterial = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      transparent: true,
-      opacity: 0.55,
-      blending: THREE.AdditiveBlending,
-    });
-
-    // 1. Contorno Craniano (Cabeça)
-    const craniumPoints: THREE.Vector3[] = [];
-    const craniumSegments = 40;
-    for (let i = 0; i <= craniumSegments; i++) {
-      const theta = (i / craniumSegments) * Math.PI * 2;
-      const rx = 0.50 * Math.cos(theta);
-      const ry = 0.62 * Math.sin(theta);
-      craniumPoints.push(new THREE.Vector3(rx, 2.72 + ry, 0.04 * Math.sin(theta)));
-    }
-    const craniumGeo = new THREE.BufferGeometry().setFromPoints(craniumPoints);
-    skeletonGroup.add(new THREE.Line(craniumGeo, boneMaterial));
-
-    // Mandíbula e Queixo
-    const jawPoints = [
-      new THREE.Vector3(-0.35, 2.52, 0.08),
-      new THREE.Vector3(-0.18, 2.12, 0.20),
-      new THREE.Vector3(0, 2.05, 0.22),
-      new THREE.Vector3(0.18, 2.12, 0.20),
-      new THREE.Vector3(0.35, 2.52, 0.08),
-    ];
-    skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(jawPoints), boneMaterial));
-
-    // 2. Coluna Vertebral & Medula Espinhal (24 vértebras luminosas C1 a L5/Sacro)
-    const spineLength = 2.4;
-    const numVertebrae = 24;
-    const spineStartY = 2.02;
-    const vertGeo = new THREE.CylinderGeometry(0.040, 0.040, 0.022, 10);
-
-    for (let s = 0; s < numVertebrae; s++) {
-      const progress = s / (numVertebrae - 1);
-      const vY = spineStartY - progress * spineLength;
-      const vZ = -0.05 + Math.sin(progress * Math.PI * 2) * 0.05;
-
-      const vMesh = new THREE.Mesh(vertGeo, jointMaterial);
-      vMesh.position.set(0, vY, vZ);
-      vMesh.rotation.x = Math.PI / 2;
-      skeletonGroup.add(vMesh);
-    }
-
-    // Canal medular central contínuo (feixe de axônios da Medula Espinhal)
-    const unitCylinderGeo = new THREE.CylinderGeometry(1, 1, 1, 8, 1, true);
-    const spinalCordMat = new THREE.MeshBasicMaterial({
-      color: 0x0ea5e9,
-      transparent: true,
-      opacity: 0.70,
-      blending: THREE.AdditiveBlending,
-    });
-    const spinalCordMesh = new THREE.Mesh(unitCylinderGeo, spinalCordMat);
-    spinalCordMesh.position.set(0, spineStartY - spineLength * 0.5, -0.04);
-    spinalCordMesh.scale.set(0.018, spineLength, 0.018);
-    skeletonGroup.add(spinalCordMesh);
-
-    // 3. Clavículas e Ombros
-    const claviclePoints = [
-      new THREE.Vector3(-1.35, 1.75, 0.0),
-      new THREE.Vector3(-0.3, 1.84, 0.14),
-      new THREE.Vector3(0, 1.86, 0.16),
-      new THREE.Vector3(0.3, 1.84, 0.14),
-      new THREE.Vector3(1.35, 1.75, 0.0),
-    ];
-    skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(claviclePoints), boneMaterial));
-
-    // 4. Caixa Torácica (Costelas Anatômicas)
-    const numRibs = 7;
-    for (let r = 0; r < numRibs; r++) {
-      const ribProgress = r / (numRibs - 1);
-      const ribY = 1.72 - ribProgress * 0.78;
-      const ribWidth = 0.55 + Math.sin(ribProgress * Math.PI) * 0.38;
-      const ribPoints: THREE.Vector3[] = [];
-      const ribSegs = 20;
-      for (let s = 0; s <= ribSegs; s++) {
-        const angle = -Math.PI * 0.5 + (s / ribSegs) * Math.PI;
-        const rx = Math.sin(angle) * ribWidth;
-        const rz = Math.cos(angle) * (0.28 + Math.sin(ribProgress * Math.PI) * 0.12);
-        ribPoints.push(new THREE.Vector3(rx, ribY - Math.abs(rx) * 0.08, rz - 0.04));
-      }
-      skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(ribPoints), boneMaterial));
-    }
-
-    // 5. Braços e Mãos
-    const leftArmPoints = [
-      new THREE.Vector3(-1.35, 1.75, 0.0),
-      new THREE.Vector3(-1.95, 1.05, 0.05),
-      new THREE.Vector3(-2.35, 0.25, 0.12),
-      new THREE.Vector3(-2.45, 0.05, 0.14),
-    ];
-    skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(leftArmPoints), boneMaterial));
-
-    const rightArmPoints = [
-      new THREE.Vector3(1.35, 1.75, 0.0),
-      new THREE.Vector3(1.95, 1.05, 0.05),
-      new THREE.Vector3(2.35, 0.25, 0.12),
-      new THREE.Vector3(2.45, 0.05, 0.14),
-    ];
-    skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rightArmPoints), boneMaterial));
-
-    // 6. Cintura Pélvica (Pelve / Quadril)
-    const pelvisPoints = [
-      new THREE.Vector3(-0.75, 0.05, 0.02),
-      new THREE.Vector3(-0.45, -0.25, 0.08),
-      new THREE.Vector3(0, -0.32, 0.10),
-      new THREE.Vector3(0.45, -0.25, 0.08),
-      new THREE.Vector3(0.75, 0.05, 0.02),
-      new THREE.Vector3(0, 0.08, -0.05),
-      new THREE.Vector3(-0.75, 0.05, 0.02),
-    ];
-    skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pelvisPoints), boneMaterial));
-
-    // 7. Pernas e Pés
-    const leftLegPoints = [
-      new THREE.Vector3(-0.5, -0.25, 0.08),
-      new THREE.Vector3(-0.75, -1.35, 0.08),
-      new THREE.Vector3(-0.9, -2.55, 0.08),
-      new THREE.Vector3(-0.95, -2.7, 0.35),
-    ];
-    skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(leftLegPoints), boneMaterial));
-
-    const rightLegPoints = [
-      new THREE.Vector3(0.5, -0.25, 0.08),
-      new THREE.Vector3(0.75, -1.35, 0.08),
-      new THREE.Vector3(0.9, -2.55, 0.08),
-      new THREE.Vector3(0.95, -2.7, 0.35),
-    ];
-    skeletonGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rightLegPoints), boneMaterial));
-
-    // Articulações
-    const jointPositions = [
-      new THREE.Vector3(-1.35, 1.75, 0.0),
-      new THREE.Vector3(1.35, 1.75, 0.0),
-      new THREE.Vector3(-1.95, 1.05, 0.05),
-      new THREE.Vector3(1.95, 1.05, 0.05),
-      new THREE.Vector3(-2.35, 0.25, 0.12),
-      new THREE.Vector3(2.35, 0.25, 0.12),
-      new THREE.Vector3(-0.75, -1.35, 0.08),
-      new THREE.Vector3(0.75, -1.35, 0.08),
-      new THREE.Vector3(-0.9, -2.55, 0.08),
-      new THREE.Vector3(0.9, -2.55, 0.08),
-    ];
-    const jointSphereGeo = new THREE.SphereGeometry(0.036, 10, 10);
-    jointPositions.forEach((pos) => {
-      const jMesh = new THREE.Mesh(jointSphereGeo, jointMaterial);
-      jMesh.position.copy(pos);
-      skeletonGroup.add(jMesh);
-    });
+    const synapsesGroup = new THREE.Group();
+    brainMasterGroup.add(synapsesGroup);
 
     // =========================================================================
-    // B. CÉREBRO NEURAL CRANIANO (CÓRTEX BIOLUMINESCENTE DENTRO DO CRÂNIO)
+    // A. ANATOMIA REAL DE UM CÉREBRO: 2 HEMISFÉRIOS, CEREBELO E TRONCO ENCEFÁLICO
     // =========================================================================
-    const brainNodes: THREE.Vector3[] = [];
-    const brainParticleCount = 140;
-    const centralCorePos = new THREE.Vector3(0, 0, 0);
+    // Função matemática precisa para moldar a geometria de um hemisfério cerebral
+    const createAnatomicalHemisphereGeometry = (isRight: boolean): THREE.BufferGeometry => {
+      const uSegs = 48; // Azimutal
+      const vSegs = 36; // Polar
+      const vertices: number[] = [];
+      const normals: number[] = [];
+      const uvs: number[] = [];
+      const indices: number[] = [];
 
-    for (let i = 0; i < brainParticleCount; i++) {
-      const u = Math.random();
-      const v = Math.random();
-      const theta = u * 2.0 * Math.PI;
-      const phi = Math.acos(2.0 * v - 1.0);
-      const r = Math.cbrt(Math.random()) * 0.44;
+      const xSign = isRight ? 1 : -1;
+      const sagittalGap = 0.09 * xSign; // Vão anatômico da fissura sagital inter-hemisférica
 
-      const isRight = Math.random() > 0.5;
-      const hemiOffset = isRight ? 0.07 : -0.07;
+      for (let j = 0; j <= vSegs; j++) {
+        const v = j / vSegs;
+        const phi = v * Math.PI; // 0 (topo dorsal) a PI (base ventral)
 
-      const x = r * Math.sin(phi) * Math.cos(theta) * 0.85 + hemiOffset;
-      const y = r * Math.sin(phi) * Math.sin(theta) * 0.72;
-      const z = r * Math.cos(phi) * 0.90;
+        for (let i = 0; i <= uSegs; i++) {
+          const u = i / uSegs;
+          const theta = u * Math.PI * 2; // Volta completa
 
-      brainNodes.push(new THREE.Vector3(x, y, z));
-    }
+          // Projeção base da forma ovoide do cérebro humano:
+          // Mais longo no eixo Z (frente-trás) do que no X (largura)
+          const cosT = Math.cos(theta);
+          const sinT = Math.sin(theta);
+          const sinP = Math.sin(phi);
+          const cosP = Math.cos(phi);
 
-    const plexusGeo = new THREE.BufferGeometry().setFromPoints(brainNodes);
-    const plexusMat = new THREE.PointsMaterial({
-      size: 0.036,
-      color: 0x00f5ff,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      opacity: 0.85,
-    });
-    const plexusPoints = new THREE.Points(plexusGeo, plexusMat);
-    brainGroup.add(plexusPoints);
+          // 1. Perfil morfológico do cérebro (Lobo Frontal amplo à frente, Occipital afunilado atrás)
+          const zCoord = cosP * 1.55; // Eixo rostro-caudal
+          const frontalBroadening = zCoord > 0 ? 1.08 + zCoord * 0.12 : 1.0 - Math.abs(zCoord) * 0.18;
 
-    // Conexões sinápticas intracranianas
-    const brainLines: THREE.Vector3[] = [];
-    for (let i = 0; i < brainNodes.length; i++) {
-      for (let j = i + 1; j < brainNodes.length; j++) {
-        if (brainNodes[i].distanceTo(brainNodes[j]) < 0.25) {
-          brainLines.push(brainNodes[i], brainNodes[j]);
+          // 2. Lobo Temporal (Protuberância antero-inferior nas laterais)
+          const isTemporalRegion = sinP > 0.45 && cosP > -0.35 && Math.abs(cosT) > 0.45;
+          const temporalBulge = isTemporalRegion ? 0.22 * Math.sin(phi * 2.2) : 0.0;
+
+          // 3. Fissura Medial (Face interna achatada que forma a fenda longitudinal)
+          const medialFlatten = isRight ? Math.max(0.08, cosT * 1.15) : Math.min(-0.08, cosT * 1.15);
+
+          // 4. Giros e Sulcos Corticais Profundos e Orgânicos (Gyri & Sulci)
+          const gyriMajor = Math.sin(phi * 13.0) * Math.cos(theta * 9.0) * 0.09;
+          const gyriMinor = Math.cos(phi * 21.0 + theta * 15.0) * 0.045;
+          const sulciIndent = -Math.abs(Math.sin(phi * 7.5 + theta * 6.0)) * 0.04;
+          const gyriTotal = gyriMajor + gyriMinor + sulciIndent;
+
+          // Raio radial composto
+          const rBase = (1.25 + gyriTotal + temporalBulge) * frontalBroadening;
+
+          // Coordenadas tridimensionais anatômicas
+          const x = (medialFlatten * rBase * 0.88 + sagittalGap);
+          const y = (sinP * sinT * rBase * 0.82) + 0.10;
+          const z = zCoord * (1.0 + gyriTotal * 0.5);
+
+          vertices.push(x, y, z);
+          uvs.push(u, v);
         }
       }
-    }
-    const brainLinesGeo = new THREE.BufferGeometry().setFromPoints(brainLines);
-    const brainLinesMat = new THREE.LineBasicMaterial({
+
+      // Criar índices das faces triangulares
+      for (let j = 0; j < vSegs; j++) {
+        for (let i = 0; i < uSegs; i++) {
+          const a = j * (uSegs + 1) + i;
+          const b = a + uSegs + 1;
+          const c = a + 1;
+          const d = b + 1;
+
+          indices.push(a, b, c);
+          indices.push(c, b, d);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
+      geo.computeVertexNormals();
+      return geo;
+    };
+
+    // Material bioluminescente translúcido de alta definição para o córtex
+    const cortexHemisphereMat = new THREE.MeshPhongMaterial({
       color: 0x0284c7,
+      emissive: 0x032244,
+      specular: 0x38bdf8,
+      shininess: 45,
       transparent: true,
-      opacity: 0.30,
+      opacity: 0.65,
+      wireframe: false,
+    });
+
+    const cortexWireframeMat = new THREE.MeshBasicMaterial({
+      color: 0x00f5ff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.14,
       blending: THREE.AdditiveBlending,
     });
-    brainGroup.add(new THREE.LineSegments(brainLinesGeo, brainLinesMat));
+
+    // Hemisfério Esquerdo
+    const leftHemisphereGeo = createAnatomicalHemisphereGeometry(false);
+    const leftMesh = new THREE.Mesh(leftHemisphereGeo, cortexHemisphereMat);
+    const leftWire = new THREE.Mesh(leftHemisphereGeo, cortexWireframeMat);
+    cortexGroup.add(leftMesh);
+    cortexGroup.add(leftWire);
+
+    // Hemisfério Direito
+    const rightHemisphereGeo = createAnatomicalHemisphereGeometry(true);
+    const rightMesh = new THREE.Mesh(rightHemisphereGeo, cortexHemisphereMat);
+    const rightWire = new THREE.Mesh(rightHemisphereGeo, cortexWireframeMat);
+    cortexGroup.add(rightMesh);
+    cortexGroup.add(rightWire);
+
+    // B. CEREBELO ANATÔMICO (Dois lóbulos póstero-inferiores estriados)
+    const cerebellumGeo = new THREE.SphereGeometry(0.55, 24, 18);
+    const cerebellumMat = new THREE.MeshPhongMaterial({
+      color: 0x0369a1,
+      emissive: 0x021d38,
+      specular: 0x0ea5e9,
+      shininess: 30,
+      transparent: true,
+      opacity: 0.55,
+      wireframe: true,
+    });
+
+    // Cerebelo Esquerdo
+    const leftCerebellum = new THREE.Mesh(cerebellumGeo, cerebellumMat);
+    leftCerebellum.scale.set(0.68, 0.45, 0.55);
+    leftCerebellum.position.set(-0.45, -0.75, -1.15);
+    cortexGroup.add(leftCerebellum);
+
+    // Cerebelo Direito
+    const rightCerebellum = leftCerebellum.clone();
+    rightCerebellum.position.set(0.45, -0.75, -1.15);
+    cortexGroup.add(rightCerebellum);
+
+    // C. TRONCO ENCEFÁLICO (Brainstem - Centro Inferior)
+    const brainstemCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, -0.25, -0.35),
+      new THREE.Vector3(0, -0.75, -0.45),
+      new THREE.Vector3(0, -1.35, -0.55),
+    ]);
+    const brainstemGeo = new THREE.TubeGeometry(brainstemCurve, 16, 0.16, 12, false);
+    const brainstemMat = new THREE.MeshBasicMaterial({
+      color: 0x0284c7,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.35,
+    });
+    cortexGroup.add(new THREE.Mesh(brainstemGeo, brainstemMat));
+
+    // Nuvem de partículas sinápticas bioluminescentes sobre a superfície dos giros
+    const corticalPlexusPoints: THREE.Vector3[] = [];
+    const numPlexus = 800;
+    for (let k = 0; k < numPlexus; k++) {
+      const isR = Math.random() > 0.5;
+      const xS = isR ? 1 : -1;
+      const u = Math.random() * Math.PI * 2;
+      const v = Math.random() * Math.PI;
+
+      const rX = Math.sin(v) * Math.cos(u);
+      const rY = Math.sin(v) * Math.sin(u);
+      const rZ = Math.cos(v);
+
+      const pX = (Math.max(0.12, Math.abs(rX)) * 1.15 * xS) + (isR ? 0.08 : -0.08);
+      const pY = rY * 0.88 + 0.10;
+      const pZ = rZ * 1.55;
+
+      corticalPlexusPoints.push(new THREE.Vector3(pX, pY, pZ));
+    }
+    const plexusGeo = new THREE.BufferGeometry().setFromPoints(corticalPlexusPoints);
+    const plexusMat = new THREE.PointsMaterial({
+      size: 0.038,
+      color: 0x00f5ff,
+      transparent: true,
+      opacity: 0.80,
+      blending: THREE.AdditiveBlending,
+    });
+    cortexGroup.add(new THREE.Points(plexusGeo, plexusMat));
 
     // =========================================================================
-    // C. MEMÓRIAS: BOTÕES AXÔNICOS PEQUENOS E ESTREITAMENTE INTERNOS
-    // (CORREÇÃO TOTAL: ZERO RAMIFICAÇÕES OU PONTOS VERMELHOS NA CABEÇA!)
+    // B. NÚCLEO (INNER CORE): ONDE FICAM OS AGENTES DE IA (COR: VERMELHA)
     // =========================================================================
-    const memoryMeshes: THREE.Mesh[] = [];
-    const targetedBridges: TargetedSynapseBridge[] = [];
-    const bridgesGroup = new THREE.Group();
-    brainGroup.add(bridgesGroup);
+    // Esfera central do núcleo tálamo-límbico profundo
+    const coreNucleusGeo = new THREE.SphereGeometry(0.72, 20, 20);
+    const coreNucleusMat = new THREE.MeshBasicMaterial({
+      color: 0xef4444,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.20,
+      blending: THREE.AdditiveBlending,
+    });
+    const coreNucleusMesh = new THREE.Mesh(coreNucleusGeo, coreNucleusMat);
+    coreGroup.add(coreNucleusMesh);
 
-    const axonBoutonGeo = new THREE.SphereGeometry(0.026, 10, 10);
-    const axonKernelGeo = new THREE.SphereGeometry(0.012, 8, 8);
+    // Mapeamento das posições dos Agentes de IA no NÚCLEO (Raio <= 0.60)
+    interface AgentNode3D {
+      agent: AgentDefinition;
+      pos: THREE.Vector3;
+      mesh: THREE.Mesh;
+      haloMesh: THREE.Mesh;
+      isSupervisor: boolean;
+    }
+    const agentNodes: AgentNode3D[] = [];
+    const interactiveMeshes: THREE.Mesh[] = [];
 
-    memories.forEach((mem) => {
-      // CLAMP RIGOROSO: Garantir que a coordenada da memória esteja 100% dentro do cérebro craniano!
-      let memPos = new THREE.Vector3(
-        Number.isFinite(mem.coords?.[0]) ? mem.coords[0] : (Math.random() - 0.5) * 0.2,
-        Number.isFinite(mem.coords?.[1]) ? mem.coords[1] : (Math.random() - 0.5) * 0.15,
-        Number.isFinite(mem.coords?.[2]) ? mem.coords[2] : (Math.random() - 0.5) * 0.2
-      );
-      if (memPos.length() > 0.22) {
-        memPos.normalize().multiplyScalar(0.12 + (Math.abs(memPos.x * 10) % 0.08));
+    const numAgents = effectiveAgents.length;
+    effectiveAgents.forEach((agent, idx) => {
+      const isSupervisor = agent.id === 'jarvis-supervisor' || idx === 0;
+
+      // Posição estritamente no NÚCLEO: Jarvis no centro absoluto, outros agentes orbitando
+      let pos: THREE.Vector3;
+      if (isSupervisor) {
+        pos = new THREE.Vector3(0, 0, 0);
+      } else {
+        const angle = ((idx - 1) / (numAgents - 1)) * Math.PI * 2;
+        const orbitRadius = 0.42 + (idx % 2) * 0.12;
+        const orbitY = Math.sin(idx * 1.9) * 0.20;
+        pos = new THREE.Vector3(
+          Math.cos(angle) * orbitRadius,
+          orbitY,
+          Math.sin(angle) * orbitRadius * 0.85
+        );
       }
-      memPos.y = Math.min(Math.max(memPos.y, -0.15), 0.15);
-      memPos.z = Math.min(Math.max(memPos.z, -0.18), 0.18);
 
-      const memGroup = new THREE.Group();
-      memGroup.position.copy(memPos);
-
-      // Cada memória salva registrada como uma bolinha vermelha dentro do cérebro (conforme solicitado!)
-      const coreMat = new THREE.MeshBasicMaterial({
-        color: 0xef4444, // Bolinha vermelha bioluminescente
+      // Esfera do Agente de IA: VERMELHA (conforme estipulado!)
+      const agentRadius = isSupervisor ? 0.082 : 0.052;
+      const agentGeo = new THREE.SphereGeometry(agentRadius, 16, 16);
+      const agentMat = new THREE.MeshBasicMaterial({
+        color: 0xef4444, // VERMELHO VIBRANTE
         transparent: true,
-        opacity: 0.95,
+        opacity: 0.98,
       });
-      const coreMesh = new THREE.Mesh(axonBoutonGeo, coreMat);
-      coreMesh.userData = { memory: mem };
-      memGroup.add(coreMesh);
-      memoryMeshes.push(coreMesh);
+      const agentMesh = new THREE.Mesh(agentGeo, agentMat);
+      agentMesh.position.copy(pos);
+      agentMesh.userData = { type: 'agent', data: agent };
+      coreGroup.add(agentMesh);
+      interactiveMeshes.push(agentMesh);
 
-      const innerMat = new THREE.MeshBasicMaterial({
-        color: 0xff4d4d, // Núcleo brilhante vermelho escarlate
-        transparent: true,
-        opacity: 0.95,
-      });
-      memGroup.add(new THREE.Mesh(axonKernelGeo, innerMat));
+      // Núcleo interno incandescente
+      const innerKernel = new THREE.Mesh(
+        new THREE.SphereGeometry(agentRadius * 0.45, 8, 8),
+        new THREE.MeshBasicMaterial({ color: 0xffffff })
+      );
+      agentMesh.add(innerKernel);
 
-      // Auréola bioluminescente vermelha ao redor da bolinha de memória
-      const haloGeo = new THREE.SphereGeometry(0.036, 8, 8);
+      // Halo pulsante vermelho
+      const haloGeo = new THREE.SphereGeometry(agentRadius * 1.7, 12, 12);
       const haloMat = new THREE.MeshBasicMaterial({
         color: 0xdc2626,
         transparent: true,
-        opacity: 0.35,
+        opacity: 0.40,
         blending: THREE.AdditiveBlending,
       });
-      memGroup.add(new THREE.Mesh(haloGeo, haloMat));
+      const haloMesh = new THREE.Mesh(haloGeo, haloMat);
+      haloMesh.position.copy(pos);
+      coreGroup.add(haloMesh);
 
-      brainGroup.add(memGroup);
+      agentNodes.push({
+        agent,
+        pos,
+        mesh: agentMesh,
+        haloMesh,
+        isSupervisor,
+      });
+    });
 
-      // Ponte axônica exclusivamente interna (do centro do cérebro ao nó)
-      const p1 = centralCorePos.clone();
-      const p2 = memPos.clone();
-      const length = p1.distanceTo(p2);
-      const direction = new THREE.Vector3().subVectors(p2, p1).normalize();
-      const midpoint = new THREE.Vector3().addVectors(p1, p2).multiplyScalar(0.5);
-      const upVector = new THREE.Vector3(0, 1, 0);
-      const quaternion = new THREE.Quaternion().setFromUnitVectors(upVector, direction);
+    // Conexões Neurais de Subordinação: Filamentos entre o Agente Líder Central e seus Especialistas Subordinados
+    if (agentNodes.length > 1) {
+      const leaderPos = agentNodes[0].pos;
+      for (let s = 1; s < agentNodes.length; s++) {
+        const specPos = agentNodes[s].pos;
+        const subCurve = new THREE.LineCurve3(leaderPos, specPos);
+        const subTubeGeo = new THREE.TubeGeometry(subCurve, 12, 0.007, 6, false);
+        const subTubeMat = new THREE.MeshBasicMaterial({
+          color: 0xef4444, // Vermelho neural do núcleo
+          transparent: true,
+          opacity: 0.60,
+          blending: THREE.AdditiveBlending,
+        });
+        const subFilament = new THREE.Mesh(subTubeGeo, subTubeMat);
+        coreGroup.add(subFilament);
+      }
+    }
 
-      const bridgeCoreMat = new THREE.MeshBasicMaterial({
-        color: 0x0284c7,
+    // =========================================================================
+    // C. CÓRTEX (OUTER CORTEX): ONDE FICAM AS FERRAMENTAS (AMARELAS) E MEMÓRIAS (VERDE-AZULADAS)
+    // =========================================================================
+    // 1. FERRAMENTAS CRIADAS (COR: AMARELA — 0xfacc15)
+    interface ToolNode3D {
+      tool: ToolDefinition;
+      pos: THREE.Vector3;
+      mesh: THREE.Mesh;
+      haloMesh: THREE.Mesh;
+    }
+    const toolNodes: ToolNode3D[] = [];
+
+    const numTools = toolsList.length;
+    toolsList.forEach((tool, idx) => {
+      // Posicionamento nas cristas do córtex cerebral (Lobo frontal e parietal superior)
+      const u = (idx / numTools) * Math.PI * 2;
+      const isR = Math.cos(u) >= 0;
+      const xS = isR ? 1 : -1;
+      const phi = 0.55 + ((idx % 4) / 4) * 1.25;
+
+      const pX = (Math.sin(phi) * Math.abs(Math.cos(u)) * 1.10 * xS) + (isR ? 0.22 : -0.22);
+      const pY = (Math.sin(phi) * Math.sin(u) * 0.78) + 0.12;
+      const pZ = Math.cos(phi) * 1.45;
+      const pos = new THREE.Vector3(pX, pY, pZ);
+
+      // Esfera da Ferramenta: AMARELA (conforme estipulado!)
+      const toolGeo = new THREE.SphereGeometry(0.060, 14, 14);
+      const toolMat = new THREE.MeshBasicMaterial({
+        color: 0xfacc15, // AMARELO OURO ELETRICO
         transparent: true,
-        opacity: 0.20,
-        blending: THREE.AdditiveBlending,
+        opacity: 0.95,
       });
-      const bridgeCoreMesh = new THREE.Mesh(unitCylinderGeo, bridgeCoreMat);
-      bridgeCoreMesh.position.copy(midpoint);
-      bridgeCoreMesh.setRotationFromQuaternion(quaternion);
-      bridgeCoreMesh.scale.set(0.004, length, 0.004);
-      bridgesGroup.add(bridgeCoreMesh);
+      const toolMesh = new THREE.Mesh(toolGeo, toolMat);
+      toolMesh.position.copy(pos);
+      toolMesh.userData = { type: 'tool', data: tool };
+      cortexGroup.add(toolMesh);
+      interactiveMeshes.push(toolMesh);
 
-      // Vesículas lentas de transporte intracraniano (azul/ciano)
-      const bridgeParticles: MolecularParticle[] = [];
-      const numVesicles = 3;
+      // Núcleo brilhante
+      toolMesh.add(
+        new THREE.Mesh(
+          new THREE.SphereGeometry(0.025, 8, 8),
+          new THREE.MeshBasicMaterial({ color: 0xfffbeb })
+        )
+      );
 
-      for (let k = 0; k < numVesicles; k++) {
-        const vesicleRadius = 0.014;
-        const particleGeo = new THREE.SphereGeometry(vesicleRadius, 8, 8);
-        const particleMat = new THREE.MeshBasicMaterial({
-          color: 0x00f5ff,
+      // Halo dourado amarelo
+      const toolHalo = new THREE.Mesh(
+        new THREE.SphereGeometry(0.105, 10, 10),
+        new THREE.MeshBasicMaterial({
+          color: 0xeab308,
+          transparent: true,
+          opacity: 0.35,
+          blending: THREE.AdditiveBlending,
+        })
+      );
+      toolHalo.position.copy(pos);
+      cortexGroup.add(toolHalo);
+
+      toolNodes.push({
+        tool,
+        pos,
+        mesh: toolMesh,
+        haloMesh: toolHalo,
+      });
+    });
+
+    // 2. MEMÓRIAS (COR: VERDE-AZULADO — 0x06b6d4 / CYAN-TEAL)
+    interface MemoryNode3D {
+      memory: SynapseMemory;
+      pos: THREE.Vector3;
+      mesh: THREE.Mesh;
+      haloMesh: THREE.Mesh;
+    }
+    const memoryNodes: MemoryNode3D[] = [];
+
+    const effectiveMemories: SynapseMemory[] = memories && memories.length > 0
+      ? memories
+      : [
+          {
+            id: 'mem-curto-prazo',
+            title: 'Sessão Ativa: Biometria Matheus',
+            category: 'sensorial',
+            user: 'Jarvis',
+            timestamp: 'Agora',
+            content: 'Crachá biométrico reconhecido. Permissões de Administrador ativas.',
+            importance: 'alta',
+            coords: [0.2, 0.4, 0.5],
+            color: 0x06b6d4,
+            firing: false,
+            connectionsCount: 3,
+          },
+          {
+            id: 'mem-rag-n8n',
+            title: 'RAG: Manuais e Regras de Workflows n8n',
+            category: 'semantica',
+            user: 'Orquestrador n8n',
+            timestamp: 'Hoje',
+            content: 'Estrutura de 5 camadas, triggers escaláveis, tratamento de loops e crachás biométricos.',
+            importance: 'critica',
+            coords: [-0.3, 0.2, 0.4],
+            color: 0x06b6d4,
+            firing: false,
+            connectionsCount: 5,
+          },
+          {
+            id: 'mem-biografica',
+            title: 'Evolução: Preferências e Rotinas',
+            category: 'aprendizado',
+            user: 'Núcleo Neural',
+            timestamp: 'Histórico',
+            content: 'Preferência por concisão tática e relatórios executivos compactos.',
+            importance: 'alta',
+            coords: [0.1, -0.2, 0.6],
+            color: 0x06b6d4,
+            firing: false,
+            connectionsCount: 4,
+          },
+          {
+            id: 'mem-residencia',
+            title: 'Automação: Climatização e Iluminação',
+            category: 'rotina',
+            user: 'Home Assistant',
+            timestamp: 'Hoje',
+            content: 'Ambiente preparado conforme crachá de presença na sala.',
+            importance: 'media',
+            coords: [-0.4, -0.3, 0.3],
+            color: 0x06b6d4,
+            firing: false,
+            connectionsCount: 2,
+          },
+        ];
+
+    effectiveMemories.forEach((mem, idx) => {
+      // Posicionamento no CÓRTEX (Lobo temporal e parietal posterior)
+      const u = ((idx * 2 + 1) / (effectiveMemories.length * 2)) * Math.PI * 2;
+      const isR = Math.cos(u) >= 0;
+      const xS = isR ? 1 : -1;
+      const phi = 1.15 + ((idx % 3) / 3) * 1.35;
+
+      const pX = (Math.sin(phi) * Math.abs(Math.cos(u)) * 1.08 * xS) + (isR ? 0.20 : -0.20);
+      const pY = (Math.sin(phi) * Math.sin(u) * 0.76) + 0.08;
+      const pZ = Math.cos(phi) * 1.50;
+      const pos = new THREE.Vector3(pX, pY, pZ);
+
+      // Esfera da Memória: VERDE-AZULADO (conforme estipulado!)
+      const memGeo = new THREE.SphereGeometry(0.058, 14, 14);
+      const memMat = new THREE.MeshBasicMaterial({
+        color: 0x06b6d4, // VERDE-AZULADO / CYAN-TEAL
+        transparent: true,
+        opacity: 0.95,
+      });
+      const memMesh = new THREE.Mesh(memGeo, memMat);
+      memMesh.position.copy(pos);
+      memMesh.userData = { type: 'memory', data: mem };
+      cortexGroup.add(memMesh);
+      interactiveMeshes.push(memMesh);
+
+      // Núcleo interno
+      memMesh.add(
+        new THREE.Mesh(
+          new THREE.SphereGeometry(0.024, 8, 8),
+          new THREE.MeshBasicMaterial({ color: 0xe0f2fe })
+        )
+      );
+
+      // Halo verde-azulado
+      const memHalo = new THREE.Mesh(
+        new THREE.SphereGeometry(0.10, 10, 10),
+        new THREE.MeshBasicMaterial({
+          color: 0x0891b2,
+          transparent: true,
+          opacity: 0.35,
+          blending: THREE.AdditiveBlending,
+        })
+      );
+      memHalo.position.copy(pos);
+      cortexGroup.add(memHalo);
+
+      memoryNodes.push({
+        memory: mem,
+        pos,
+        mesh: memMesh,
+        haloMesh: memHalo,
+      });
+    });
+
+    // =========================================================================
+    // D. SISTEMA DE SINAPSES EM 3 ETAPAS
+    // 1. Agente -> Ferramenta: VERMELHO (0xef4444)
+    // 2. Ferramenta -> Agente: AMARELO (0xfacc15)
+    // 3. Agente -> Memória: VERDE-AZULADO (0x06b6d4)
+    // =========================================================================
+    interface DynamicSynapseBeam {
+      type: 'agent_to_tool' | 'tool_to_agent' | 'agent_to_memory';
+      curve: THREE.CatmullRomCurve3;
+      tubeMesh: THREE.Mesh;
+      photons: SynapsePhoton[];
+      activeColor: number;
+    }
+    const dynamicBeams: DynamicSynapseBeam[] = [];
+
+    const createSynapticCurve = (start: THREE.Vector3, end: THREE.Vector3): THREE.CatmullRomCurve3 => {
+      const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+      const normal = new THREE.Vector3().crossVectors(start, end).normalize();
+      if (normal.lengthSq() < 0.01) normal.set(0, 1, 0);
+      mid.add(normal.multiplyScalar(0.22));
+
+      return new THREE.CatmullRomCurve3([start.clone(), mid, end.clone()]);
+    };
+
+    const createPhotons = (curve: THREE.Curve<THREE.Vector3>, color: number, count = 4): SynapsePhoton[] => {
+      const list: SynapsePhoton[] = [];
+      for (let k = 0; k < count; k++) {
+        const pGeo = new THREE.SphereGeometry(0.024, 8, 8);
+        const pMat = new THREE.MeshBasicMaterial({
+          color,
           transparent: true,
           opacity: 0.0,
           blending: THREE.AdditiveBlending,
         });
-        const pMesh = new THREE.Mesh(particleGeo, particleMat);
-        const initialProgress = k / numVesicles;
-        pMesh.position.lerpVectors(p1, p2, initialProgress);
-        bridgesGroup.add(pMesh);
+        const pMesh = new THREE.Mesh(pGeo, pMat);
+        synapsesGroup.add(pMesh);
 
-        bridgeParticles.push({
-          progress: initialProgress,
-          baseSpeed: 0.04 + Math.random() * 0.02,
+        list.push({
           mesh: pMesh,
-          radius: vesicleRadius,
-          wobblePhase: Math.random() * Math.PI * 2,
-          lateralSpread: new THREE.Vector3((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2).normalize(),
-        });
-      }
-
-      targetedBridges.push({
-        targetMemoryId: mem.id,
-        p1,
-        p2,
-        length,
-        direction,
-        midpoint,
-        coreMesh: bridgeCoreMesh,
-        glowMesh: bridgeCoreMesh,
-        particles: bridgeParticles,
-        phaseOffset: Math.random() * Math.PI * 2,
-        isDirectToCore: true,
-      });
-    });
-
-    // =========================================================================
-    // D. SISTEMA NERVOSO PERIFÉRICO: ÍCONES MENORES, MAIS BONITOS E SINAL PELA MEDULA ATÉ O CÉREBRO
-    // =========================================================================
-    const bodyNerveEndings: BodyNerveEnding[] = [];
-    const interactiveBodyMeshes: THREE.Mesh[] = [];
-
-    const agentByPart = new Map<BodyPartAnatomy, AgentDefinition>();
-    agents.forEach((ag) => {
-      if (ag.bodyPart) agentByPart.set(ag.bodyPart, ag);
-    });
-
-    Object.entries(BODY_PARTS_CONFIG).forEach(([partKey, config]) => {
-      const bPart = partKey as BodyPartAnatomy;
-      const associatedAgent = agentByPart.get(bPart);
-      const targetCoords = new THREE.Vector3(...config.coords);
-
-      // Ponto de entrada na medula espinhal (canal central do esqueleto)
-      const entryY = Math.min(Math.max(targetCoords.y + 0.10, -0.25), 1.95);
-      const medulaEntry = new THREE.Vector3(0, entryY, -0.04);
-      const brainEntry = new THREE.Vector3(0, 2.70, 0.0); // Chegada no centro do cérebro
-
-      // Curva do nervo periférico do membro até a medula
-      const limbCtrl = new THREE.Vector3(
-        targetCoords.x * 0.45,
-        (entryY + targetCoords.y) * 0.5 + 0.06,
-        (targetCoords.z - 0.04) * 0.5 + 0.04
-      );
-      const limbCurve = new THREE.QuadraticBezierCurve3(medulaEntry, limbCtrl, targetCoords);
-
-      // Tubo visual periférico (omitido na cabeça para não gerar ramificações no crânio)
-      let tubeMesh: THREE.Mesh | undefined;
-      if (bPart !== 'cranio_cerebro') {
-        const tubeGeo = new THREE.TubeGeometry(limbCurve, 16, associatedAgent ? 0.010 : 0.005, 6, false);
-        const tubeMat = new THREE.MeshBasicMaterial({
-          color: associatedAgent ? (config.colorHex === 0xef4444 ? 0x0ea5e9 : config.colorHex) : 0x0284c7,
-          transparent: true,
-          opacity: associatedAgent ? 0.70 : 0.18,
-          blending: THREE.AdditiveBlending,
-        });
-        tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
-        pnsGroup.add(tubeMesh);
-      }
-
-      // TRAJETO COMPLETO QUE PASSA PELA MEDULA E SOBE ATÉ O CÉREBRO:
-      // Agente -> Nervo Periférico -> Medula Espinhal -> Tronco Encefálico -> Córtex Cerebral
-      const pathPoints: THREE.Vector3[] = [targetCoords.clone()];
-      if (bPart !== 'cranio_cerebro') {
-        pathPoints.push(
-          new THREE.Vector3(targetCoords.x * 0.45, (entryY + targetCoords.y) * 0.5, (targetCoords.z - 0.04) * 0.5 + 0.04),
-          medulaEntry.clone()
-        );
-        // Pontos verticais subindo estritamente pelo canal medular da medula espinhal
-        if (entryY < 0.8) pathPoints.push(new THREE.Vector3(0, 0.85, -0.04));
-        if (entryY < 1.6) pathPoints.push(new THREE.Vector3(0, 1.65, -0.04));
-        pathPoints.push(
-          new THREE.Vector3(0, 2.05, -0.04), // Cervical
-          new THREE.Vector3(0, 2.38, -0.02)  // Tronco encefálico
-        );
-      }
-      pathPoints.push(brainEntry.clone()); // Cérebro
-
-      const fullPathCurve = new THREE.CatmullRomCurve3(pathPoints);
-
-      // ÍCONE DE INTERAÇÃO DO AGENTE: MENOR, MAIS BONITO E ELEGANTE (Micro-Joia Cibernética)
-      const socketGeo = new THREE.SphereGeometry(associatedAgent ? 0.024 : 0.016, 12, 12);
-      const socketColor = associatedAgent
-        ? (config.colorHex === 0xef4444 ? 0x00f5ff : config.colorHex)
-        : 0x0284c7;
-
-      const socketMat = new THREE.MeshBasicMaterial({
-        color: socketColor,
-        transparent: true,
-        opacity: associatedAgent ? 0.95 : 0.40,
-      });
-      const socketMesh = new THREE.Mesh(socketGeo, socketMat);
-      socketMesh.position.copy(targetCoords);
-      socketMesh.userData = { bodyPart: bPart, agent: associatedAgent, isAgentSocket: true };
-      pnsGroup.add(socketMesh);
-      interactiveBodyMeshes.push(socketMesh);
-
-      // Núcleo pontual brilhante interno
-      if (associatedAgent) {
-        const innerDotGeo = new THREE.SphereGeometry(0.010, 8, 8);
-        const innerDotMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-        const innerDot = new THREE.Mesh(innerDotGeo, innerDotMat);
-        socketMesh.add(innerDot);
-      }
-
-      // Anel orbital de neon fino e gracioso
-      const socketHaloGeo = new THREE.RingGeometry(0.038, 0.048, 20);
-      const socketHaloMat = new THREE.MeshBasicMaterial({
-        color: socketColor,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: associatedAgent ? 0.65 : 0.0,
-      });
-      const socketHaloMesh = new THREE.Mesh(socketHaloGeo, socketHaloMat);
-      socketHaloMesh.position.copy(targetCoords);
-      pnsGroup.add(socketHaloMesh);
-
-      // Micro-Chip Holográfico Compacto e de Alta Resolução (FullHD)
-      let socketLabelSprite: THREE.Sprite | undefined;
-      if (associatedAgent) {
-        const canvasTag = document.createElement('canvas');
-        canvasTag.width = 160;
-        canvasTag.height = 36;
-        const ctxT = canvasTag.getContext('2d');
-        if (ctxT) {
-          ctxT.fillStyle = 'rgba(2, 6, 23, 0.85)';
-          ctxT.strokeStyle = `#${socketColor.toString(16).padStart(6, '0')}`;
-          ctxT.lineWidth = 1.5;
-          ctxT.beginPath();
-          ctxT.roundRect(3, 3, 154, 30, 6);
-          ctxT.fill();
-          ctxT.stroke();
-
-          ctxT.font = 'bold 13px monospace';
-          ctxT.fillStyle = '#ffffff';
-          ctxT.textAlign = 'center';
-          ctxT.textBaseline = 'middle';
-          ctxT.fillText(associatedAgent.name.slice(0, 15), 80, 18);
-        }
-        const tagTexture = new THREE.CanvasTexture(canvasTag);
-        const tagSpriteMat = new THREE.SpriteMaterial({ map: tagTexture, transparent: true, opacity: 0.90, depthTest: false });
-        socketLabelSprite = new THREE.Sprite(tagSpriteMat);
-        const offsetX = targetCoords.x >= 0 ? 0.20 : -0.20;
-        socketLabelSprite.position.set(targetCoords.x + offsetX, targetCoords.y + 0.06, targetCoords.z);
-        socketLabelSprite.scale.set(0.36, 0.08, 1.0);
-        pnsGroup.add(socketLabelSprite);
-      }
-
-      // SINAL SINÁPTICO QUE PASSA PELA MEDULA E SOBE ATÉ O CÉREBRO:
-      // 1. Fótons Bioluminescentes Ciano/Safira (Cérebro -> Medula -> Agente) - ZERO VERMELHO
-      const brainToAgentPhotons: Array<{ mesh: THREE.Mesh; progress: number; speed: number }> = [];
-      const photonGeo = new THREE.SphereGeometry(0.020, 8, 8);
-      const photonMat = new THREE.MeshBasicMaterial({
-        color: 0x00f5ff,
-        transparent: true,
-        opacity: 0.0,
-        blending: THREE.AdditiveBlending,
-      });
-      for (let m = 0; m < 5; m++) {
-        const pMesh = new THREE.Mesh(photonGeo, photonMat.clone());
-        pnsGroup.add(pMesh);
-        brainToAgentPhotons.push({
-          mesh: pMesh,
-          progress: m / 5,
-          speed: 0.45 + Math.random() * 0.10,
-        });
-      }
-
-      // 2. Vesícula Dourada Sináptica (Agente -> Medula Espinhal -> Cérebro)
-      const yellowGeo = new THREE.SphereGeometry(0.034, 10, 10);
-      const yellowMat = new THREE.MeshBasicMaterial({
-        color: 0xfacc15,
-        transparent: true,
-        opacity: 0.0,
-        blending: THREE.AdditiveBlending,
-      });
-      const yMesh = new THREE.Mesh(yellowGeo, yellowMat);
-      pnsGroup.add(yMesh);
-
-      bodyNerveEndings.push({
-        bodyPartId: bPart,
-        agent: associatedAgent,
-        fullPathCurve,
-        limbCurve,
-        nerveTubeMesh: tubeMesh,
-        socketMesh,
-        socketHaloMesh,
-        socketLabelSprite,
-        targetCoords,
-        entryY,
-        brainToAgentPhotons,
-        yellowVesicle: {
-          mesh: yMesh,
-          progress: 0.0,
-          speed: 0.40,
+          progress: k / count,
+          speed: 1.25,
+          color,
+          curve,
           active: false,
-        },
-      });
-    });
+        });
+      }
+      return list;
+    };
+
+    const defaultAgentPos = agentNodes[0]?.pos || new THREE.Vector3(0, 0, 0);
+    const defaultToolPos = toolNodes[0]?.pos || new THREE.Vector3(1.1, 0.6, 0.4);
+    const defaultMemPos = memoryNodes[0]?.pos || new THREE.Vector3(-1.1, -0.4, 0.6);
+
+    // 1. Sinapse Agente -> Ferramenta (VERMELHA)
+    const curve1 = createSynapticCurve(defaultAgentPos, defaultToolPos);
+    const tube1Mesh = new THREE.Mesh(
+      new THREE.TubeGeometry(curve1, 24, 0.012, 8, false),
+      new THREE.MeshBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.20, blending: THREE.AdditiveBlending })
+    );
+    synapsesGroup.add(tube1Mesh);
+    const photons1 = createPhotons(curve1, 0xef4444, 5);
+    const beamAgentToTool: DynamicSynapseBeam = {
+      type: 'agent_to_tool',
+      curve: curve1,
+      tubeMesh: tube1Mesh,
+      photons: photons1,
+      activeColor: 0xef4444,
+    };
+    dynamicBeams.push(beamAgentToTool);
+
+    // 2. Sinapse Ferramenta -> Agente (AMARELA)
+    const curve2 = createSynapticCurve(defaultToolPos, defaultAgentPos);
+    const tube2Mesh = new THREE.Mesh(
+      new THREE.TubeGeometry(curve2, 24, 0.012, 8, false),
+      new THREE.MeshBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.20, blending: THREE.AdditiveBlending })
+    );
+    synapsesGroup.add(tube2Mesh);
+    const photons2 = createPhotons(curve2, 0xfacc15, 5);
+    const beamToolToAgent: DynamicSynapseBeam = {
+      type: 'tool_to_agent',
+      curve: curve2,
+      tubeMesh: tube2Mesh,
+      photons: photons2,
+      activeColor: 0xfacc15,
+    };
+    dynamicBeams.push(beamToolToAgent);
+
+    // 3. Sinapse Agente -> Memória (VERDE-AZULADA)
+    const curve3 = createSynapticCurve(defaultAgentPos, defaultMemPos);
+    const tube3Mesh = new THREE.Mesh(
+      new THREE.TubeGeometry(curve3, 24, 0.012, 8, false),
+      new THREE.MeshBasicMaterial({ color: 0x06b6d4, transparent: true, opacity: 0.20, blending: THREE.AdditiveBlending })
+    );
+    synapsesGroup.add(tube3Mesh);
+    const photons3 = createPhotons(curve3, 0x06b6d4, 5);
+    const beamAgentToMemory: DynamicSynapseBeam = {
+      type: 'agent_to_memory',
+      curve: curve3,
+      tubeMesh: tube3Mesh,
+      photons: photons3,
+      activeColor: 0x06b6d4,
+    };
+    dynamicBeams.push(beamAgentToMemory);
+
+    const updateActiveSynapseGeometry = (
+      activeAgentNode?: AgentNode3D,
+      activeToolNode?: ToolNode3D,
+      activeMemNode?: MemoryNode3D
+    ) => {
+      const aPos = activeAgentNode?.pos || defaultAgentPos;
+      const tPos = activeToolNode?.pos || defaultToolPos;
+      const mPos = activeMemNode?.pos || defaultMemPos;
+
+      const newCurve1 = createSynapticCurve(aPos, tPos);
+      beamAgentToTool.curve = newCurve1;
+      beamAgentToTool.tubeMesh.geometry.dispose();
+      beamAgentToTool.tubeMesh.geometry = new THREE.TubeGeometry(newCurve1, 24, 0.012, 8, false);
+      beamAgentToTool.photons.forEach((p) => (p.curve = newCurve1));
+
+      const newCurve2 = createSynapticCurve(tPos, aPos);
+      beamToolToAgent.curve = newCurve2;
+      beamToolToAgent.tubeMesh.geometry.dispose();
+      beamToolToAgent.tubeMesh.geometry = new THREE.TubeGeometry(newCurve2, 24, 0.012, 8, false);
+      beamToolToAgent.photons.forEach((p) => (p.curve = newCurve2));
+
+      const newCurve3 = createSynapticCurve(aPos, mPos);
+      beamAgentToMemory.curve = newCurve3;
+      beamAgentToMemory.tubeMesh.geometry.dispose();
+      beamAgentToMemory.tubeMesh.geometry = new THREE.TubeGeometry(newCurve3, 24, 0.012, 8, false);
+      beamAgentToMemory.photons.forEach((p) => (p.curve = newCurve3));
+    };
 
     // =========================================================================
-    // E. CONTROLES DE INTERAÇÃO & CLIQUE (RAYCASTING)
+    // E. INTERAÇÃO VIA MOUSE / TOUCH / RAYCASTING
     // =========================================================================
-    let targetRotY = 0;
-    let targetCameraY = 0.6;
-    let targetCameraZ = 9.6;
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
 
     const handlePointerDown = (e: MouseEvent | TouchEvent) => {
       isPointerDownRef.current = true;
@@ -701,22 +987,67 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
       const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
 
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(interactiveMeshes);
+
+      if (intersects.length > 0) {
+        const hit = intersects[0].object;
+        const uData = hit.userData;
+        if (uData.type === 'agent') {
+          const ag: AgentDefinition = uData.data;
+          setHoveredNode({
+            type: 'agent',
+            name: ag.name,
+            description: ag.role,
+            details: `Motor: ${ag.model || 'gemini-3.8-flash'} • Status: ${ag.status.toUpperCase()}`,
+            location: 'NÚCLEO',
+            color: '#ef4444',
+          });
+          document.body.style.cursor = 'pointer';
+        } else if (uData.type === 'tool') {
+          const tl: ToolDefinition = uData.data;
+          setHoveredNode({
+            type: 'tool',
+            name: tl.name,
+            description: tl.description,
+            details: `Tipo: ${tl.type.toUpperCase()} • Execuções: ${tl.executionCount || 0}`,
+            location: 'CÓRTEX',
+            color: '#facc15',
+          });
+          document.body.style.cursor = 'pointer';
+        } else if (uData.type === 'memory') {
+          const mm: SynapseMemory = uData.data;
+          setHoveredNode({
+            type: 'memory',
+            name: mm.title,
+            description: mm.content,
+            details: `Categoria: ${mm.category} • Autor: ${mm.user}`,
+            location: 'CÓRTEX',
+            color: '#06b6d4',
+          });
+          document.body.style.cursor = 'pointer';
+        }
+      } else {
+        setHoveredNode(null);
+        document.body.style.cursor = 'default';
+      }
+
+      // Rotação orbital suave ao arrastar
       if (isPointerDownRef.current) {
         const deltaX = clientX - pointerPrevRef.current.x;
         const deltaY = clientY - pointerPrevRef.current.y;
-        targetRotY += deltaX * 0.005;
-        targetCameraY = Math.max(Math.min(targetCameraY - deltaY * 0.005, 3.5), -1.5);
         pointerPrevRef.current = { x: clientX, y: clientY };
-      }
 
-      // Cursor pointer ao passar o mouse sobre partes interativas
-      if (!('touches' in e)) {
-        const rect = currentMount.getBoundingClientRect();
-        mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(mouse, camera);
-        const hits = raycaster.intersectObjects([...interactiveBodyMeshes, ...memoryMeshes], false);
-        currentMount.style.cursor = hits.length > 0 ? 'pointer' : 'default';
+        cameraTargetPosRef.current.theta -= deltaX * 0.007;
+        cameraTargetPosRef.current.phi = Math.max(
+          0.12,
+          Math.min(Math.PI - 0.12, cameraTargetPosRef.current.phi - deltaY * 0.007)
+        );
+        updateCameraPos();
       }
     };
 
@@ -725,194 +1056,210 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
     };
 
     const handleWheel = (e: WheelEvent) => {
-      targetCameraZ = Math.max(Math.min(targetCameraZ + e.deltaY * 0.004, 15.0), 2.5);
+      e.preventDefault();
+      cameraTargetPosRef.current.radius = Math.max(
+        3.0,
+        Math.min(10.5, cameraTargetPosRef.current.radius + e.deltaY * 0.004)
+      );
+      updateCameraPos();
     };
 
-    // Raycasting para clique e interação com o corpo / agentes / memórias
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
-
     const handleClick = (e: MouseEvent) => {
-      const rect = currentMount.getBoundingClientRect();
+      const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(interactiveMeshes);
 
-      // Clique em socket de agente ou parte do corpo
-      const bodyHits = raycaster.intersectObjects(interactiveBodyMeshes, false);
-      if (bodyHits.length > 0) {
-        const hitData = bodyHits[0].object.userData;
-        if (hitData.bodyPart && onBodyPartInteractRef.current) {
-          onBodyPartInteractRef.current(hitData.bodyPart, hitData.agent);
-          return;
-        }
-        if (hitData.agent && onSelectAgent) {
-          onSelectAgent(hitData.agent);
-          return;
-        }
-      }
+      if (intersects.length > 0) {
+        const hit = intersects[0].object;
+        const uData = hit.userData;
 
-      // Clique em memória interna do cérebro
-      const memHits = raycaster.intersectObjects(memoryMeshes, false);
-      if (memHits.length > 0) {
-        const mem = memHits[0].object.userData.memory;
-        if (mem) {
-          onSelectMemory(mem);
+        if (uData.type === 'agent') {
+          const ag: AgentDefinition = uData.data;
+          setSelectedAgentId(ag.id);
+          onSelectAgent?.(ag);
+          triggerSynapseCycle(ag.id);
+        } else if (uData.type === 'tool') {
+          const tl: ToolDefinition = uData.data;
+          setSelectedToolId(tl.id);
+          triggerSynapseCycle(undefined, tl.id);
+        } else if (uData.type === 'memory') {
+          const mm: SynapseMemory = uData.data;
+          setSelectedMemoryId(mm.id);
+          onSelectMemory(mm);
+          triggerSynapseCycle(undefined, undefined, mm.id);
         }
       }
     };
 
     const dom = renderer.domElement;
     dom.addEventListener('mousedown', handlePointerDown);
-    dom.addEventListener('touchstart', handlePointerDown);
-    window.addEventListener('mousemove', handlePointerMove);
-    window.addEventListener('touchmove', handlePointerMove);
+    dom.addEventListener('mousemove', handlePointerMove);
     window.addEventListener('mouseup', handlePointerUp);
-    window.addEventListener('touchend', handlePointerUp);
-    dom.addEventListener('wheel', handleWheel, { passive: true });
+    dom.addEventListener('wheel', handleWheel, { passive: false });
     dom.addEventListener('click', handleClick);
 
+    dom.addEventListener('touchstart', handlePointerDown, { passive: true });
+    dom.addEventListener('touchmove', handlePointerMove, { passive: true });
+    window.addEventListener('touchend', handlePointerUp);
+
     // =========================================================================
-    // F. LOOP DE ANIMAÇÃO & RENDERIZAÇÃO
+    // F. LOOP DE RENDERIZAÇÃO E MÁQUINA DE ESTADOS DA SINAPSE (60FPS)
     // =========================================================================
     let animationFrameId: number;
-    let clock = new THREE.Clock();
+    let lastTime = performance.now();
 
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
 
-      const delta = clock.getDelta();
-      const elapsedTime = clock.getElapsedTime();
+      const now = performance.now();
+      const delta = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+      const elapsedTime = now * 0.001;
 
-      // Suavização da rotação e câmera
-      mainHumanoidGroup.rotation.y += (targetRotY - mainHumanoidGroup.rotation.y) * 0.08;
-      camera.position.y += (targetCameraY - camera.position.y) * 0.08;
-      camera.position.z += (targetCameraZ - camera.position.z) * 0.08;
-      camera.lookAt(0, camera.position.y * 0.6, 0);
-
-      // Pulsação suave do cérebro
-      const brainPulse = 1.0 + Math.sin(elapsedTime * 2.5) * 0.02;
-      brainGroup.scale.set(brainPulse, brainPulse, brainPulse);
-
-      // Flash de recepção no córtex
-      if (corticalBurstRef.current > 0) {
-        corticalBurstRef.current = Math.max(0, corticalBurstRef.current - delta * 3.0);
-        cranialLight.intensity = 2.8 + corticalBurstRef.current * 4.0;
-        plexusMat.size = 0.036 + corticalBurstRef.current * 0.030;
-      } else {
-        cranialLight.intensity = 2.8;
-        plexusMat.size = 0.036;
+      // 1. Auto-rotação contínua e suave do cérebro
+      if (autoRotateRef.current && !isPointerDownRef.current) {
+        brainMasterGroup.rotation.y += delta * 0.12;
       }
 
-      // Animação de vesículas intracranianas
-      targetedBridges.forEach((bridge) => {
-        bridge.particles.forEach((p) => {
-          p.progress += p.baseSpeed * delta;
-          if (p.progress > 1.0) p.progress = 0.0;
-          p.mesh.position.lerpVectors(bridge.p1, bridge.p2, p.progress);
-          const mat = p.mesh.material as THREE.MeshBasicMaterial;
-          mat.opacity = 0.35 + Math.sin(p.progress * Math.PI) * 0.40;
-        });
-      });
+      // 2. Pulsação biológica do cérebro
+      const brainBreathe = 1.0 + Math.sin(elapsedTime * 1.8) * 0.015;
+      cortexGroup.scale.set(brainBreathe, brainBreathe, brainBreathe);
 
-      // ANIMAÇÃO DE SINAIS NERVOSOS: TRAJETO COMPLETO PELA MEDULA ATÉ O CÉREBRO!
-      // Sinapse ativa em tempo real para todo agente de IA em execução, com cores baseadas na intensidade dos dados
-      const currentSignal = activeSignalRef.current;
-      const currentAgents = agentsRef.current || [];
+      const nucleusPulse = 1.0 + Math.sin(elapsedTime * 3.5) * 0.12;
+      coreNucleusMesh.scale.set(nucleusPulse, nucleusPulse, nucleusPulse);
+      coreLight.intensity = 2.6 + Math.sin(elapsedTime * 3.5) * 0.8;
 
-      bodyNerveEndings.forEach((ending) => {
-        const isSignalForPart = currentSignal && currentSignal.bodyPart === ending.bodyPartId;
-        const executingAgentForPart = currentAgents.find(
-          (a) => (a.bodyPart === ending.bodyPartId || (!a.bodyPart && ending.bodyPartId === 'torax_tronco')) && (a.isExecuting || a.status === 'em_auditoria')
-        );
+      // 3. Atualizar nós selecionados
+      const activeAgent = agentNodes.find((a) => a.agent.id === selectedAgentId) || agentNodes[0];
+      const activeTool = toolNodes.find((t) => t.tool.id === selectedToolId) || toolNodes[0];
+      const activeMem = memoryNodes.find((m) => m.memory.id === selectedMemoryId) || memoryNodes[0];
 
-        const isActive = isSignalForPart || Boolean(executingAgentForPart);
+      updateActiveSynapseGeometry(activeAgent, activeTool, activeMem);
 
-        // Determinar a Cor da Sinapse de acordo com a Intensidade dos Dados:
-        // Baixa (< 0.35): Ciano Elétrico (0x00f5ff)
-        // Média (0.35 a 0.70): Âmbar Ouro (0xfacc15)
-        // Alta (0.70 a 0.90): Magenta Elétrico (0xd946ef)
-        // Crítica / Pico (> 0.90): Rubi Neon / Vermelho Flamejante (0xff0055)
-        let activeSynapseColor = 0xfacc15;
-        let dataIntensity = 0.5;
-
-        if (currentSignal?.intensityColorHex) {
-          activeSynapseColor = currentSignal.intensityColorHex;
-          dataIntensity = currentSignal.intensity ?? 0.5;
-        } else if (currentSignal?.colorHex) {
-          activeSynapseColor = currentSignal.colorHex;
-        } else if (executingAgentForPart) {
-          dataIntensity = executingAgentForPart.activeSynapseIntensity ?? 0.75;
-          if (dataIntensity >= 0.90) activeSynapseColor = 0xff0055;
-          else if (dataIntensity >= 0.70) activeSynapseColor = 0xd946ef;
-          else if (dataIntensity >= 0.35) activeSynapseColor = 0xfacc15;
-          else activeSynapseColor = 0x00f5ff;
+      // 4. Máquina de Estados da Sinapse em 3 Etapas
+      if (cyclePhaseRef.current !== 'idle' || autoCycleRef.current) {
+        if (cyclePhaseRef.current === 'idle' && autoCycleRef.current) {
+          cyclePhaseRef.current = 'agent_to_tool';
+          cycleTimerRef.current = 0;
         }
 
-        // Rotação suave do anel orbital do soquete do agente
-        if (ending.socketHaloMesh && ending.agent) {
-          ending.socketHaloMesh.rotation.z += 0.02;
-          const hMat = ending.socketHaloMesh.material as THREE.MeshBasicMaterial;
-          if (isActive) {
-            hMat.color.setHex(activeSynapseColor);
-            hMat.opacity = 0.95;
-          } else {
-            hMat.opacity = 0.35 + Math.sin(elapsedTime * 2.5) * 0.15;
-          }
-        }
+        cycleTimerRef.current += delta;
+        const t = cycleTimerRef.current;
 
-        // Atualizar cor e luminescência do tubo nervoso de acordo com a intensidade
-        if (ending.nerveTubeMesh) {
-          const nerveMat = ending.nerveTubeMesh.material as THREE.MeshBasicMaterial;
-          if (isActive) {
-            nerveMat.color.setHex(activeSynapseColor);
-            nerveMat.opacity = 0.55 + Math.sin(elapsedTime * 4.0) * 0.25;
-          } else {
-            nerveMat.color.setHex(0x0284c7);
-            nerveMat.opacity = 0.16;
+        if (t < 1.2) {
+          // ETAPA 1: AGENTE (NÚCLEO) -> FERRAMENTA (CÓRTEX) [VERMELHA]
+          if (cyclePhaseRef.current !== 'agent_to_tool') {
+            cyclePhaseRef.current = 'agent_to_tool';
+            setCurrentPhase('agent_to_tool');
           }
-        }
+          setPhaseProgress(t / 1.2);
 
-        // 1. Fótons Cerebrais Descendentes: CÉREBRO (1.0) -> MEDULA -> AGENTE (0.0)
-        const isPhotonActive = isSignalForPart && currentSignal.direction === 'BRAIN_TO_AGENT';
-        ending.brainToAgentPhotons.forEach((r) => {
-          if (isPhotonActive) {
-            r.progress += r.speed * delta;
-            if (r.progress > 1.0) r.progress = 0.0;
-            const pt = ending.fullPathCurve.getPoint(1.0 - r.progress);
-            r.mesh.position.copy(pt);
-            (r.mesh.material as THREE.MeshBasicMaterial).color.setHex(activeSynapseColor);
-            (r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95;
-            spinalLight.intensity = 2.4 + Math.sin(r.progress * Math.PI) * 1.8;
-          } else {
-            (r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0;
-          }
-        });
+          (beamAgentToTool.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.85;
+          (beamAgentToTool.tubeMesh.material as THREE.MeshBasicMaterial).color.setHex(0xef4444);
+          (beamToolToAgent.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.12;
+          (beamAgentToMemory.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.12;
 
-        // 2. Vesícula Sináptica Ascendente: AGENTE (0.0) -> MEDULA -> CÉREBRO (1.0)!
-        const isAscendingActive = (isSignalForPart && currentSignal.direction === 'AGENT_TO_BRAIN') || Boolean(executingAgentForPart);
-        if (isAscendingActive) {
-          const speedMultiplier = 1.0 + dataIntensity * 1.5;
-          ending.yellowVesicle.progress += ending.yellowVesicle.speed * speedMultiplier * delta;
-          if (ending.yellowVesicle.progress > 1.0) {
-            ending.yellowVesicle.progress = 0.0;
-            // Ao alcançar o cérebro (1.0), dispara burst cortical bioluminescente na cor da intensidade!
-            corticalBurstRef.current = 1.0;
-            cranialLight.color.setHex(activeSynapseColor);
+          beamAgentToTool.photons.forEach((p) => {
+            p.active = true;
+            p.progress += p.speed * delta;
+            if (p.progress > 1.0) p.progress = 0.0;
+            const pt = p.curve.getPoint(p.progress);
+            p.mesh.position.copy(pt);
+            (p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95;
+            (p.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xef4444);
+          });
+          beamToolToAgent.photons.forEach((p) => ((p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0));
+          beamAgentToMemory.photons.forEach((p) => ((p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0));
+
+          if (activeTool) {
+            activeTool.haloMesh.scale.set(1.4, 1.4, 1.4);
+            (activeTool.haloMesh.material as THREE.MeshBasicMaterial).opacity = 0.80;
           }
-          const pt = ending.fullPathCurve.getPoint(ending.yellowVesicle.progress);
-          ending.yellowVesicle.mesh.position.copy(pt);
-          const vesMat = ending.yellowVesicle.mesh.material as THREE.MeshBasicMaterial;
-          vesMat.color.setHex(activeSynapseColor);
-          vesMat.opacity = 0.98;
-          // Ilumina a medula espinhal durante o fluxo de dados
-          spinalLight.intensity = 2.4 + Math.sin(ending.yellowVesicle.progress * Math.PI) * 2.0;
-          spinalLight.color.setHex(activeSynapseColor);
+        } else if (t < 2.4) {
+          // ETAPA 2: FERRAMENTA (CÓRTEX) -> AGENTE (NÚCLEO) [AMARELA]
+          if (cyclePhaseRef.current !== 'tool_to_agent') {
+            cyclePhaseRef.current = 'tool_to_agent';
+            setCurrentPhase('tool_to_agent');
+          }
+          setPhaseProgress((t - 1.2) / 1.2);
+
+          (beamAgentToTool.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.15;
+          (beamToolToAgent.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.90;
+          (beamToolToAgent.tubeMesh.material as THREE.MeshBasicMaterial).color.setHex(0xfacc15);
+          (beamAgentToMemory.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.12;
+
+          beamAgentToTool.photons.forEach((p) => ((p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0));
+          beamToolToAgent.photons.forEach((p) => {
+            p.active = true;
+            p.progress += p.speed * delta;
+            if (p.progress > 1.0) p.progress = 0.0;
+            const pt = p.curve.getPoint(p.progress);
+            p.mesh.position.copy(pt);
+            (p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.98;
+            (p.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xfacc15);
+          });
+          beamAgentToMemory.photons.forEach((p) => ((p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0));
+
+          if (activeAgent) {
+            activeAgent.haloMesh.scale.set(1.6, 1.6, 1.6);
+            (activeAgent.haloMesh.material as THREE.MeshBasicMaterial).opacity = 0.90;
+          }
+        } else if (t < 3.8) {
+          // ETAPA 3: AGENTE (NÚCLEO) -> MEMÓRIA NO CÓRTEX [VERDE-AZULADO]
+          if (cyclePhaseRef.current !== 'agent_to_memory') {
+            cyclePhaseRef.current = 'agent_to_memory';
+            setCurrentPhase('agent_to_memory');
+          }
+          setPhaseProgress((t - 2.4) / 1.4);
+
+          (beamAgentToTool.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.12;
+          (beamToolToAgent.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.12;
+          (beamAgentToMemory.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.90;
+          (beamAgentToMemory.tubeMesh.material as THREE.MeshBasicMaterial).color.setHex(0x06b6d4);
+
+          beamAgentToTool.photons.forEach((p) => ((p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0));
+          beamToolToAgent.photons.forEach((p) => ((p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0));
+          beamAgentToMemory.photons.forEach((p) => {
+            p.active = true;
+            p.progress += p.speed * delta;
+            if (p.progress > 1.0) p.progress = 0.0;
+            const pt = p.curve.getPoint(p.progress);
+            p.mesh.position.copy(pt);
+            (p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.98;
+            (p.mesh.material as THREE.MeshBasicMaterial).color.setHex(0x06b6d4);
+          });
+
+          if (activeMem) {
+            activeMem.haloMesh.scale.set(1.7, 1.7, 1.7);
+            (activeMem.haloMesh.material as THREE.MeshBasicMaterial).opacity = 0.95;
+          }
         } else {
-          (ending.yellowVesicle.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0;
+          if (autoCycleRef.current) {
+            cycleTimerRef.current = 0;
+            cyclePhaseRef.current = 'agent_to_tool';
+            setCurrentPhase('agent_to_tool');
+          } else {
+            cyclePhaseRef.current = 'idle';
+            setCurrentPhase('idle');
+            (beamAgentToTool.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.20;
+            (beamToolToAgent.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.20;
+            (beamAgentToMemory.tubeMesh.material as THREE.MeshBasicMaterial).opacity = 0.20;
+            dynamicBeams.forEach((b) => b.photons.forEach((p) => ((p.mesh.material as THREE.MeshBasicMaterial).opacity = 0.0)));
+          }
         }
-      });
+      }
+
+      // 5. Efeito de voz e escuta
+      if (isJarvisSpeaking) {
+        coreLight.intensity = 4.2 + Math.sin(elapsedTime * 12.0) * 1.5;
+        coreLight.color.setHex(0xff3333);
+      } else if (isListening) {
+        cortexTopLight.intensity = 3.8 + Math.sin(elapsedTime * 8.0) * 1.2;
+        cortexTopLight.color.setHex(0x00f5ff);
+      }
 
       renderer.render(scene, camera);
     };
@@ -924,21 +1271,29 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
       const nw = currentMount.clientWidth;
       const nh = currentMount.clientHeight;
       camera.aspect = nw / nh;
+
+      // Reajuste responsivo do enquadramento do cérebro na tela
+      const nAspect = nw / nh;
+      const nOptimalRadius = nAspect < 0.8 ? 8.2 : nAspect < 1.3 ? 6.8 : 5.8;
+      cameraTargetPosRef.current.radius = nOptimalRadius;
+
       camera.updateProjectionMatrix();
       renderer.setSize(nw, nh);
+      updateCameraPos();
     };
     window.addEventListener('resize', handleResize);
 
     return () => {
       window.removeEventListener('resize', handleResize);
-      window.removeEventListener('mousemove', handlePointerMove);
-      window.removeEventListener('touchmove', handlePointerMove);
-      window.removeEventListener('mouseup', handlePointerUp);
-      window.removeEventListener('touchend', handlePointerUp);
       dom.removeEventListener('mousedown', handlePointerDown);
-      dom.removeEventListener('touchstart', handlePointerDown);
+      dom.removeEventListener('mousemove', handlePointerMove);
+      window.removeEventListener('mouseup', handlePointerUp);
       dom.removeEventListener('wheel', handleWheel);
       dom.removeEventListener('click', handleClick);
+
+      dom.removeEventListener('touchstart', handlePointerDown);
+      dom.removeEventListener('touchmove', handlePointerMove);
+      window.removeEventListener('touchend', handlePointerUp);
       cancelAnimationFrame(animationFrameId);
 
       renderer.dispose();
@@ -946,11 +1301,354 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
         currentMount.removeChild(renderer.domElement);
       }
     };
-  }, [memories, agents]);
+  }, [effectiveAgents, toolsList, memories, selectedAgentId, selectedToolId, selectedMemoryId]);
 
   return (
-    <div className="relative w-full h-full bg-[#02050e] overflow-hidden select-none">
-      <div ref={mountRef} className="w-full h-full" />
+    <div
+      ref={containerRef}
+      className="relative w-full h-full bg-[#02050e] overflow-hidden select-none flex flex-col"
+    >
+      {/* Canvas Three.js WebGL em Tela Inteira */}
+      <div ref={mountRef} className="absolute inset-0 w-full h-full" />
+
+      {/* =========================================================================
+          BARRA DE FERRAMENTAS SUPERIOR: AJUSTES DE TELA E CICLO SINÁPTICO
+          ========================================================================= */}
+      <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-2 pointer-events-none z-30">
+        {/* Banner do Cérebro 3D */}
+        <div className="pointer-events-auto bg-slate-950/85 backdrop-blur-md border border-cyan-500/30 rounded-xl px-3 py-2 shadow-2xl flex items-center gap-2.5">
+          <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_10px_rgba(6,182,212,0.9)]" />
+          <div>
+            <h2 className="text-xs font-black uppercase tracking-wider text-cyan-300 font-mono flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+              Cérebro 3D Anatômico: Núcleo & Córtex
+            </h2>
+            <p className="text-[9px] text-slate-400 font-sans hidden sm:block">
+              2 Hemisférios • Gyri & Sulci • Cerebelo • Tronco Encefálico
+            </p>
+          </div>
+        </div>
+
+        {/* Controles de Câmera e Ajuste de Tela */}
+        <div className="pointer-events-auto flex items-center gap-1.5 bg-slate-950/85 backdrop-blur-md border border-slate-800 rounded-xl p-1.5 shadow-2xl">
+          {/* Presets de Vista da Câmera */}
+          <div className="hidden lg:flex items-center gap-1 border-r border-slate-800 pr-1.5 mr-0.5">
+            <button
+              onClick={() => setCameraPreset('iso')}
+              className={`px-2 py-1 rounded text-[10px] font-mono font-bold transition-all ${
+                currentCameraView === 'iso' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-white'
+              }`}
+              title="Vista Isométrica 3D"
+            >
+              3D Iso
+            </button>
+            <button
+              onClick={() => setCameraPreset('top')}
+              className={`px-2 py-1 rounded text-[10px] font-mono font-bold transition-all ${
+                currentCameraView === 'top' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-white'
+              }`}
+              title="Vista Superior (Dorso dos 2 Hemisférios)"
+            >
+              Superior
+            </button>
+            <button
+              onClick={() => setCameraPreset('front')}
+              className={`px-2 py-1 rounded text-[10px] font-mono font-bold transition-all ${
+                currentCameraView === 'front' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-white'
+              }`}
+              title="Vista Frontal (Lobo Frontal)"
+            >
+              Frontal
+            </button>
+            <button
+              onClick={() => setCameraPreset('side')}
+              className={`px-2 py-1 rounded text-[10px] font-mono font-bold transition-all ${
+                currentCameraView === 'side' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-white'
+              }`}
+              title="Vista Lateral (Perfil e Lobo Temporal)"
+            >
+              Lateral
+            </button>
+          </div>
+
+          {/* Botões de Zoom */}
+          <button
+            onClick={() => adjustZoom(-0.8)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            title="Aproximar (Zoom In)"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => adjustZoom(0.8)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            title="Afastar (Zoom Out)"
+          >
+            <ZoomOut className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Botão de Auto-Rotação */}
+          <button
+            onClick={() => {
+              autoRotateRef.current = !autoRotateRef.current;
+            }}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-300 hover:bg-slate-800 transition-colors"
+            title="Alternar Rotação 3D"
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Botão Tela Cheia */}
+          <button
+            onClick={toggleFullscreen}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            title="Modo Tela Cheia"
+          >
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+          </button>
+
+          {/* Botão Ocultar/Exibir Painéis */}
+          <button
+            onClick={() => setIsUiCollapsed((prev) => !prev)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-slate-800 transition-colors"
+            title="Ocultar/Exibir Menus Sobrepostos"
+          >
+            {isUiCollapsed ? <Layers className="w-3.5 h-3.5 text-amber-400" /> : <Compass className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      </div>
+
+      {/* =========================================================================
+          CONTROLE DO CICLO SINÁPTICO EM 3 ETAPAS (BARRA FLUTUANTE SUPERIOR DIREITA)
+          ========================================================================= */}
+      {!isUiCollapsed && (
+        <div className="absolute top-14 right-2.5 flex items-center gap-2 pointer-events-auto z-20 bg-slate-950/85 backdrop-blur-md border border-slate-800 rounded-xl p-2 shadow-2xl">
+          {/* Indicador da Etapa Ativa */}
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg border font-mono text-[10px] uppercase font-bold">
+            {currentPhase === 'agent_to_tool' && (
+              <span className="flex items-center gap-1.5 text-red-400 border-red-500/40 bg-red-950/60 px-2 py-0.5 rounded">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                [1] Agente ➔ Tool (Vermelha)
+              </span>
+            )}
+            {currentPhase === 'tool_to_agent' && (
+              <span className="flex items-center gap-1.5 text-yellow-400 border-yellow-500/40 bg-yellow-950/60 px-2 py-0.5 rounded">
+                <span className="w-2 h-2 rounded-full bg-yellow-400 animate-ping" />
+                [2] Tool ➔ Agente (Amarela)
+              </span>
+            )}
+            {currentPhase === 'agent_to_memory' && (
+              <span className="flex items-center gap-1.5 text-cyan-300 border-cyan-500/40 bg-cyan-950/60 px-2 py-0.5 rounded">
+                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+                [3] Agente ➔ Memória (Verde-Azulado)
+              </span>
+            )}
+            {currentPhase === 'idle' && (
+              <span className="text-slate-400 px-2 py-0.5">Repouso Neural</span>
+            )}
+          </div>
+
+          {/* Botão de Disparo */}
+          <button
+            onClick={() => triggerSynapseCycle()}
+            className="flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-red-600 via-amber-500 to-cyan-500 hover:opacity-90 text-white rounded-lg text-xs font-bold font-mono transition-all shadow-md active:scale-95"
+            title="Disparar sinapse completa em 3 tempos"
+          >
+            <Play className="w-3.5 h-3.5 fill-current" />
+            Sinapse
+          </button>
+
+          {/* Alternar Automático */}
+          <button
+            onClick={() => setAutoCycle((prev) => !prev)}
+            className={`px-2 py-1.5 rounded-lg text-xs font-mono font-bold transition-all border ${
+              autoCycle
+                ? 'bg-cyan-950/70 text-cyan-300 border-cyan-500/40'
+                : 'bg-slate-900 text-slate-400 border-slate-700'
+            }`}
+          >
+            {autoCycle ? 'Auto' : 'Pausa'}
+          </button>
+        </div>
+      )}
+
+      {/* =========================================================================
+          PAINEL DE SELEÇÃO: NÚCLEO (AGENTE) & CÓRTEX (TOOL E MEMÓRIA)
+          ========================================================================= */}
+      {!isUiCollapsed && (
+        <div className="absolute top-14 left-2.5 pointer-events-auto hidden md:flex flex-col gap-2 bg-slate-950/85 backdrop-blur-md border border-slate-800 rounded-xl p-2.5 shadow-2xl max-w-xs text-xs font-mono z-20">
+          <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider pb-1 border-b border-slate-800 flex items-center justify-between">
+            <span>Roteamento Anatômico</span>
+            <span className="text-[9px] text-cyan-400">Núcleo ➔ Córtex</span>
+          </div>
+
+          {/* 1. Agente no Núcleo (Vermelho) */}
+          <div className="space-y-1">
+            <label className="text-[10px] text-red-400 flex items-center gap-1 font-bold">
+              <Cpu className="w-3 h-3 text-red-500" />
+              Agente de IA (Núcleo Central):
+            </label>
+            <select
+              value={selectedAgentId}
+              onChange={(e) => {
+                setSelectedAgentId(e.target.value);
+                triggerSynapseCycle(e.target.value);
+              }}
+              className="w-full bg-slate-900 border border-red-500/30 text-red-200 text-[11px] rounded px-2 py-1 outline-none focus:border-red-400"
+            >
+              {effectiveAgents.map((ag) => (
+                <option key={ag.id} value={ag.id}>
+                  {ag.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 2. Ferramenta no Córtex (Amarela) */}
+          <div className="space-y-1">
+            <label className="text-[10px] text-yellow-400 flex items-center gap-1 font-bold">
+              <Wrench className="w-3 h-3 text-yellow-400" />
+              Ferramenta (Córtex Cerebral):
+            </label>
+            <select
+              value={selectedToolId}
+              onChange={(e) => {
+                setSelectedToolId(e.target.value);
+                triggerSynapseCycle(undefined, e.target.value);
+              }}
+              className="w-full bg-slate-900 border border-yellow-500/30 text-yellow-200 text-[11px] rounded px-2 py-1 outline-none focus:border-yellow-400"
+            >
+              {toolsList.map((tl) => (
+                <option key={tl.id} value={tl.id}>
+                  {tl.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 3. Memória no Córtex (Verde-Azulado) */}
+          <div className="space-y-1">
+            <label className="text-[10px] text-cyan-400 flex items-center gap-1 font-bold">
+              <Database className="w-3 h-3 text-cyan-400" />
+              Memória de Destino (Córtex):
+            </label>
+            <select
+              value={selectedMemoryId}
+              onChange={(e) => {
+                setSelectedMemoryId(e.target.value);
+                triggerSynapseCycle(undefined, undefined, e.target.value);
+              }}
+              className="w-full bg-slate-900 border border-cyan-500/30 text-cyan-200 text-[11px] rounded px-2 py-1 outline-none focus:border-cyan-400"
+            >
+              {memories.map((mm) => (
+                <option key={mm.id} value={mm.id}>
+                  {mm.title}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          LEGENDA VISUAL COMPLETA COM CÓDIGO DE CORES EXIGIDO
+          ========================================================================= */}
+      {!isUiCollapsed && (
+        <div className="absolute bottom-2.5 left-2.5 pointer-events-auto bg-slate-950/85 backdrop-blur-md border border-slate-800 rounded-xl p-2.5 shadow-2xl max-w-xs text-xs font-mono space-y-2 z-20">
+          <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider pb-1 border-b border-slate-800 flex items-center justify-between">
+            <span>Arquitetura de Cores 3D</span>
+            <span className="text-[9px] text-cyan-400">Anatomia</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+            {/* Agentes de IA */}
+            <div className="flex items-center gap-1.5 p-1 rounded bg-red-950/30 border border-red-500/30">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.9)] shrink-0" />
+              <div>
+                <span className="font-bold text-red-300 block text-[10px]">Agentes de IA</span>
+                <span className="text-[8px] text-red-400/80">Núcleo Central</span>
+              </div>
+            </div>
+
+            {/* Ferramentas */}
+            <div className="flex items-center gap-1.5 p-1 rounded bg-yellow-950/30 border border-yellow-500/30">
+              <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.9)] shrink-0" />
+              <div>
+                <span className="font-bold text-yellow-300 block text-[10px]">Ferramentas</span>
+                <span className="text-[8px] text-yellow-400/80">Córtex Externo</span>
+              </div>
+            </div>
+
+            {/* Memórias */}
+            <div className="flex items-center gap-1.5 p-1 rounded bg-cyan-950/30 border border-cyan-500/30">
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.9)] shrink-0" />
+              <div>
+                <span className="font-bold text-cyan-300 block text-[10px]">Memórias</span>
+                <span className="text-[8px] text-cyan-400/80">Córtex Externo</span>
+              </div>
+            </div>
+
+            {/* Sinapses */}
+            <div className="flex items-center gap-1.5 p-1 rounded bg-slate-900/60 border border-slate-700">
+              <div className="flex flex-col gap-0.5 shrink-0">
+                <span className="w-2 h-1 rounded bg-red-500" />
+                <span className="w-2 h-1 rounded bg-yellow-400" />
+                <span className="w-2 h-1 rounded bg-cyan-400" />
+              </div>
+              <div>
+                <span className="font-bold text-slate-200 block text-[9px]">3 Sinapses</span>
+                <span className="text-[8px] text-slate-400">Verm/Amar/Cyan</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="text-[9px] text-slate-400 pt-1 border-t border-slate-800/60 leading-tight">
+            Gire 360° com arrasto • Zoom com roda/botões • Clique num nó para disparar
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TOOLTIP FLUTUANTE AO PASSAR O MOUSE SOBRE QUALQUER NÓ 3D
+          ========================================================================= */}
+      {hoveredNode && (
+        <div className="absolute top-24 right-4 pointer-events-none bg-slate-950/90 backdrop-blur-md border border-slate-700 rounded-xl p-3 shadow-2xl max-w-xs transition-all text-xs space-y-1.5 z-30">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
+              <span
+                className="w-2.5 h-2.5 rounded-full shrink-0"
+                style={{ backgroundColor: hoveredNode.color, boxShadow: `0 0 10px ${hoveredNode.color}` }}
+              />
+              <span className="font-bold text-white font-mono text-[11px] truncate">
+                {hoveredNode.name}
+              </span>
+            </div>
+            <span
+              className="text-[9px] px-1.5 py-0.5 rounded font-mono font-bold uppercase"
+              style={{
+                backgroundColor: `${hoveredNode.color}20`,
+                borderColor: `${hoveredNode.color}50`,
+                color: hoveredNode.color,
+                borderWidth: 1,
+              }}
+            >
+              {hoveredNode.location}
+            </span>
+          </div>
+
+          {hoveredNode.description && (
+            <p className="text-[11px] text-slate-300 font-sans leading-snug">
+              {hoveredNode.description}
+            </p>
+          )}
+
+          {hoveredNode.details && (
+            <div className="text-[9px] text-slate-400 font-mono pt-1 border-t border-slate-800">
+              {hoveredNode.details}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

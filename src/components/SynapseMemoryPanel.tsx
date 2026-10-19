@@ -1,5 +1,11 @@
 import React, { useState } from 'react';
-import { SynapseMemory, FamilyProfile, FAMILY_PROFILES, MemoryCategory } from '../types/neural';
+import {
+  SynapseMemory,
+  FamilyProfile,
+  FAMILY_PROFILES,
+  MemoryCategory,
+  CognitiveMemoryType,
+} from '../types/neural';
 import {
   Brain,
   Plus,
@@ -17,6 +23,13 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Layers,
+  Heart,
+  FileText,
+  Calendar,
+  Activity,
+  Workflow,
+  Eye,
 } from 'lucide-react';
 
 interface SynapseMemoryPanelProps {
@@ -39,11 +52,13 @@ export const SynapseMemoryPanel: React.FC<SynapseMemoryPanelProps> = ({
   activeProfile,
 }) => {
   const [categoriaFiltro, setCategoriaFiltro] = useState<string>('todas');
+  const [tipoMemoriaFiltro, setTipoMemoriaFiltro] = useState<string>('todos');
   const [usuarioFiltro, setUsuarioFiltro] = useState<string>('todos');
   const [apenasIA, setApenasIA] = useState<boolean>(false);
   const [novoTitulo, setNovoTitulo] = useState('');
   const [novoConteudo, setNovoConteudo] = useState('');
   const [novaCategoria, setNovaCategoria] = useState<MemoryCategory>('investimento');
+  const [novoTipoMemoria, setNovoTipoMemoria] = useState<CognitiveMemoryType>('semantica_rag');
   const [novoUsuario, setNovoUsuario] = useState<string>(activeProfile.name);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
@@ -72,15 +87,11 @@ export const SynapseMemoryPanel: React.FC<SynapseMemoryPanelProps> = ({
       title: novoTitulo.trim(),
       content: novoConteudo.trim(),
       category: novaCategoria,
+      memoryType: novoTipoMemoria,
       user: novoUsuario,
       timestamp: new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
       importance: 'alta',
-      color:
-        novaCategoria === 'investimento'
-          ? 0x06b6d4
-          : novaCategoria === 'saude'
-          ? 0xec4899
-          : 0x10b981,
+      color: 0xef4444, // Registrada como bolinha vermelha bioluminescente conforme solicitado!
     });
 
     setNovoTitulo('');
@@ -293,7 +304,7 @@ export const SynapseMemoryPanel: React.FC<SynapseMemoryPanelProps> = ({
             required
           />
 
-          <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
             <select
               value={novaCategoria}
               onChange={(e) => setNovaCategoria(e.target.value as any)}
@@ -305,6 +316,20 @@ export const SynapseMemoryPanel: React.FC<SynapseMemoryPanelProps> = ({
               <option value="familia">Rotina da Família</option>
               <option value="seguranca">Sentinela & Cripto</option>
               <option value="aprendizado">Aprendizado Geral</option>
+            </select>
+
+            <select
+              value={novoTipoMemoria}
+              onChange={(e) => setNovoTipoMemoria(e.target.value as any)}
+              className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-cyan-300 font-mono text-[11px]"
+            >
+              <option value="semantica_rag">Semântica / RAG</option>
+              <option value="sensorial">Sensorial / Ultracurta</option>
+              <option value="curto_prazo_trabalho">Curto Prazo / Sessão</option>
+              <option value="episodica">Episódica (Eventos)</option>
+              <option value="procedural">Procedural (Rotinas n8n)</option>
+              <option value="emocional_afetiva">Emocional & Afetiva</option>
+              <option value="biografica_evolutiva">Biográfica & Evolução</option>
             </select>
 
             <select
@@ -322,22 +347,51 @@ export const SynapseMemoryPanel: React.FC<SynapseMemoryPanelProps> = ({
 
           <button
             type="submit"
-            className="w-full py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5"
+            className="w-full py-2 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-md"
           >
-            <Zap className="w-3.5 h-3.5" /> Gravar Sinapse Manual
+            <span className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
+            <span>Gravar Sinapse (Bolinha Vermelha no Cérebro 3D)</span>
           </button>
         </form>
       )}
 
+      {/* Filtros por Tipos de Memória Cognitiva */}
+      <div className="px-3 pt-2 pb-1 border-b border-slate-800/80 flex gap-1.5 overflow-x-auto text-[11px] font-mono shrink-0 bg-slate-950/60">
+        {[
+          { key: 'todos', label: 'Todos os Tipos' },
+          { key: 'semantica_rag', label: 'Semântica/RAG' },
+          { key: 'sensorial', label: 'Sensorial' },
+          { key: 'curto_prazo_trabalho', label: 'Curto Prazo' },
+          { key: 'episodica', label: 'Episódica' },
+          { key: 'procedural', label: 'Procedural' },
+          { key: 'emocional_afetiva', label: 'Emocional' },
+          { key: 'biografica_evolutiva', label: 'Biográfica' },
+        ].map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTipoMemoriaFiltro(t.key)}
+            className={`px-2.5 py-1 rounded-lg transition-all shrink-0 font-bold ${
+              tipoMemoriaFiltro === t.key
+                ? 'bg-red-950/80 border border-red-500/60 text-red-300 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 bg-slate-900/60'
+            }`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-red-400 inline-block mr-1.5" />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       {/* Filtros Rápidos */}
-      <div className="p-3 border-b border-slate-800 flex gap-1.5 overflow-x-auto text-xs font-mono">
+      <div className="p-2.5 border-b border-slate-800 flex gap-1.5 overflow-x-auto text-xs font-mono shrink-0">
         <button
           onClick={() => {
             setApenasIA(false);
             setCategoriaFiltro('todas');
+            setTipoMemoriaFiltro('todos');
           }}
           className={`px-2.5 py-1 rounded-lg transition-colors shrink-0 ${
-            !apenasIA && categoriaFiltro === 'todas'
+            !apenasIA && categoriaFiltro === 'todas' && tipoMemoriaFiltro === 'todos'
               ? 'bg-cyan-500 text-slate-950 font-bold'
               : 'text-slate-400 hover:text-slate-200 bg-slate-900'
           }`}
@@ -378,24 +432,13 @@ export const SynapseMemoryPanel: React.FC<SynapseMemoryPanelProps> = ({
         >
           CFO
         </button>
-
-        <button
-          onClick={() => setCategoriaFiltro('saude')}
-          className={`px-2.5 py-1 rounded-lg transition-colors shrink-0 ${
-            categoriaFiltro === 'saude'
-              ? 'bg-cyan-500 text-slate-950 font-bold'
-              : 'text-slate-400 hover:text-slate-200 bg-slate-900'
-          }`}
-        >
-          Saúde
-        </button>
       </div>
 
       {/* Lista de Memórias Sinápticas */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {memoriasFiltradas.length === 0 ? (
           <div className="text-center py-12 text-slate-500 text-xs font-mono">
-            Nenhuma memória registrada nesta categoria.
+            Nenhuma memória registrada neste filtro.
           </div>
         ) : (
           memoriasFiltradas.map((mem) => {
@@ -408,77 +451,39 @@ export const SynapseMemoryPanel: React.FC<SynapseMemoryPanelProps> = ({
               <div
                 key={mem.id}
                 onClick={() => onSelectMemory(mem)}
-                className="p-3.5 rounded-2xl bg-slate-900/60 hover:bg-slate-900 border border-slate-800 hover:border-cyan-500/50 cursor-pointer transition-all relative group shadow-sm space-y-2"
+                className="p-3.5 bg-slate-900/80 hover:bg-slate-850 border border-slate-800 hover:border-red-500/50 rounded-xl transition-all cursor-pointer space-y-2 group"
               >
-                {/* Header do Card */}
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-400 font-bold flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                      {mem.category}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.9)] shrink-0" />
+                    <h4 className="font-bold text-xs text-white group-hover:text-red-300 transition-colors">
+                      {mem.title}
+                    </h4>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-950/80 border border-red-500/30 text-red-300 font-mono">
+                      {mem.memoryType || 'semântica'}
                     </span>
-
-                    {mem.isAutonomousLLM && (
-                      <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-500/40 font-bold flex items-center gap-1">
-                        <Sparkles className="w-2.5 h-2.5 text-amber-400" />
-                        0 Interferência Humana
-                      </span>
-                    )}
-
-                    {tokensPoupados !== null && (
-                      <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/40 font-bold">
-                        📉 ~{tokensPoupados.toLocaleString('pt-BR')} Tokens Poupados
-                      </span>
-                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteMemory(mem.id);
+                      }}
+                      className="p-1 text-slate-500 hover:text-red-400 rounded transition-colors"
+                      title="Excluir memória"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
-
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeleteMemory(mem.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-rose-400 rounded transition-all"
-                    title="Excluir sinapse"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
                 </div>
 
-                {/* Conteúdo */}
-                <div>
-                  <h4 className="text-xs font-bold text-slate-100">{mem.title}</h4>
-                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">{mem.content}</p>
-                </div>
+                <p className="text-xs text-slate-300 font-sans leading-relaxed line-clamp-3">
+                  {mem.content}
+                </p>
 
-                {/* Bloco de Preservação de Tokens */}
-                {mem.tokenPreservation && (
-                  <div className="p-2 rounded-xl bg-slate-950/80 border border-emerald-500/25 text-[10px] font-mono space-y-1">
-                    <div className="flex items-center justify-between text-emerald-400 font-bold">
-                      <span>Preservação de Contexto: {mem.tokenPreservation.compressionRatio}</span>
-                      <span className="text-slate-400">
-                        {mem.tokenPreservation.preservedTokensEstimated} de ~
-                        {mem.tokenPreservation.originalTokensEstimated} tokens
-                      </span>
-                    </div>
-                    <p className="text-slate-400 italic">
-                      🛡️ Racional: {mem.tokenPreservation.rationale}
-                    </p>
-                    {mem.autonomousNeedReason && (
-                      <p className="text-amber-400/90 font-sans">
-                        ⚡ Necessidade identificada pela LLM: {mem.autonomousNeedReason}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {/* Rodapé */}
-                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500 font-mono">
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3 h-3" /> {mem.timestamp} · {mem.user}
-                  </span>
-                  <span className="text-cyan-400 font-semibold">
-                    {mem.connectionsCount} conexões neurais
-                  </span>
+                <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono pt-1 border-t border-slate-800/60">
+                  <span>Por: {mem.user}</span>
+                  <span>{mem.timestamp}</span>
                 </div>
               </div>
             );

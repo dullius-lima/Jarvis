@@ -12,9 +12,9 @@ import {
 export const KNOWN_BIOMETRIC_PROFILES: BiometricIdentityBadge[] = [
   {
     personId: 'bio-matheus',
-    name: 'Matheus Dullius',
+    name: 'Matheus Lima',
     role: 'ADMIN_TOTAL',
-    relation: 'PROPRIETARIO_CFO',
+    relation: 'DESENVOLVEDOR_ADMIN',
     confidence: 0.994,
     avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
     permissions: {
@@ -29,14 +29,14 @@ export const KNOWN_BIOMETRIC_PROFILES: BiometricIdentityBadge[] = [
   },
   {
     personId: 'bio-marina',
-    name: 'Marina Dullius',
+    name: 'Marina',
     role: 'FAMILIA_RESTRITO',
     relation: 'ESPOSA',
     confidence: 0.988,
     avatarUrl: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
     permissions: {
-      canAccessFinancial: false, // Proteção estrita do CFO
-      canAccessOracleServers: false, // Sem acesso root a servidores
+      canAccessFinancial: false,
+      canAccessOracleServers: false,
       canModifySystemSettings: false,
       canAccessHomeAssistant: true,
       canAccessDailyRoutines: true,
@@ -134,17 +134,17 @@ export const SUB_WORKFLOWS_REGISTRY: SubWorkflowDefinition[] = [
     requiredPermission: 'canAccessDailyRoutines',
     status: 'IDLE',
   },
-  // Módulo 3: Alta Complexidade (Corporativo, Técnico e Financeiro)
+  // Módulo 3: Alta Complexidade (Infraestrutura, APIs REST e Pipelines)
   {
     id: 'MOD_3_FINANCEIRO',
-    name: 'Agente Analista Financeiro (CFO / Bazin)',
+    name: 'Agente de APIs & Integrações n8n',
     moduleGroup: 'MOD_3_COMPLEXIDADE',
     moduleGroupName: 'Módulo 3: Alta Complexidade',
-    description: 'Auditoria matemática decenal, Preço-Teto de Bazin, solvência e carteira Buy & Hold.',
-    iconName: 'TrendingUp',
+    description: 'Chamadas REST/GraphQL, autenticação OAuth/JWT, pipelines de dados, loops e tratamento de payloads JSON.',
+    iconName: 'Code',
     bodyPartAttached: 'coracao',
-    codeLanguage: 'Python',
-    triggerWebhookPath: '/api/n8n/webhook/financeiro',
+    codeLanguage: 'TypeScript',
+    triggerWebhookPath: '/api/n8n/webhook/integracoes',
     requiredPermission: 'canAccessFinancial',
     status: 'IDLE',
   },

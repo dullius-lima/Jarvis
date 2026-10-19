@@ -67,7 +67,7 @@ export const N8nNeuralStudioModal: React.FC<N8nNeuralStudioModalProps> = ({
   const [executionHistory, setExecutionHistory] = useState<CompleteN8nOrchestrationResult[]>(() => n8nService.getExecutionHistory());
 
   // Input sensorial para teste
-  const [voiceInputText, setVoiceInputText] = useState<string>('Auditar alocação B3 da carteira e ajustar luzes da sala para modo noturno.');
+  const [voiceInputText, setVoiceInputText] = useState<string>('Jarvis, executar workflow de sincronização na Oracle Cloud e acionar luzes do escritório.');
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [lastResult, setLastResult] = useState<CompleteN8nOrchestrationResult | null>(null);
 

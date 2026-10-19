@@ -9,7 +9,7 @@ export interface BiometricIdentityBadge {
   personId: string;
   name: string;
   role: BiometricRole;
-  relation: 'PROPRIETARIO_CFO' | 'ESPOSA' | 'FILHA' | 'PARENTES' | 'DESCONHECIDO';
+  relation: 'DESENVOLVEDOR_ADMIN' | 'PROPRIETARIO_CFO' | 'ESPOSA' | 'FILHA' | 'PARENTES' | 'DESCONHECIDO';
   confidence: number; // 0 a 1
   avatarUrl?: string;
   permissions: {
