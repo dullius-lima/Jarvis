@@ -1,0 +1,21 @@
+[Unit]
+Description=JARVIS Neural Wake-Word Background Daemon
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu
+Environment="PYTHONUNBUFFERED=1"
+Environment="JARVIS_BACKEND_URL=http://129.151.111.18:3000/api/webhook/universal-inbox"
+Environment="JARVIS_N8N_URL=http://129.151.111.18:5678/webhook/jarvis-voice"
+Environment="JARVIS_SECRET_KEY=jarvis_sec_8f92a10b4c73e91d"
+Environment="PICOVOICE_ACCESS_KEY=SEU_ACCESS_KEY_AQUI"
+ExecStart=/usr/bin/python3 /home/ubuntu/jarvis_wake_agent.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

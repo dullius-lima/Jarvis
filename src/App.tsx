@@ -13,6 +13,8 @@ import { AuthLockScreen } from './components/AuthLockScreen';
 import { SecuritySettingsModal } from './components/SecuritySettingsModal';
 import { N8nNeuralStudioModal } from './components/N8nNeuralStudioModal';
 import { AgentToolStudioModal, AgentToolStudioTab } from './components/AgentToolStudioModal';
+import { N8nNeuralConfigModal } from './components/N8nNeuralConfigModal';
+import { multiDeviceSyncService } from './services/multiDeviceSyncService';
 import { authService } from './services/authService';
 import { cfoDecisionService } from './services/cfoDecisionService';
 import { INITIAL_SYNAPSE_MEMORIES } from './data/synapseMemories';
@@ -215,6 +217,7 @@ export default function App() {
   const [promptBehaviorAgentId, setPromptBehaviorAgentId] = useState<string | null>(null);
   const [workspaceModalOpen, setWorkspaceModalOpen] = useState<boolean>(false);
   const [n8nStudioModalOpen, setN8nStudioModalOpen] = useState<boolean>(false);
+  const [n8nNeuralConfigOpen, setN8nNeuralConfigOpen] = useState<boolean>(false);
 
   // Modo TV & Dispositivos
   const [tvMode, setTvMode] = useState<boolean>(false);
@@ -225,9 +228,25 @@ export default function App() {
     voiceService.getConfig()
   );
 
-  // Salvar memórias no LocalStorage para persistência contínua
+  // Sincronização em Nuvem Multi-Dispositivo (Desktop + Celular na mesma conta)
+  useEffect(() => {
+    const unsub = multiDeviceSyncService.subscribe((state) => {
+      if (state && Array.isArray(state.synapseMemories) && state.synapseMemories.length > 0) {
+        setMemories((prev) => {
+          if (state.synapseMemories.length >= prev.length) {
+            return state.synapseMemories;
+          }
+          return prev;
+        });
+      }
+    });
+    return unsub;
+  }, []);
+
+  // Salvar memórias no LocalStorage e propagar na nuvem para outros dispositivos da conta
   useEffect(() => {
     localStorage.setItem('jarvis_memories', JSON.stringify(memories));
+    multiDeviceSyncService.pushUpdate({ synapseMemories: memories });
   }, [memories]);
 
   // Capturar evento PWA beforeinstallprompt
@@ -242,7 +261,8 @@ export default function App() {
 
   const handleInstallPWA = async () => {
     if (!installPromptEvent) {
-      alert('Para instalar na sua Smart TV ou celular: no menu do navegador, clique em "Adicionar à Tela Inicial" ou "Instalar Aplicativo".');
+      setActiveSynapsePulse('Para instalar no navegador ou TV: clique em "Adicionar à Tela Inicial" no menu.');
+      setTimeout(() => setActiveSynapsePulse(null), 4000);
       return;
     }
     installPromptEvent.prompt();
@@ -1093,20 +1113,20 @@ export default function App() {
       {/* ==================================================================== */}
       {/* BARRA SUPERIOR: MICROFONE, CHAT COM TECLADO E ÍCONE DE FERRAMENTA   */}
       {/* ==================================================================== */}
-      <header className="z-50 w-full px-4 py-2.5 bg-slate-950/85 backdrop-blur-xl border-b border-cyan-500/20 shadow-xl flex items-center justify-between gap-3">
+      <header className="z-50 w-full px-2.5 sm:px-4 py-2 sm:py-2.5 bg-slate-950/85 backdrop-blur-xl border-b border-cyan-500/20 shadow-xl flex items-center justify-between gap-1.5 sm:gap-3">
         
         {/* 1. Microfone */}
         <button
           type="button"
           onClick={handleMicrophoneClick}
-          className={`p-2.5 sm:p-3 rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center shrink-0 cursor-pointer ${
+          className={`p-2 sm:p-2.5 rounded-xl sm:rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center shrink-0 cursor-pointer ${
             isDictatingVoice || isOperationMode
               ? 'bg-red-600 text-white shadow-[0_0_25px_rgba(239,68,68,0.7)] animate-pulse'
               : 'bg-gradient-to-tr from-cyan-600 via-sky-500 to-blue-600 text-white shadow-[0_0_15px_rgba(14,165,233,0.35)] hover:scale-105'
           }`}
           title={isDictatingVoice ? 'Escutando sua voz... Clique para concluir' : 'Falar com o Jarvis por voz'}
         >
-          <Mic className="w-5 h-5" />
+          <Mic className="w-4 h-4 sm:w-5 sm:h-5" />
         </button>
 
         {/* 2. Chat com Teclado na Parte Superior */}
@@ -1120,7 +1140,7 @@ export default function App() {
             processarComandoJarvis(msg, activeProfile, emocao);
             setInputMessage('');
           }}
-          className="flex-1 max-w-3xl flex items-center gap-2 bg-slate-900/90 border border-cyan-500/30 hover:border-cyan-400/60 focus-within:border-cyan-400 rounded-2xl px-3.5 py-1.5 transition-all shadow-inner"
+          className="flex-1 min-w-0 max-w-3xl flex items-center gap-1.5 sm:gap-2 bg-slate-900/90 border border-cyan-500/30 hover:border-cyan-400/60 focus-within:border-cyan-400 rounded-xl sm:rounded-2xl px-2.5 sm:px-3.5 py-1 sm:py-1.5 transition-all shadow-inner"
         >
           <input
             type="text"
@@ -1194,20 +1214,17 @@ export default function App() {
             <span className="hidden xl:inline">Sessões</span>
           </button>
 
-          {/* Botão Dedicado: Arquitetura Hub-and-Spoke n8n Local (:800) */}
+          {/* Botão Dedicado: Configuração n8n Neural Webhook & Shared Secret (IP .18) */}
           <button
             type="button"
-            onClick={() => {
-              setAgentToolStudioTab('hub_spoke_n8n');
-              setAgentToolStudioOpen(true);
-            }}
-            className="px-3 py-2 rounded-2xl bg-gradient-to-r from-purple-600/25 via-indigo-600/25 to-blue-600/30 hover:from-purple-500/35 hover:to-blue-500/40 border border-purple-500/50 hover:border-purple-400 text-purple-300 transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5 text-xs font-mono font-bold"
-            title="Abrir Desenho Técnico & Arquitetura Hub-and-Spoke n8n Local (:800)"
+            onClick={() => setN8nNeuralConfigOpen(true)}
+            className="px-2.5 py-2 rounded-2xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 hover:border-purple-400 text-purple-300 transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5 text-xs font-mono font-bold"
+            title="Configurar Webhook n8n Neural, Chave Secreta Compartilhada e Sincronização Multi-Dispositivo"
           >
-            <GitBranch className="w-4 h-4 text-purple-400" />
-            <span className="hidden lg:inline">Hub-and-Spoke</span>
-            <span className="text-[10px] bg-purple-950 text-purple-300 px-1.5 py-0.5 rounded border border-purple-500/40 font-mono">
-              :800
+            <Shield className="w-4 h-4 text-purple-400" />
+            <span className="hidden xl:inline">n8n Neural</span>
+            <span className="text-[10px] bg-purple-950 text-purple-300 px-1.5 py-0.2 rounded border border-purple-500/40 font-mono">
+              .18
             </span>
           </button>
 
@@ -1491,6 +1508,17 @@ export default function App() {
           setTimeout(() => setActiveSynapsePulse(null), 3000);
         }}
         onAddMemory={adicionarNovaMemoria}
+      />
+
+      {/* Modal: Configuração do Webhook n8n Neural & Chave Secreta Compartilhada */}
+      <N8nNeuralConfigModal
+        isOpen={n8nNeuralConfigOpen}
+        onClose={() => setN8nNeuralConfigOpen(false)}
+        onTriggerSynapse={(label) => {
+          dispararSinapsePontual(null, label);
+          setActiveSynapsePulse(label);
+          setTimeout(() => setActiveSynapsePulse(null), 3000);
+        }}
       />
     </div>
   );

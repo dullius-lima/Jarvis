@@ -54,6 +54,11 @@ import {
   Monitor,
   UserCheck,
   HardDrive,
+  Lock,
+  Key,
+  EyeOff,
+  Activity,
+  AlertTriangle,
 } from 'lucide-react';
 
 export type AgentToolStudioTab =
@@ -63,7 +68,6 @@ export type AgentToolStudioTab =
   | 'env_config'
   | 'dynamic_db'
   | 'sensory_layer'
-  | 'hub_spoke_n8n'
   | 'create_agent'
   | 'create_tool'
   | 'edit_specialist';
@@ -109,6 +113,21 @@ export const AgentToolStudioModal: React.FC<AgentToolStudioModalProps> = ({
   const [customInputDeepSeek, setCustomInputDeepSeek] = useState<string>(() => aiProvidersGistService.getCustomInput('deepseek'));
   const [isSyncingGist, setIsSyncingGist] = useState<boolean>(false);
   const [gistFeedback, setGistFeedback] = useState<string | null>(null);
+
+  // Estados de Chaves de API (API_KEYS) Protegidas com Máscara
+  const [providerKeysStatus, setProviderKeysStatus] = useState<Record<string, { configured: boolean; maskedKey: string; updatedAt?: string }>>({
+    groq: { configured: false, maskedKey: '' },
+    openai: { configured: false, maskedKey: '' },
+    gemini: { configured: false, maskedKey: '' },
+    deepseek: { configured: false, maskedKey: '' },
+  });
+  const [keyInputValues, setKeyInputValues] = useState<Record<string, string>>({});
+  const [showKeyPlain, setShowKeyPlain] = useState<Record<string, boolean>>({});
+  const [isSavingKeyMap, setIsSavingKeyMap] = useState<Record<string, boolean>>({});
+  const [isTestingKeyMap, setIsTestingKeyMap] = useState<Record<string, boolean>>({});
+  const [testKeyResultMap, setTestKeyResultMap] = useState<Record<string, { valid: boolean; latencyMs?: number; message: string } | null>>({});
+  const [keysFeedback, setKeysFeedback] = useState<string | null>(null);
+  const [copiedKeysDdlSql, setCopiedKeysDdlSql] = useState<boolean>(false);
 
   // Estados de Memória Dinâmica & Sessões
   const [allSessions, setAllSessions] = useState<ChatSession[]>(() => sessionMemoryService.listSessions());
@@ -158,6 +177,7 @@ export const AgentToolStudioModal: React.FC<AgentToolStudioModalProps> = ({
   const [leaderName, setLeaderName] = useState<string>(() => leaderAgent.name || 'Jarvis');
   const [isSavingLeader, setIsSavingLeader] = useState<boolean>(false);
   const [leaderSavedFeedback, setLeaderSavedFeedback] = useState<boolean>(false);
+  const [overviewFeedback, setOverviewFeedback] = useState<string | null>(null);
 
   // Seleção de Agente para criação de Tool
   const [selectedAgentForTool, setSelectedAgentForTool] = useState<string>(() => leaderAgent.id);
@@ -367,6 +387,16 @@ async function execute(params) {
         setDynamicCollections(dynamicDatabaseService.listCollections());
         setSensoryBadge(sensoryInputService.getCurrentBadge());
         setSensoryInboxList(sensoryInputService.getInboxHistory());
+
+        // Buscar status atual das chaves de API gravadas no backend
+        fetch('/api/config/keys')
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.keys) {
+              setProviderKeysStatus((prev) => ({ ...prev, ...data.keys }));
+            }
+          })
+          .catch(() => {});
       };
       recarregar();
 
@@ -693,7 +723,7 @@ async function execute(params) {
       const portRes = await fetch('/api/n8n/port-manager', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ port: envPortInput.trim() || '800' }),
+        body: JSON.stringify({ port: envPortInput.trim() || '800', force: true }),
       });
       const portData = await portRes.json();
       setPortBifurcationResult({
@@ -745,6 +775,103 @@ async function execute(params) {
     if (provider === 'deepseek') setCustomInputDeepSeek(val);
     setGistFeedback(`ID manual de ${provider.toUpperCase()} salvo: "${val}"`);
     setTimeout(() => setGistFeedback(null), 3000);
+  };
+
+  // Handlers para Salvar e Limpar Chaves de API Protegidas com Máscara
+  const handleSaveProviderKey = async (provider: string, apiKey: string) => {
+    if (!apiKey || !apiKey.trim()) return;
+    setIsSavingKeyMap((prev) => ({ ...prev, [provider]: true }));
+    setKeysFeedback(null);
+    try {
+      const res = await fetch('/api/config/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, apiKey: apiKey.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Falha ao salvar chave no servidor.');
+      }
+
+      setProviderKeysStatus((prev) => ({
+        ...prev,
+        [provider]: {
+          configured: true,
+          maskedKey: data.maskedKey || '********',
+          updatedAt: data.updatedAt || new Date().toISOString(),
+        },
+      }));
+
+      // Limpar o campo de texto por segurança após gravar
+      setKeyInputValues((prev) => ({ ...prev, [provider]: '' }));
+      setKeysFeedback(`✓ Chave da ${provider.toUpperCase()} gravada e protegida com máscara (${data.maskedKey || '********'}) via ON CONFLICT.`);
+      setTimeout(() => setKeysFeedback(null), 5000);
+
+      if (onTriggerSynapse) {
+        onTriggerSynapse(`Credencial de ${provider.toUpperCase()} gravada com proteção!`);
+      }
+    } catch (err: any) {
+      setKeysFeedback(`Erro ao salvar credencial: ${err.message}`);
+      setTimeout(() => setKeysFeedback(null), 5000);
+    } finally {
+      setIsSavingKeyMap((prev) => ({ ...prev, [provider]: false }));
+    }
+  };
+
+  const handleRemoveProviderKey = async (provider: string) => {
+    try {
+      const res = await fetch(`/api/config/keys/${provider}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        setProviderKeysStatus((prev) => ({
+          ...prev,
+          [provider]: { configured: false, maskedKey: '' },
+        }));
+        setKeyInputValues((prev) => ({ ...prev, [provider]: '' }));
+        setKeysFeedback(`Chave da ${provider.toUpperCase()} removida.`);
+        setTimeout(() => setKeysFeedback(null), 3000);
+      }
+    } catch (e: any) {
+      setKeysFeedback(`Falha ao remover chave: ${e.message}`);
+    }
+  };
+
+  const handleTestProviderKey = async (provider: string, apiKeyInput?: string) => {
+    setIsTestingKeyMap((prev) => ({ ...prev, [provider]: true }));
+    setTestKeyResultMap((prev) => ({ ...prev, [provider]: null }));
+    try {
+      const res = await fetch('/api/config/keys/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider,
+          apiKey: apiKeyInput?.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      const isValid = Boolean(data.valid);
+      setTestKeyResultMap((prev) => ({
+        ...prev,
+        [provider]: {
+          valid: isValid,
+          latencyMs: data.latencyMs,
+          message: data.message || (isValid ? 'Chave validada com sucesso!' : 'Falha na validação.'),
+        },
+      }));
+      if (isValid && onTriggerSynapse) {
+        onTriggerSynapse(`Chave ${provider.toUpperCase()} validada (${data.latencyMs || 0}ms)!`);
+      }
+    } catch (err: any) {
+      setTestKeyResultMap((prev) => ({
+        ...prev,
+        [provider]: {
+          valid: false,
+          message: `Erro ao testar chave: ${err.message}`,
+        },
+      }));
+    } finally {
+      setIsTestingKeyMap((prev) => ({ ...prev, [provider]: false }));
+    }
   };
 
   // HANDLERS DE MEMÓRIA DINÂMICA & SESSÕES
@@ -1110,17 +1237,18 @@ async function execute(params) {
   // Excluir agente especialista (COM PROTEÇÃO ESTREITA DO LÍDER)
   const handleDeleteSpecialist = (agentId: string) => {
     if (agentId === leaderAgent.id) {
-      alert('O Agente Líder Jarvis é a raiz mestra perpétua do sistema e não pode ser excluído.');
+      setOverviewFeedback('O Agente Líder Jarvis é a raiz mestra perpétua do sistema e não pode ser excluído.');
+      setTimeout(() => setOverviewFeedback(null), 4000);
       return;
     }
 
-    if (window.confirm('Deseja excluir este agente especialista subordinado e todas as suas ferramentas?')) {
-      const success = agentService.deleteAgent(agentId);
-      if (success) {
-        setAgents(agentService.listAgents());
-        if (onTriggerSynapse) {
-          onTriggerSynapse(`Especialista removido e Líder Jarvis resincronizado.`);
-        }
+    const success = agentService.deleteAgent(agentId);
+    if (success) {
+      setAgents(agentService.listAgents());
+      setOverviewFeedback('Especialista removido com sucesso do ecossistema.');
+      setTimeout(() => setOverviewFeedback(null), 3000);
+      if (onTriggerSynapse) {
+        onTriggerSynapse(`Especialista removido e Líder Jarvis resincronizado.`);
       }
     }
   };
@@ -1250,18 +1378,6 @@ async function execute(params) {
           >
             <Eye className="w-3.5 h-3.5 text-rose-400" />
             👁️ Camada Sensorial & Desktop
-          </button>
-
-          <button
-            onClick={() => setActiveTab('hub_spoke_n8n')}
-            className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-              activeTab === 'hub_spoke_n8n'
-                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <GitBranch className="w-3.5 h-3.5 text-purple-400" />
-            ⚡ Hub-and-Spoke (:800)
           </button>
 
           <button
@@ -2376,17 +2492,36 @@ Quando o Especialista retornar os dados brutos via Webhook, sua função é ler 
                     </div>
 
                     <div>
-                      <label className="text-xs font-bold text-slate-300 block mb-1">
-                        PORTA DO SERVIDOR:
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-300">
+                          PORTA DE ACESSO DO SERVIDOR:
+                        </label>
+                        <span className="text-[10px] text-amber-300 font-mono">Liberdade total</span>
+                      </div>
                       <input
                         type="text"
                         required
                         value={envPortInput}
                         onChange={(e) => setEnvPortInput(e.target.value)}
-                        placeholder="800"
+                        placeholder="800, 5678, 3000..."
                         className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-emerald-300 font-mono focus:outline-none focus:border-emerald-400"
                       />
+                      <div className="mt-1.5 flex items-center gap-1.5 flex-wrap text-[10px]">
+                        {['800', '5678', '3000', '8080', '80', '443'].map((p) => (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => setEnvPortInput(p)}
+                            className={`px-2 py-0.5 rounded cursor-pointer transition-colors border ${
+                              envPortInput === p
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 font-bold'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                            }`}
+                          >
+                            :{p}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
 
@@ -2430,7 +2565,8 @@ Quando o Especialista retornar os dados brutos via Webhook, sua função é ler 
                         onClick={() => {
                           const url = `${envProtoInput}://${envHostInput.trim() || 'localhost'}:${envPortInput.trim() || '800'}${envPrefixInput.startsWith('/') ? envPrefixInput : '/' + envPrefixInput}`;
                           navigator.clipboard.writeText(url);
-                          alert('BASE_URL copiada: ' + url);
+                          setEnvSavedFeedback('✓ BASE_URL copiada: ' + url);
+                          setTimeout(() => setEnvSavedFeedback(null), 3000);
                         }}
                         className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-mono cursor-pointer"
                       >
@@ -2570,10 +2706,8 @@ Quando o Especialista retornar os dados brutos via Webhook, sua função é ler 
             </div>
           )}
 
-          {/* =============================================================== */}
-          {/* ABA 5: ARQUITETURA HUB-AND-SPOKE N8N (:800) & DIRETRIZES TÉCNICAS*/}
-          {/* =============================================================== */}
-          {activeTab === 'hub_spoke_n8n' && (
+          {/* ABA 5: ARQUITETURA HUB-AND-SPOKE N8N REMOVIDA A PEDIDO DO USUÁRIO */}
+          {false && (
             <div className="space-y-6 animate-in fade-in duration-300">
               
               {/* BANNER PRINCIPAL COM STATUS E AÇÃO DE SINCRONIZAÇÃO */}
@@ -2779,7 +2913,11 @@ Quando o Especialista retornar os dados brutos via Webhook, sua função é ler 
                           personalityPrompt: promptTexto,
                           logic: promptTexto,
                         });
-                        alert('System Prompt oficial aplicado com sucesso ao Jarvis Líder!');
+                        setLeaderSavedFeedback(true);
+                        setTimeout(() => setLeaderSavedFeedback(false), 3000);
+                        if (onTriggerSynapse) {
+                          onTriggerSynapse('System Prompt oficial do n8n aplicado ao Jarvis Líder!');
+                        }
                       }}
                       className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl flex items-center gap-1 cursor-pointer transition-all"
                     >
@@ -3149,6 +3287,13 @@ Quando o Especialista retornar os dados brutos via Webhook, sua função é ler 
                     <span>{gistFeedback}</span>
                   </div>
                 )}
+
+                {keysFeedback && (
+                  <div className="mt-3 p-3 bg-emerald-950/80 border border-emerald-500/60 rounded-xl text-xs text-emerald-200 flex items-center gap-2 animate-in fade-in duration-200">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>{keysFeedback}</span>
+                  </div>
+                )}
               </div>
 
               {/* Informações da Fonte Gist */}
@@ -3226,7 +3371,11 @@ Quando o Especialista retornar os dados brutos via Webhook, sua função é ler 
                                   onClick={() => {
                                     setLeaderModel(m.value);
                                     agentService.updateAgent(leaderAgent.id, { model: m.value });
-                                    alert(`Modelo "${m.label}" (${m.value}) definido para o Jarvis Líder!`);
+                                    setGistFeedback(`✓ Modelo "${m.label}" (${m.value}) definido para o Jarvis Líder!`);
+                                    setTimeout(() => setGistFeedback(null), 4000);
+                                    if (onTriggerSynapse) {
+                                      onTriggerSynapse(`Modelo do Jarvis atualizado para ${m.label}`);
+                                    }
                                   }}
                                   className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 cursor-pointer transition-all"
                                 >
@@ -3270,9 +3419,184 @@ Quando o Especialista retornar os dados brutos via Webhook, sua função é ler 
                           </div>
                         )}
                       </div>
+
+                      {/* Bloco de Credencial / Chave de API Protegida (API_KEY) com Máscara ******** */}
+                      <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-bold text-slate-200 flex items-center gap-1.5 font-mono">
+                            <Key className="w-3.5 h-3.5 text-amber-400" />
+                            Chave de API ({providerKey.toUpperCase()}_API_KEY):
+                          </label>
+                          {providerKeysStatus[providerKey]?.configured ? (
+                            <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-500/50 px-2 py-0.5 rounded-full font-mono font-bold flex items-center gap-1 shadow-sm">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                              Configurada
+                            </span>
+                          ) : (
+                            <span className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full font-mono">
+                              Não configurada
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Indicador visual de chave gravada exibindo a máscara ******** */}
+                        {providerKeysStatus[providerKey]?.configured && (
+                          <div className="flex items-center justify-between bg-slate-950/90 px-3 py-2 rounded-xl border border-emerald-500/30 text-xs font-mono">
+                            <div className="flex items-center gap-2">
+                              <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <span className="text-emerald-300 tracking-widest font-bold text-xs select-none">
+                                {providerKeysStatus[providerKey]?.maskedKey || '••••••••••••••••'}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveProviderKey(providerKey)}
+                              className="text-[10px] text-slate-500 hover:text-red-400 font-mono transition-colors cursor-pointer"
+                              title="Remover credencial gravada"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Input protegido password com botão Salvar Credencial */}
+                        <div className="flex items-center gap-2">
+                          <div className="relative flex-1">
+                            <input
+                              type={showKeyPlain[providerKey] ? 'text' : 'password'}
+                              value={keyInputValues[providerKey] || ''}
+                              onChange={(e) => setKeyInputValues((prev) => ({ ...prev, [providerKey]: e.target.value }))}
+                              placeholder={
+                                providerKeysStatus[providerKey]?.configured
+                                  ? 'Substituir credencial existente...'
+                                  : `Cole a ${providerKey.toUpperCase()}_API_KEY aqui...`
+                              }
+                              className="w-full px-3 py-1.5 pr-8 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-400 placeholder:text-slate-600"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowKeyPlain((prev) => ({ ...prev, [providerKey]: !prev[providerKey] }))}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
+                              title={showKeyPlain[providerKey] ? 'Ocultar' : 'Mostrar'}
+                            >
+                              {showKeyPlain[providerKey] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleSaveProviderKey(providerKey, keyInputValues[providerKey] || '')}
+                            disabled={isSavingKeyMap[providerKey] || !(keyInputValues[providerKey]?.trim())}
+                            className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 disabled:opacity-40 text-slate-950 font-bold text-xs rounded-xl cursor-pointer transition-all shrink-0 flex items-center gap-1.5 shadow-md shadow-emerald-500/20 active:scale-95"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            {isSavingKeyMap[providerKey] ? 'Gravando...' : 'Salvar Credencial'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleTestProviderKey(providerKey, keyInputValues[providerKey])}
+                            disabled={isTestingKeyMap[providerKey] || (!providerKeysStatus[providerKey]?.configured && !keyInputValues[providerKey]?.trim())}
+                            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-amber-300 hover:text-amber-200 border border-amber-500/40 text-xs rounded-xl cursor-pointer transition-all shrink-0 flex items-center gap-1.5 active:scale-95 shadow-sm font-mono"
+                            title="Testar requisição direta contra a API do provedor"
+                          >
+                            <Activity className={`w-3.5 h-3.5 ${isTestingKeyMap[providerKey] ? 'animate-spin text-amber-300' : 'text-amber-400'}`} />
+                            {isTestingKeyMap[providerKey] ? 'Testando...' : 'Testar Chave'}
+                          </button>
+                        </div>
+
+                        {/* Feedback do Teste da Chave de IA */}
+                        {testKeyResultMap[providerKey] && (
+                          <div className={`p-2.5 rounded-xl border text-[11px] flex items-center justify-between gap-2 animate-in fade-in duration-200 ${
+                            testKeyResultMap[providerKey]?.valid
+                              ? 'bg-emerald-950/70 border-emerald-500/50 text-emerald-300'
+                              : 'bg-red-950/70 border-red-500/50 text-red-300'
+                          }`}>
+                            <div className="flex items-center gap-2">
+                              {testKeyResultMap[providerKey]?.valid ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                              ) : (
+                                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                              )}
+                              <span className="font-sans leading-tight">{testKeyResultMap[providerKey]?.message}</span>
+                            </div>
+                            {testKeyResultMap[providerKey]?.latencyMs !== undefined && (
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300 shrink-0">
+                                ⚡ {testKeyResultMap[providerKey]?.latencyMs}ms
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
+              </div>
+
+              {/* BANNER DE PERSISTÊNCIA RELACIONAL & ON CONFLICT NO POSTGRESQL */}
+              <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Database className="w-4 h-4 text-emerald-400" />
+                    <div>
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                        Estrutura do Banco de Dados (PostgreSQL / Drizzle ORM)
+                      </h4>
+                      <p className="text-[11px] text-slate-400 font-sans">
+                        Tabela oficial para armazenamento de credenciais com cláusula segura <code className="text-emerald-300 font-mono">ON CONFLICT (provider) DO UPDATE</code>.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ddl = `CREATE TABLE IF NOT EXISTS ai_provider_keys (
+  provider VARCHAR(50) PRIMARY KEY,
+  api_key TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Exemplo de Upsert executado pelo backend Express:
+INSERT INTO ai_provider_keys (provider, api_key, updated_at)
+VALUES ('groq', 'gsk_...', CURRENT_TIMESTAMP)
+ON CONFLICT (provider) DO UPDATE SET
+  api_key = EXCLUDED.api_key,
+  updated_at = CURRENT_TIMESTAMP;`;
+                      navigator.clipboard.writeText(ddl);
+                      setCopiedKeysDdlSql(true);
+                      setTimeout(() => setCopiedKeysDdlSql(false), 3000);
+                    }}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 text-xs rounded-xl flex items-center gap-1.5 cursor-pointer font-mono shrink-0 transition-all"
+                  >
+                    {copiedKeysDdlSql ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedKeysDdlSql ? 'SQL Copiado!' : 'Copiar DDL & Upsert SQL'}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] font-mono">
+                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">1. Criação da Tabela (DDL):</span>
+                    <pre className="text-emerald-300 text-[10px] overflow-x-auto whitespace-pre">
+{`CREATE TABLE IF NOT EXISTS ai_provider_keys (
+  provider VARCHAR(50) PRIMARY KEY,
+  api_key TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);`}
+                    </pre>
+                  </div>
+
+                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">2. Tratamento de Conflito (Upsert):</span>
+                    <pre className="text-amber-300 text-[10px] overflow-x-auto whitespace-pre">
+{`INSERT INTO ai_provider_keys (provider, api_key, updated_at)
+VALUES ($1, $2, CURRENT_TIMESTAMP)
+ON CONFLICT (provider) DO UPDATE SET
+  api_key = EXCLUDED.api_key,
+  updated_at = CURRENT_TIMESTAMP;`}
+                    </pre>
+                  </div>
+                </div>
               </div>
             </div>
           )}

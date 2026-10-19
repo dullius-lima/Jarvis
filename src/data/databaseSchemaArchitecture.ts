@@ -130,6 +130,23 @@ CREATE TABLE IF NOT EXISTS specialist_context_memory (
     CONSTRAINT uk_session_specialist_key UNIQUE (session_id, specialist_id, context_key)
 );
 
+-- ============================================================================
+-- 8. TABELA DE CREDENCIAIS & CHAVES DE API DOS PROVEDORES DE IA (POSTGRESQL)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS ai_provider_keys (
+    provider VARCHAR(50) PRIMARY KEY,                       -- 'groq', 'openai', 'gemini', 'deepseek'
+    api_key TEXT NOT NULL,                                  -- Chave de API protegida
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Exemplo de inserção segura com ON CONFLICT (provider) DO UPDATE:
+-- INSERT INTO ai_provider_keys (provider, api_key, updated_at)
+-- VALUES ('groq', 'gsk_...', CURRENT_TIMESTAMP)
+-- ON CONFLICT (provider) DO UPDATE SET 
+--   api_key = EXCLUDED.api_key, 
+--   updated_at = CURRENT_TIMESTAMP;
+
 -- Índices de busca rápida em O(1)
 CREATE INDEX IF NOT EXISTS idx_agents_is_leader ON agents(is_leader);
 CREATE INDEX IF NOT EXISTS idx_agent_tools_agent_id ON agent_tools(agent_id);
@@ -138,6 +155,7 @@ CREATE INDEX IF NOT EXISTS idx_tool_logs_executed_at ON tool_execution_logs(exec
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated_at ON chat_sessions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_specialist_context_session ON specialist_context_memory(session_id, specialist_id);
+CREATE INDEX IF NOT EXISTS idx_ai_provider_keys_active ON ai_provider_keys(is_active);
 `;
 
 export const ARCHITECTURE_DIRECTIVES = {

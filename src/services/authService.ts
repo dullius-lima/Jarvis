@@ -1,4 +1,5 @@
 // Serviço de Proteção de Acesso & Sincronização entre Máquinas (Jarvis Neural)
+import { multiDeviceSyncService } from './multiDeviceSyncService';
 
 export interface UserCredentials {
   email: string;
@@ -11,7 +12,7 @@ const CREDENTIALS_KEY = 'jarvis_user_credentials_v1';
 const SESSION_KEY = 'jarvis_auth_session_v1';
 
 const DEFAULT_CREDENTIALS: UserCredentials = {
-  email: 'matheus_dulius@hotmail.com',
+  email: 'matheusdullius@gmail.com',
   passwordHash: '123456',
   nome: 'Matheus Dullius',
   ultimaAlteracao: new Date().toLocaleDateString('pt-BR'),
@@ -80,20 +81,33 @@ export class AuthService {
 
   public login(emailInput: string, passwordInput: string): { success: boolean; message: string } {
     const emailLimpo = emailInput.trim().toLowerCase();
-    const emailSalvo = this.credentials.email.trim().toLowerCase();
 
-    // Permite matheus_dulius@hotmail.com e matheusdullius@gmail.com como alternativos válidos
-    const emailValido =
-      emailLimpo === emailSalvo ||
-      (emailLimpo === 'matheusdullius@gmail.com' && emailSalvo === 'matheus_dulius@hotmail.com') ||
-      (emailLimpo === 'matheus_dulius@hotmail.com');
-
-    if (!emailValido) {
-      return { success: false, message: 'Usuário não reconhecido no sistema neural.' };
+    // Validação de formato de e-mail: liberdade para qualquer domínio e nome
+    if (!emailLimpo || !emailLimpo.includes('@') || emailLimpo.length < 5) {
+      return { success: false, message: 'Por favor, insira um formato de e-mail válido (ex: seu-nome@dominio.com).' };
     }
 
-    if (passwordInput !== this.credentials.passwordHash) {
-      return { success: false, message: 'Senha incorreta. Verifique os dados de acesso.' };
+    // Validação de senha: aceita a senha cadastrada ou a senha padrão inicial do sistema (123456)
+    const senhaCorreta =
+      passwordInput === this.credentials.passwordHash ||
+      passwordInput === '123456';
+
+    if (!senhaCorreta) {
+      return { success: false, message: 'Senha incorreta. A senha padrão do sistema é 123456 ou utilize a sua senha personalizada.' };
+    }
+
+    // Atualiza o e-mail ativo com total liberdade de escolha
+    this.credentials.email = emailLimpo;
+    this.salvar();
+
+    // Sincroniza imediatamente com o serviço multi-dispositivos
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('jarvis_sync_account_email', emailLimpo);
+      }
+      multiDeviceSyncService.setAccount(emailLimpo);
+    } catch (e) {
+      console.warn('Erro ao propagar conta para multiDeviceSyncService:', e);
     }
 
     this.isUnlocked = true;
@@ -108,7 +122,10 @@ export class AuthService {
       );
     }
 
-    return { success: true, message: 'Acesso liberado ao cérebro e corpo neural.' };
+    return {
+      success: true,
+      message: `Acesso liberado! Conta vinculada: ${this.credentials.email}`,
+    };
   }
 
   public logout(): void {
@@ -123,22 +140,53 @@ export class AuthService {
     newEmail: string,
     newPassword?: string
   ): { success: boolean; message: string } {
-    if (currentPassword !== this.credentials.passwordHash) {
+    const senhaCorreta =
+      currentPassword === this.credentials.passwordHash ||
+      currentPassword === '123456';
+
+    if (!senhaCorreta) {
       return { success: false, message: 'Senha atual incorreta. A alteração foi recusada.' };
     }
 
-    if (!newEmail.trim() || !newEmail.includes('@')) {
-      return { success: false, message: 'E-mail inválido fornecido.' };
+    if (!newEmail.trim() || !newEmail.includes('@') || newEmail.trim().length < 5) {
+      return { success: false, message: 'Por favor, insira um e-mail válido para a conta.' };
     }
 
-    this.credentials.email = newEmail.trim().toLowerCase();
+    const emailLimpo = newEmail.trim().toLowerCase();
+    this.credentials.email = emailLimpo;
     if (newPassword && newPassword.trim().length >= 4) {
       this.credentials.passwordHash = newPassword.trim();
     }
     this.credentials.ultimaAlteracao = new Date().toLocaleDateString('pt-BR');
     this.salvar();
 
-    return { success: true, message: 'Credenciais atualizadas com sucesso.' };
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('jarvis_sync_account_email', emailLimpo);
+      }
+      multiDeviceSyncService.setAccount(emailLimpo);
+    } catch (e) {
+      console.warn('Erro ao atualizar multiDeviceSyncService:', e);
+    }
+
+    return {
+      success: true,
+      message: `Credenciais atualizadas com sucesso! Novo e-mail ativo: ${emailLimpo}`,
+    };
+  }
+
+  public switchAccount(newEmail: string): boolean {
+    const emailLimpo = newEmail.trim().toLowerCase();
+    if (!emailLimpo || !emailLimpo.includes('@')) return false;
+    this.credentials.email = emailLimpo;
+    this.salvar();
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('jarvis_sync_account_email', emailLimpo);
+      }
+      multiDeviceSyncService.setAccount(emailLimpo);
+    } catch {}
+    return true;
   }
 
   // =========================================================================

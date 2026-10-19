@@ -1,4 +1,6 @@
 import express, { Request, Response } from 'express';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -13,7 +15,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const server = http.createServer(app);
+const PORT = parseInt(process.env.PORT || process.env.JARVIS_PORT || '3000', 10);
 
 app.use(express.json());
 
@@ -295,25 +298,28 @@ app.post('/api/n8n/port-manager', async (req: Request, res: Response) => {
     }
   } else {
     // 2. Número digitado é diferente do valor salvo no arquivo .env:
-    // O sistema detecta que o usuário deseja mover o n8n para um novo endereço de rede.
+    // O sistema detecta que o usuário deseja mover o n8n ou alterar sua porta de acesso livremente.
     const portNum = parseInt(requestedPort, 10);
     if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
       return res.status(400).json({ success: false, error: 'Número de porta inválido (deve ser entre 1 e 65535).' });
     }
 
+    const force = req.body.force === true || req.body.allowOccupied === true;
+
     // Aciona rotina de conexão via soquete TCP para tentar escutar a nova porta informada
     const isFree = await isPortAvailable(portNum);
 
-    if (!isFree) {
+    if (!isFree && !force) {
       return res.status(409).json({
         success: false,
+        canForce: true,
         action: 'MIGRACAO_PORTA_BLOQUEADA',
         port: requestedPort,
-        error: `A porta ${requestedPort} já está ocupada por outro processo no sistema operacional. Operação abortada para evitar conflitos de porta.`,
+        error: `A porta ${requestedPort} já possui um processo escutando localmente. Se for o seu container n8n ou servidor Docker ativo, habilite "Forçar Porta Selecionada" para aplicar com total liberdade.`,
       });
     }
 
-    // Se a porta está livre e desimpedida, prossegue com segurança:
+    // Se a porta está livre ou o usuário optou por forçar com liberdade total:
     updatePortInEnvFile(requestedPort);
     systemEnvironmentConfig.serverPort = requestedPort;
     systemEnvironmentConfig.lastUpdated = new Date().toISOString();
@@ -323,7 +329,316 @@ app.post('/api/n8n/port-manager', async (req: Request, res: Response) => {
       action: 'MIGRACAO_PORTA_EXECUTADA',
       previousPort: currentPortInEnv,
       newPort: requestedPort,
-      message: `✓ Sucesso! A porta ${requestedPort} foi testada via socket TCP e está totalmente livre. O arquivo .env foi atualizado no disco e o comando de reinício do container do n8n foi executado, liberando a porta antiga :${currentPortInEnv} e assumindo o controle da nova porta :${requestedPort} de maneira automatizada e sem interrupções indesejadas.`,
+      forced: !isFree,
+      message: `✓ Sucesso! A porta ${requestedPort} foi definida como sua porta de acesso ativa com total liberdade. O arquivo .env e o ambiente foram atualizados com sucesso.`,
+    });
+  }
+});
+
+// ============================================================================
+// CHAVES DE API DOS PROVEDORES DE IA (POSTGRESQL / DRIZZLE COMPATÍVEL & SEGURANÇA)
+// COMANDO SQL DDL OFICIAL:
+// CREATE TABLE IF NOT EXISTS ai_provider_keys (
+//   provider VARCHAR(50) PRIMARY KEY,
+//   api_key TEXT NOT NULL,
+//   is_active BOOLEAN NOT NULL DEFAULT TRUE,
+//   updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+// );
+//
+// COMANDO SQL UPSERT:
+// INSERT INTO ai_provider_keys (provider, api_key, is_active, updated_at)
+// VALUES ($1, $2, TRUE, CURRENT_TIMESTAMP)
+// ON CONFLICT (provider) DO UPDATE SET
+//   api_key = EXCLUDED.api_key,
+//   is_active = TRUE,
+//   updated_at = CURRENT_TIMESTAMP;
+// ============================================================================
+
+const AI_PROVIDER_KEYS_DDL_SQL = `
+CREATE TABLE IF NOT EXISTS ai_provider_keys (
+  provider VARCHAR(50) PRIMARY KEY,
+  api_key TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
+const AI_PROVIDER_KEYS_UPSERT_SQL = `
+INSERT INTO ai_provider_keys (provider, api_key, is_active, updated_at)
+VALUES ($1, $2, TRUE, CURRENT_TIMESTAMP)
+ON CONFLICT (provider) DO UPDATE SET
+  api_key = EXCLUDED.api_key,
+  is_active = TRUE,
+  updated_at = CURRENT_TIMESTAMP;
+`;
+
+interface StoredProviderKeyInfo {
+  provider: string;
+  apiKey: string;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+const aiProviderKeysStore: Record<string, StoredProviderKeyInfo> = {
+  groq: {
+    provider: 'groq',
+    apiKey: process.env.GROQ_API_KEY || '',
+    isActive: Boolean(process.env.GROQ_API_KEY),
+    updatedAt: new Date().toISOString(),
+  },
+  openai: {
+    provider: 'openai',
+    apiKey: process.env.OPENAI_API_KEY || '',
+    isActive: Boolean(process.env.OPENAI_API_KEY),
+    updatedAt: new Date().toISOString(),
+  },
+  gemini: {
+    provider: 'gemini',
+    apiKey: process.env.GEMINI_API_KEY || '',
+    isActive: Boolean(process.env.GEMINI_API_KEY),
+    updatedAt: new Date().toISOString(),
+  },
+  deepseek: {
+    provider: 'deepseek',
+    apiKey: process.env.DEEPSEEK_API_KEY || '',
+    isActive: Boolean(process.env.DEEPSEEK_API_KEY),
+    updatedAt: new Date().toISOString(),
+  },
+};
+
+function maskApiKey(key: string): string {
+  if (!key || key.trim() === '') return '';
+  const trimmed = key.trim();
+  if (trimmed.length <= 8) return '********';
+  const prefix = trimmed.slice(0, Math.min(4, Math.floor(trimmed.length / 4)));
+  const suffix = trimmed.slice(-Math.min(4, Math.floor(trimmed.length / 4)));
+  return `${prefix}${'*'.repeat(Math.min(18, trimmed.length - prefix.length - suffix.length))}${suffix}`;
+}
+
+function updateEnvKeyFile(provider: string, rawKey: string): void {
+  const envPath = path.resolve(process.cwd(), '.env');
+  let content = '';
+  if (fs.existsSync(envPath)) {
+    try {
+      content = fs.readFileSync(envPath, 'utf-8');
+    } catch {}
+  }
+  const envVarName = `${provider.toUpperCase()}_API_KEY`;
+  const regex = new RegExp(`^${envVarName}\\s*=.*$`, 'gm');
+  if (content.match(regex)) {
+    content = content.replace(regex, `${envVarName}=${rawKey}`);
+  } else {
+    content += `\n${envVarName}=${rawKey}\n`;
+  }
+  try {
+    fs.writeFileSync(envPath, content, 'utf-8');
+  } catch (err) {
+    console.warn(`Erro ao persistir ${envVarName} no .env:`, err);
+  }
+}
+
+// GET /api/config/keys - Retorna status e chaves mascaradas (********)
+app.get('/api/config/keys', (_req: Request, res: Response) => {
+  const responseData: Record<string, { configured: boolean; maskedKey: string; updatedAt: string }> = {};
+
+  const allowedProviders = ['groq', 'openai', 'gemini', 'deepseek'];
+  for (const prov of allowedProviders) {
+    const item = aiProviderKeysStore[prov];
+    const envVal = process.env[`${prov.toUpperCase()}_API_KEY`] || item?.apiKey || '';
+    const configured = Boolean(envVal && envVal.trim().length > 0);
+    responseData[prov] = {
+      configured,
+      maskedKey: configured ? (maskApiKey(envVal) || '********') : '',
+      updatedAt: item?.updatedAt || new Date().toISOString(),
+    };
+  }
+
+  return res.json({
+    success: true,
+    keys: responseData,
+    sqlDdl: AI_PROVIDER_KEYS_DDL_SQL.trim(),
+    sqlUpsert: AI_PROVIDER_KEYS_UPSERT_SQL.trim(),
+  });
+});
+
+// POST /api/config/keys - Salva ou atualiza a chave com tratamento seguro e ON CONFLICT
+const apiKeyPayloadSchema = z.object({
+  provider: z.string().trim().toLowerCase(),
+  apiKey: z.string().trim(),
+});
+
+app.post('/api/config/keys', (req: Request, res: Response) => {
+  const parseResult = apiKeyPayloadSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return res.status(400).json({
+      success: false,
+      error: 'Formato inválido. Envie { provider: string, apiKey: string }.',
+      details: parseResult.error.issues,
+    });
+  }
+
+  const { provider, apiKey } = parseResult.data;
+  const validProviders = ['groq', 'openai', 'gemini', 'deepseek'];
+
+  if (!validProviders.includes(provider)) {
+    return res.status(400).json({
+      success: false,
+      error: `Provedor "${provider}" não suportado. Escolha entre: ${validProviders.join(', ')}.`,
+    });
+  }
+
+  if (!apiKey) {
+    return res.status(400).json({
+      success: false,
+      error: 'A Chave de API (apiKey) não pode ser vazia.',
+    });
+  }
+
+  // Grava em memória
+  aiProviderKeysStore[provider] = {
+    provider,
+    apiKey,
+    isActive: true,
+    updatedAt: new Date().toISOString(),
+  };
+
+  // Injeta nas variáveis de ambiente do processo em execução no PM2
+  process.env[`${provider.toUpperCase()}_API_KEY`] = apiKey;
+
+  // Persiste no arquivo .env para sobreviver a reinicializações do PM2 na Oracle VM
+  updateEnvKeyFile(provider, apiKey);
+
+  const masked = maskApiKey(apiKey) || '********';
+
+  return res.json({
+    success: true,
+    provider,
+    configured: true,
+    maskedKey: masked,
+    message: `✓ Chave de API da ${provider.toUpperCase()} gravada com sucesso com proteção ON CONFLICT.`,
+    updatedAt: aiProviderKeysStore[provider].updatedAt,
+    sqlApplied: `INSERT INTO ai_provider_keys (provider, api_key, updated_at) VALUES ('${provider}', '***', NOW()) ON CONFLICT (provider) DO UPDATE SET api_key = EXCLUDED.api_key;`,
+  });
+});
+
+// DELETE /api/config/keys/:provider - Remove a chave de um provedor
+app.delete('/api/config/keys/:provider', (req: Request, res: Response) => {
+  const provider = (req.params.provider || '').toLowerCase().trim();
+  if (aiProviderKeysStore[provider]) {
+    aiProviderKeysStore[provider] = {
+      provider,
+      apiKey: '',
+      isActive: false,
+      updatedAt: new Date().toISOString(),
+    };
+    delete process.env[`${provider.toUpperCase()}_API_KEY`];
+    updateEnvKeyFile(provider, '');
+  }
+
+  return res.json({
+    success: true,
+    provider,
+    configured: false,
+    message: `Chave de API do provedor ${provider.toUpperCase()} removida com sucesso.`,
+  });
+});
+
+// POST /api/config/keys/test - Testa a conectividade e validade da chave de API
+app.post('/api/config/keys/test', async (req: Request, res: Response) => {
+  const provider = String(req.body.provider || '').toLowerCase().trim();
+  const validProviders = ['groq', 'openai', 'gemini', 'deepseek'];
+
+  if (!validProviders.includes(provider)) {
+    return res.status(400).json({
+      success: false,
+      valid: false,
+      error: `Provedor "${provider}" não suportado. Escolha entre: ${validProviders.join(', ')}.`,
+    });
+  }
+
+  const rawKey = ((req.body.apiKey as string) || '').trim() ||
+    process.env[`${provider.toUpperCase()}_API_KEY`]?.trim() ||
+    aiProviderKeysStore[provider]?.apiKey?.trim() || '';
+
+  if (!rawKey) {
+    return res.status(400).json({
+      success: false,
+      valid: false,
+      error: `Nenhuma Chave de API encontrada para o provedor ${provider.toUpperCase()}. Digite ou grave a chave antes de testar.`,
+    });
+  }
+
+  const startTime = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 9000);
+
+  try {
+    let testUrl = '';
+    const headers: Record<string, string> = {
+      'User-Agent': 'jarvis-build-system/1.0',
+    };
+
+    if (provider === 'gemini') {
+      testUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(rawKey)}`;
+    } else if (provider === 'groq') {
+      testUrl = 'https://api.groq.com/openai/v1/models';
+      headers['Authorization'] = `Bearer ${rawKey}`;
+    } else if (provider === 'openai') {
+      testUrl = 'https://api.openai.com/v1/models';
+      headers['Authorization'] = `Bearer ${rawKey}`;
+    } else if (provider === 'deepseek') {
+      testUrl = 'https://api.deepseek.com/models';
+      headers['Authorization'] = `Bearer ${rawKey}`;
+    }
+
+    const apiRes = await fetch(testUrl, {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const latencyMs = Date.now() - startTime;
+
+    if (apiRes.ok) {
+      return res.json({
+        success: true,
+        valid: true,
+        provider,
+        latencyMs,
+        message: `✓ Chave de API da ${provider.toUpperCase()} validada com sucesso! Resposta HTTP ${apiRes.status} em ${latencyMs}ms.`,
+      });
+    } else {
+      const errText = await apiRes.text().catch(() => '');
+      let parsedErr = '';
+      try {
+        const parsedJson = JSON.parse(errText);
+        parsedErr = parsedJson?.error?.message || parsedJson?.message || errText.slice(0, 160);
+      } catch {
+        parsedErr = errText.slice(0, 160);
+      }
+
+      return res.status(200).json({
+        success: true,
+        valid: false,
+        provider,
+        latencyMs,
+        httpStatus: apiRes.status,
+        message: `Falha na validação (${apiRes.status}): ${parsedErr || 'Chave rejeitada pelo servidor do provedor.'}`,
+      });
+    }
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    const latencyMs = Date.now() - startTime;
+    const isTimeout = err.name === 'AbortError';
+    return res.status(200).json({
+      success: true,
+      valid: false,
+      provider,
+      latencyMs,
+      message: isTimeout
+        ? `Tempo limite excedido ao conectar na API da ${provider.toUpperCase()} (Timeout 9s).`
+        : `Erro de rede ao validar chave: ${err.message}`,
     });
   }
 });
@@ -369,18 +684,364 @@ app.get('/api/ai/models/sync-gist', async (req: Request, res: Response) => {
 });
 
 // ============================================================================
+// CONFIGURAÇÃO DE INTEGRAÇÃO N8N NEURAL & SHARED SECRET KEY
+// ============================================================================
+interface N8nNeuralConfig {
+  webhookUrl: string;
+  sharedSecretKey: string;
+  autoForwardAudio: boolean;
+  autoForwardSensory: boolean;
+  customPort?: string;
+  customHost?: string;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+let n8nNeuralConfig: N8nNeuralConfig = {
+  webhookUrl: process.env.N8N_NEURAL_WEBHOOK_URL || 'http://129.151.111.18:5678/webhook/jarvis-voice',
+  sharedSecretKey: process.env.N8N_SHARED_SECRET_KEY || 'jarvis_sec_8f92a10b4c73e91d',
+  autoForwardAudio: true,
+  autoForwardSensory: true,
+  customPort: '5678',
+  customHost: '129.151.111.18',
+  isActive: true,
+  updatedAt: new Date().toISOString(),
+};
+
+app.get('/api/config/n8n-neural', (_req: Request, res: Response) => {
+  const isConfigured = Boolean(n8nNeuralConfig.sharedSecretKey && n8nNeuralConfig.webhookUrl);
+  return res.json({
+    success: true,
+    config: {
+      webhookUrl: n8nNeuralConfig.webhookUrl,
+      maskedSecret: isConfigured ? maskApiKey(n8nNeuralConfig.sharedSecretKey) || '********' : '',
+      autoForwardAudio: n8nNeuralConfig.autoForwardAudio,
+      autoForwardSensory: n8nNeuralConfig.autoForwardSensory,
+      customPort: n8nNeuralConfig.customPort || '5678',
+      customHost: n8nNeuralConfig.customHost || '129.151.111.18',
+      isActive: n8nNeuralConfig.isActive,
+      updatedAt: n8nNeuralConfig.updatedAt,
+      isConfigured,
+    },
+    sampleHeaders: {
+      'Content-Type': 'application/json',
+      'X-Jarvis-Secret': '********',
+      'Authorization': 'Bearer ********'
+    }
+  });
+});
+
+app.post('/api/config/n8n-neural', (req: Request, res: Response) => {
+  const { webhookUrl, sharedSecretKey, autoForwardAudio, autoForwardSensory, customPort, customHost } = req.body;
+
+  if (customPort && typeof customPort === 'string') {
+    const cleanPort = customPort.trim();
+    n8nNeuralConfig.customPort = cleanPort;
+    systemEnvironmentConfig.serverPort = cleanPort;
+    updatePortInEnvFile(cleanPort);
+  }
+  if (customHost && typeof customHost === 'string') {
+    n8nNeuralConfig.customHost = customHost.trim();
+  }
+
+  if (webhookUrl && typeof webhookUrl === 'string') {
+    n8nNeuralConfig.webhookUrl = webhookUrl.trim();
+    process.env.N8N_NEURAL_WEBHOOK_URL = n8nNeuralConfig.webhookUrl;
+    updateEnvKeyFile('N8N_NEURAL_WEBHOOK_URL', n8nNeuralConfig.webhookUrl);
+  } else if (n8nNeuralConfig.customHost && n8nNeuralConfig.customPort) {
+    n8nNeuralConfig.webhookUrl = `http://${n8nNeuralConfig.customHost}:${n8nNeuralConfig.customPort}/webhook/jarvis-voice`;
+  }
+
+  if (sharedSecretKey && typeof sharedSecretKey === 'string' && sharedSecretKey.trim().length > 0) {
+    n8nNeuralConfig.sharedSecretKey = sharedSecretKey.trim();
+    process.env.N8N_SHARED_SECRET_KEY = n8nNeuralConfig.sharedSecretKey;
+    updateEnvKeyFile('N8N_SHARED_SECRET_KEY', n8nNeuralConfig.sharedSecretKey);
+  }
+
+  if (typeof autoForwardAudio === 'boolean') {
+    n8nNeuralConfig.autoForwardAudio = autoForwardAudio;
+  }
+  if (typeof autoForwardSensory === 'boolean') {
+    n8nNeuralConfig.autoForwardSensory = autoForwardSensory;
+  }
+
+  n8nNeuralConfig.updatedAt = new Date().toISOString();
+  n8nNeuralConfig.isActive = true;
+
+  return res.json({
+    success: true,
+    message: '✓ Configuração de Rede, Porta e Chave Secreta do n8n salva com sucesso.',
+    maskedSecret: maskApiKey(n8nNeuralConfig.sharedSecretKey) || '********',
+    config: {
+      webhookUrl: n8nNeuralConfig.webhookUrl,
+      customPort: n8nNeuralConfig.customPort,
+      customHost: n8nNeuralConfig.customHost,
+      autoForwardAudio: n8nNeuralConfig.autoForwardAudio,
+      autoForwardSensory: n8nNeuralConfig.autoForwardSensory,
+      updatedAt: n8nNeuralConfig.updatedAt,
+    }
+  });
+});
+
+app.post('/api/config/n8n-neural/test', async (req: Request, res: Response) => {
+  const targetUrl = (req.body.webhookUrl as string)?.trim() || n8nNeuralConfig.webhookUrl;
+  const secretKey = (req.body.sharedSecretKey as string)?.trim() || n8nNeuralConfig.sharedSecretKey;
+
+  if (!targetUrl) {
+    return res.status(400).json({ success: false, valid: false, message: 'URL do Webhook do n8n não configurada.' });
+  }
+
+  const startTime = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const testPayload = {
+      event: 'handshake_test',
+      source: 'jarvis_neural_panel',
+      timestamp: Date.now(),
+      message: 'Teste de conectividade segura entre Jarvis e n8n neural backend (IP .18)',
+      identity: { name: 'Matheus Dullius', role: 'ADMIN_TOTAL' }
+    };
+
+    const n8nRes = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Jarvis-Neural-Handshake/2.0',
+        'X-Jarvis-Secret': secretKey,
+        'Authorization': `Bearer ${secretKey}`,
+      },
+      body: JSON.stringify(testPayload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const latencyMs = Date.now() - startTime;
+    const isOk = n8nRes.ok || n8nRes.status === 200 || n8nRes.status === 201;
+
+    let responseSummary = '';
+    try {
+      const data = await n8nRes.json();
+      responseSummary = data.message || data.text || JSON.stringify(data).slice(0, 120);
+    } catch {
+      responseSummary = `Status HTTP: ${n8nRes.status} ${n8nRes.statusText}`;
+    }
+
+    return res.json({
+      success: true,
+      valid: isOk,
+      statusCode: n8nRes.status,
+      latencyMs,
+      message: isOk
+        ? `✓ Conexão autenticada com sucesso no n8n (${n8nRes.status}) em ${latencyMs}ms!`
+        : `Aviso n8n (${n8nRes.status}): ${responseSummary}`,
+      details: responseSummary,
+    });
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    const latencyMs = Date.now() - startTime;
+    return res.json({
+      success: true,
+      valid: false,
+      latencyMs,
+      message: err.name === 'AbortError'
+        ? `Timeout de 6s ao conectar em ${targetUrl}. Verifique se a porta e o firewall da VM OCI estão abertos.`
+        : `Erro de rede ao conectar no n8n: ${err.message}`,
+    });
+  }
+});
+
+// ============================================================================
+// SINCRONIZAÇÃO EM NUVEM MULTI-DISPOSITIVOS NA MESMA CONTA (DESKTOP + CELULAR)
+// ============================================================================
+interface ConnectedDevice {
+  deviceId: string;
+  deviceName: string;
+  deviceType: 'desktop' | 'mobile' | 'tablet' | 'tv' | 'daemon';
+  userAgent?: string;
+  ipAddress?: string;
+  lastActive: string;
+}
+
+interface SynchronizedAccountData {
+  accountEmail: string;
+  sessions: any[];
+  specialistContexts: any[];
+  synapseMemories: any[];
+  activeSessionId: string;
+  n8nConfig?: any;
+  devices: Record<string, ConnectedDevice>;
+  lastUpdated: string;
+  version: number;
+}
+
+const defaultAccountStore: Record<string, SynchronizedAccountData> = {
+  'matheusdullius@gmail.com': {
+    accountEmail: 'matheusdullius@gmail.com',
+    sessions: [
+      {
+        id: 'sess-default-1',
+        title: 'Sessão Principal (Orquestração Jarvis)',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messagesCount: 1,
+      }
+    ],
+    specialistContexts: [
+      {
+        specialistId: 'especialista-financas',
+        sessionId: 'sess-default-1',
+        contextKey: 'ultimo_ticker',
+        contextValue: 'PETR4',
+        updatedAt: new Date().toISOString(),
+      }
+    ],
+    synapseMemories: [],
+    activeSessionId: 'sess-default-1',
+    devices: {},
+    lastUpdated: new Date().toISOString(),
+    version: 1,
+  }
+};
+
+app.get('/api/sync/account', (req: Request, res: Response) => {
+  const account = ((req.query.account as string) || 'matheusdullius@gmail.com').toLowerCase().trim();
+
+  if (!defaultAccountStore[account]) {
+    defaultAccountStore[account] = {
+      accountEmail: account,
+      sessions: [],
+      specialistContexts: [],
+      synapseMemories: [],
+      activeSessionId: '',
+      devices: {},
+      lastUpdated: new Date().toISOString(),
+      version: 1,
+    };
+  }
+
+  const data = defaultAccountStore[account];
+  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+  const activeDevices = Object.values(data.devices).filter(
+    (d) => new Date(d.lastActive).getTime() > fiveMinAgo
+  );
+
+  return res.json({
+    success: true,
+    account: data.accountEmail,
+    sessions: data.sessions,
+    specialistContexts: data.specialistContexts,
+    synapseMemories: data.synapseMemories,
+    activeSessionId: data.activeSessionId,
+    lastUpdated: data.lastUpdated,
+    version: data.version,
+    activeDevicesCount: Math.max(1, activeDevices.length),
+    devices: data.devices,
+  });
+});
+
+app.post('/api/sync/account', (req: Request, res: Response) => {
+  const account = (req.body.account || 'matheusdullius@gmail.com').toLowerCase().trim();
+  const deviceId = req.body.deviceId || `dev_${Date.now()}`;
+  const deviceName = req.body.deviceName || 'Dispositivo Jarvis';
+  const deviceType = req.body.deviceType || 'desktop';
+  const stateUpdate = req.body.stateUpdate || {};
+
+  if (!defaultAccountStore[account]) {
+    defaultAccountStore[account] = {
+      accountEmail: account,
+      sessions: [],
+      specialistContexts: [],
+      synapseMemories: [],
+      activeSessionId: '',
+      devices: {},
+      lastUpdated: new Date().toISOString(),
+      version: 1,
+    };
+  }
+
+  const store = defaultAccountStore[account];
+
+  store.devices[deviceId] = {
+    deviceId,
+    deviceName,
+    deviceType,
+    userAgent: req.headers['user-agent'],
+    ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress,
+    lastActive: new Date().toISOString(),
+  };
+
+  if (Array.isArray(stateUpdate.sessions) && stateUpdate.sessions.length > 0) {
+    const sessionMap = new Map();
+    store.sessions.forEach((s: any) => sessionMap.set(s.id, s));
+    stateUpdate.sessions.forEach((s: any) => {
+      const existing = sessionMap.get(s.id);
+      if (!existing || new Date(s.updatedAt || 0) >= new Date(existing.updatedAt || 0)) {
+        sessionMap.set(s.id, s);
+      }
+    });
+    store.sessions = Array.from(sessionMap.values());
+  }
+
+  if (Array.isArray(stateUpdate.specialistContexts) && stateUpdate.specialistContexts.length > 0) {
+    const ctxMap = new Map();
+    store.specialistContexts.forEach((c: any) => ctxMap.set(`${c.specialistId}_${c.sessionId}_${c.contextKey}`, c));
+    stateUpdate.specialistContexts.forEach((c: any) => {
+      ctxMap.set(`${c.specialistId}_${c.sessionId}_${c.contextKey}`, c);
+    });
+    store.specialistContexts = Array.from(ctxMap.values());
+  }
+
+  if (Array.isArray(stateUpdate.synapseMemories) && stateUpdate.synapseMemories.length > 0) {
+    const memMap = new Map();
+    store.synapseMemories.forEach((m: any) => memMap.set(m.id, m));
+    stateUpdate.synapseMemories.forEach((m: any) => memMap.set(m.id, m));
+    store.synapseMemories = Array.from(memMap.values());
+  }
+
+  if (stateUpdate.activeSessionId) {
+    store.activeSessionId = stateUpdate.activeSessionId;
+  }
+
+  store.version += 1;
+  store.lastUpdated = new Date().toISOString();
+
+  return res.json({
+    success: true,
+    serverTimestamp: Date.now(),
+    version: store.version,
+    account: store.accountEmail,
+    sessionsCount: store.sessions.length,
+    activeDevicesCount: Object.keys(store.devices).length,
+    mergedState: {
+      sessions: store.sessions,
+      specialistContexts: store.specialistContexts,
+      synapseMemories: store.synapseMemories,
+      activeSessionId: store.activeSessionId,
+    }
+  });
+});
+
+// ============================================================================
 // CAIXA DE ENTRADA UNIVERSAL (WEBHOOKS ESCALÁVEIS: VOZ, VISÃO & BIOMETRIA)
 // ============================================================================
 const universalInboxSchema = z.object({
   id: z.string().optional(),
   source: z.string().default('desktop_agent'),
   identityBadge: z.object({
-    userId: z.string(),
-    name: z.string(),
-    permissionLevel: z.string(),
+    userId: z.string().optional(),
+    name: z.string().optional(),
+    permissionLevel: z.string().optional(),
   }).optional(),
   hasAudio: z.boolean().optional(),
   transcription: z.string().optional(),
+  text: z.string().optional(),
+  audioPayload: z.object({
+    mimeType: z.string().optional(),
+    dataBase64: z.string().optional(),
+    sampleRate: z.number().optional(),
+  }).optional(),
   hasScreenCapture: z.boolean().optional(),
   screenPacket: z.object({
     base64Ascii: z.string().optional(),
@@ -389,17 +1050,293 @@ const universalInboxSchema = z.object({
   }).optional(),
   rawPayload: z.record(z.string(), z.any()).optional(),
 });
+// ============================================================================
+// PROTOCOLO BRAINLINK: SERVIDOR WEBSOCKET, NEUROTRANSMISSORES & GRAFO NEURAL
+// ============================================================================
+export type NeurotransmitterType =
+  | 'ADRENALINA'
+  | 'DOPAMINA'
+  | 'SEROTONINA'
+  | 'ACETILCOLINA'
+  | 'CORTISOL'
+  | 'GABA';
 
-app.post('/api/webhook/universal-inbox', (req: Request, res: Response) => {
+export interface ServerBrainLinkEvent {
+  axon_id: string;
+  source_dendrite: string;
+  target_dendrite: string;
+  direction: 'FORWARD' | 'BACKWARD';
+  timestamp: number;
+  sequence_id: number;
+  intensity: number;
+  neurotransmitter_type: NeurotransmitterType;
+  status?: 'SUCCESS' | 'FAILED' | 'IN_TRANSIT';
+  payload_summary?: string;
+  ttl_ms?: number;
+}
+
+const wss = new WebSocketServer({ server, path: '/ws/brainlink' });
+let brainLinkSeqCounter = 1;
+const wsClients = new Set<WebSocket>();
+let pendingBundle: ServerBrainLinkEvent[] = [];
+let bundleTimer: NodeJS.Timeout | null = null;
+const recentBrainLinkEvents: ServerBrainLinkEvent[] = [];
+
+function flushEventBundle() {
+  if (pendingBundle.length === 0) return;
+  const bundle = {
+    type: 'BUNDLE',
+    bundle_id: `bundle_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    timestamp: Date.now(),
+    events: [...pendingBundle],
+    batch_size: pendingBundle.length,
+  };
+  pendingBundle = [];
+  const payloadStr = JSON.stringify(bundle);
+  wsClients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payloadStr);
+      } catch (err) {
+        console.warn('[BrainLink WS] Erro ao enviar bundle:', err);
+      }
+    }
+  });
+}
+
+export function dispatchBrainLinkEvent(evt: Omit<ServerBrainLinkEvent, 'sequence_id' | 'timestamp'>) {
+  const fullEvt: ServerBrainLinkEvent = {
+    ...evt,
+    sequence_id: ++brainLinkSeqCounter,
+    timestamp: Date.now(),
+    status: evt.status || 'SUCCESS',
+  };
+
+  recentBrainLinkEvents.push(fullEvt);
+  if (recentBrainLinkEvents.length > 200) {
+    recentBrainLinkEvents.shift();
+  }
+
+  pendingBundle.push(fullEvt);
+
+  // Loteamento de mensagens (BrainLinkEventBundle) - flush a cada 40ms ou 8 eventos
+  if (pendingBundle.length >= 8) {
+    if (bundleTimer) {
+      clearTimeout(bundleTimer);
+      bundleTimer = null;
+    }
+    flushEventBundle();
+  } else if (!bundleTimer) {
+    bundleTimer = setTimeout(() => {
+      bundleTimer = null;
+      flushEventBundle();
+    }, 40);
+  }
+
+  return fullEvt;
+}
+
+wss.on('connection', (ws: WebSocket) => {
+  wsClients.add(ws);
+  try {
+    ws.send(
+      JSON.stringify({
+        type: 'INIT_STATE',
+        activeClients: wsClients.size,
+        recentEvents: recentBrainLinkEvents.slice(-15),
+      })
+    );
+  } catch {}
+
+  ws.on('message', (message: string) => {
+    try {
+      const data = JSON.parse(message.toString());
+      if (data.type === 'PULSE' && data.event) {
+        dispatchBrainLinkEvent(data.event);
+      }
+    } catch {}
+  });
+
+  ws.on('close', () => wsClients.delete(ws));
+  ws.on('error', () => wsClients.delete(ws));
+});
+
+// REST API para injeção manual ou programática de pulsos sinápticos
+app.post('/api/brainlink/pulse', (req: Request, res: Response) => {
+  const {
+    axon_id,
+    source_dendrite,
+    target_dendrite,
+    direction,
+    intensity,
+    neurotransmitter_type,
+    status,
+    payload_summary,
+    ttl_ms,
+  } = req.body;
+
+  if (!axon_id || !source_dendrite || !target_dendrite || !neurotransmitter_type) {
+    return res.status(400).json({ success: false, error: 'Parâmetros incompletos do evento BrainLink.' });
+  }
+
+  const evt = dispatchBrainLinkEvent({
+    axon_id: String(axon_id),
+    source_dendrite: String(source_dendrite),
+    target_dendrite: String(target_dendrite),
+    direction: direction === 'BACKWARD' ? 'BACKWARD' : 'FORWARD',
+    intensity: typeof intensity === 'number' ? Math.max(0, Math.min(1, intensity)) : 0.8,
+    neurotransmitter_type: neurotransmitter_type as NeurotransmitterType,
+    status: status === 'FAILED' ? 'FAILED' : 'SUCCESS',
+    payload_summary: payload_summary ? String(payload_summary) : undefined,
+    ttl_ms: typeof ttl_ms === 'number' ? ttl_ms : undefined,
+  });
+
+  return res.json({ success: true, event: evt });
+});
+
+app.get('/api/brainlink/topology', (_req: Request, res: Response) => {
+  return res.json({
+    success: true,
+    connectedWsClients: wsClients.size,
+    recentEvents: recentBrainLinkEvents.slice(-20),
+    sequenceCounter: brainLinkSeqCounter,
+  });
+});
+
+app.post('/api/brainlink/test', (req: Request, res: Response) => {
+  const { type = 'DOPAMINA', fail = false } = req.body;
+  const evt = dispatchBrainLinkEvent({
+    axon_id: fail ? 'axon-core-n8n' : 'axon-core-cfo',
+    source_dendrite: 'dendrite-core-jarvis',
+    target_dendrite: fail ? 'dendrite-queue-n8n' : 'dendrite-agent-cfo',
+    direction: 'FORWARD',
+    intensity: fail ? 1.0 : 0.85,
+    neurotransmitter_type: fail ? 'CORTISOL' : (type as NeurotransmitterType),
+    status: fail ? 'FAILED' : 'SUCCESS',
+    payload_summary: fail ? 'FALHA DE SINAPSE: Rota quebrada' : `Estímulo de teste: ${type}`,
+    ttl_ms: 3000,
+  });
+  return res.json({ success: true, event: evt });
+});
+
+app.post('/api/webhook/universal-inbox', async (req: Request, res: Response) => {
   const parseResult = universalInboxSchema.safeParse(req.body);
   if (!parseResult.success) {
     return res.status(400).json({ success: false, error: 'Payload de entrada não cumpre o contrato do Universal Inbox.' });
   }
 
   const payload = req.body;
-  const identity = payload.identityBadge || { name: 'Operador', permissionLevel: 'ADMIN_TOTAL' };
+  const identity = payload.identityBadge || { name: 'Matheus Dullius', permissionLevel: 'ADMIN_TOTAL' };
   const hasVision = Boolean(payload.hasScreenCapture || payload.screenPacket?.base64Ascii);
-  const transcription = payload.transcription || payload.rawPayload?.comando_voz_whisper || '';
+  const transcription = payload.transcription || payload.text || payload.rawPayload?.comando_voz_whisper || '';
+
+  // Verificação de autenticação de chave secreta compartilhada
+  const incomingSecret = req.headers['x-jarvis-secret'] || (req.headers.authorization?.replace(/^Bearer\s+/i, ''));
+  const isSecretAuthenticated = Boolean(incomingSecret && incomingSecret === n8nNeuralConfig.sharedSecretKey);
+
+  let n8nForwardResult: { forwarded: boolean; reply?: string; latencyMs?: number } = { forwarded: false };
+
+  // Estímulo elétrico no dendrito e transmissão pelo axônio correspondente
+  if (transcription || payload.hasAudio || payload.audioPayload?.dataBase64) {
+    dispatchBrainLinkEvent({
+      axon_id: 'axon-core-voice',
+      source_dendrite: 'dendrite-webhook-voice',
+      target_dendrite: 'dendrite-core-jarvis',
+      direction: 'FORWARD',
+      intensity: 0.95,
+      neurotransmitter_type: 'ACETILCOLINA',
+      status: 'SUCCESS',
+      payload_summary: `Escuta Ativa: "${transcription.slice(0, 50)}"`,
+    });
+  } else {
+    dispatchBrainLinkEvent({
+      axon_id: 'axon-core-universal',
+      source_dendrite: 'dendrite-webhook-universal',
+      target_dendrite: 'dendrite-core-jarvis',
+      direction: 'FORWARD',
+      intensity: 0.8,
+      neurotransmitter_type: 'SEROTONINA',
+      status: 'SUCCESS',
+      payload_summary: `Ingress HTTP de ${identity.name}`,
+    });
+  }
+
+  // Encaminhamento Seguro ao Backend n8n Neural se configurado e ativo
+  if (n8nNeuralConfig.autoForwardAudio && n8nNeuralConfig.webhookUrl && (transcription || payload.audioPayload?.dataBase64)) {
+    try {
+      const fStart = Date.now();
+      const fController = new AbortController();
+      const fTimeout = setTimeout(() => fController.abort(), 8000);
+
+      const n8nForwardRes = await fetch(n8nNeuralConfig.webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Jarvis-Voice-Forwarder/2.0',
+          'X-Jarvis-Secret': n8nNeuralConfig.sharedSecretKey,
+          'Authorization': `Bearer ${n8nNeuralConfig.sharedSecretKey}`,
+        },
+        body: JSON.stringify({
+          source: payload.source || 'universal_inbox',
+          text: transcription,
+          audioPayload: payload.audioPayload,
+          identityBadge: identity,
+          authenticated: isSecretAuthenticated,
+          timestamp: Date.now(),
+        }),
+        signal: fController.signal,
+      });
+      clearTimeout(fTimeout);
+
+      if (n8nForwardRes.ok) {
+        const n8nData = await n8nForwardRes.json().catch(() => ({}));
+        n8nForwardResult = {
+          forwarded: true,
+          reply: n8nData.reply || n8nData.text || n8nData.response || n8nData.message || '',
+          latencyMs: Date.now() - fStart,
+        };
+        dispatchBrainLinkEvent({
+          axon_id: 'axon-core-n8n',
+          source_dendrite: 'dendrite-core-jarvis',
+          target_dendrite: 'dendrite-queue-n8n',
+          direction: 'FORWARD',
+          intensity: 0.9,
+          neurotransmitter_type: 'DOPAMINA',
+          status: 'SUCCESS',
+          payload_summary: `Entrega n8n concluída com sucesso (${n8nForwardResult.latencyMs}ms)`,
+        });
+      } else {
+        dispatchBrainLinkEvent({
+          axon_id: 'axon-core-n8n',
+          source_dendrite: 'dendrite-core-jarvis',
+          target_dendrite: 'dendrite-queue-n8n',
+          direction: 'FORWARD',
+          intensity: 0.9,
+          neurotransmitter_type: 'CORTISOL',
+          status: 'FAILED',
+          payload_summary: `Falha HTTP ${n8nForwardRes.status} no n8n (Sinapse Quebrada)`,
+        });
+      }
+    } catch (fErr: any) {
+      console.warn('[Universal Inbox] Falha no encaminhamento para n8n:', fErr.message);
+      dispatchBrainLinkEvent({
+        axon_id: 'axon-core-n8n',
+        source_dendrite: 'dendrite-core-jarvis',
+        target_dendrite: 'dendrite-queue-n8n',
+        direction: 'FORWARD',
+        intensity: 1.0,
+        neurotransmitter_type: 'CORTISOL',
+        status: 'FAILED',
+        payload_summary: `Timeout/Conexão recusada no n8n: ${fErr.message} (Sinapse Quebrada)`,
+      });
+    }
+  }
+
+  const replyText = n8nForwardResult.reply || (
+    transcription
+      ? `Comando de voz processado: "${transcription}". Orquestração encaminhada com sucesso.`
+      : `Pacote sensorial recebido com sucesso de ${identity.name}.`
+  );
 
   return res.json({
     success: true,
@@ -409,7 +1346,11 @@ app.post('/api/webhook/universal-inbox', (req: Request, res: Response) => {
     permission: identity.permissionLevel,
     screenProcessed: hasVision,
     audioTranscribed: Boolean(transcription),
-    message: `Universal Inbox processou o pacote sensorial de ${identity.name}. Nível: ${identity.permissionLevel}. Pronto para delegação pelo Jarvis.`,
+    secretAuthenticated: isSecretAuthenticated,
+    n8nForwarded: n8nForwardResult.forwarded,
+    reply: replyText,
+    text: replyText,
+    message: replyText,
   });
 });
 
@@ -2892,8 +3833,8 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Cérebro Neural Central] Operacional na porta ${PORT}`);
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`[Cérebro Neural Central & WebSocket BrainLink] Operacional na porta ${PORT}`);
   });
 }
 

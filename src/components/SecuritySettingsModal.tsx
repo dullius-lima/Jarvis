@@ -124,16 +124,23 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({ is
 
           <div className="space-y-2.5">
             <div>
-              <label className="text-[10px] font-mono text-slate-400 uppercase block mb-1">
-                E-mail de Acesso (Padrão: matheus_dulius@hotmail.com)
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] font-mono text-cyan-300 uppercase">
+                  E-mail de Acesso da Conta (Livre Escolha)
+                </label>
+                <span className="text-[9px] text-slate-400 font-mono">Qualquer e-mail</span>
+              </div>
               <input
                 type="email"
                 required
                 value={newEmail}
                 onChange={(e) => setNewEmail(e.target.value)}
+                placeholder="digite-o-email-que-quiser@dominio.com"
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono outline-none focus:border-cyan-400"
               />
+              <p className="text-[10px] text-slate-400 mt-1 font-sans">
+                Você pode escolher qualquer e-mail que desejar. Todos os seus dispositivos sincronizarão sob esta mesma conta.
+              </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
