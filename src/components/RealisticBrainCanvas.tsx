@@ -119,7 +119,7 @@ export const RealisticBrainCanvas: React.FC<RealisticBrainCanvasProps> = ({
         targetDatabase: 'GLOBAL',
         logic: 'Decisão e roteamento de inteligência híbrida',
         llmProvider: 'gemini' as const,
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         status: 'ativo' as const,
         triggers: ['voz', 'texto', 'rotina'],
         isAutonomous: true,

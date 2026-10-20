@@ -90,7 +90,7 @@ export const AgentPromptBehaviorModal: React.FC<AgentPromptBehaviorModalProps> =
   const [roleText, setRoleText] = useState<string>('');
   const [hasDedicatedLLM, setHasDedicatedLLM] = useState<boolean>(false);
   const [dedicatedProvider, setDedicatedProvider] = useState<LLMProviderType>('gemini');
-  const [dedicatedModel, setDedicatedModel] = useState<string>('gemini-2.5-flash');
+  const [dedicatedModel, setDedicatedModel] = useState<string>('gemini-3.8-flash');
   const [dedicatedApiKey, setDedicatedApiKey] = useState<string>('');
   const [dedicatedEndpoint, setDedicatedEndpoint] = useState<string>('');
   const [temperature, setTemperature] = useState<number>(0.2);
@@ -116,13 +116,13 @@ export const AgentPromptBehaviorModal: React.FC<AgentPromptBehaviorModalProps> =
       const config = currentAgent.dedicatedLLMConfig;
       if (config) {
         setDedicatedProvider(config.provider || 'gemini');
-        setDedicatedModel(config.model || 'gemini-2.5-flash');
+        setDedicatedModel(config.model || 'gemini-3.8-flash');
         setDedicatedApiKey(config.apiKey || '');
         setDedicatedEndpoint(config.customEndpoint || '');
         setTemperature(config.temperature ?? 0.2);
       } else {
         setDedicatedProvider('gemini');
-        setDedicatedModel('gemini-2.5-flash');
+        setDedicatedModel('gemini-3.8-flash');
         setDedicatedApiKey('');
         setDedicatedEndpoint('');
         setTemperature(0.2);

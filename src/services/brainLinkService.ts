@@ -353,6 +353,26 @@ export class BrainLinkService {
     });
   }
 
+  public emitManualPulse(
+    axonId = 'axon-core-cfo',
+    sourceDendrite = 'dendrite-core-jarvis',
+    targetDendrite = 'dendrite-agent-cfo',
+    neurotransmitter: NeurotransmitterType = 'SEROTONINA',
+    intensity = 0.85,
+    summary?: string
+  ) {
+    return this.emitPulse({
+      axon_id: axonId,
+      source_dendrite: sourceDendrite,
+      target_dendrite: targetDendrite,
+      direction: 'FORWARD',
+      intensity,
+      neurotransmitter_type: neurotransmitter,
+      status: 'SUCCESS',
+      payload_summary: summary,
+    });
+  }
+
   public subscribeToEvents(listener: BrainLinkListener): () => void {
     this.eventListeners.add(listener);
     return () => this.eventListeners.delete(listener);

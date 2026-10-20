@@ -14,6 +14,11 @@ import { SecuritySettingsModal } from './components/SecuritySettingsModal';
 import { N8nNeuralStudioModal } from './components/N8nNeuralStudioModal';
 import { AgentToolStudioModal, AgentToolStudioTab } from './components/AgentToolStudioModal';
 import { N8nNeuralConfigModal } from './components/N8nNeuralConfigModal';
+import { VoiceVisualizerOverlay } from './components/VoiceVisualizerOverlay';
+import { CameraVisionModal } from './components/CameraVisionModal';
+import { ScreenCaptureModal } from './components/ScreenCaptureModal';
+import { SkinSensoryModal } from './components/SkinSensoryModal';
+import { sensoryInputService } from './services/sensoryInputService';
 import { multiDeviceSyncService } from './services/multiDeviceSyncService';
 import { authService } from './services/authService';
 import { cfoDecisionService } from './services/cfoDecisionService';
@@ -67,6 +72,9 @@ import {
   FolderOpen,
   GitBranch,
   MessageSquare,
+  Eye,
+  Monitor,
+  Hand,
 } from 'lucide-react';
 import { ApiSyncService, MultiApiSyncReport } from './services/apiSyncService';
 
@@ -218,6 +226,11 @@ export default function App() {
   const [workspaceModalOpen, setWorkspaceModalOpen] = useState<boolean>(false);
   const [n8nStudioModalOpen, setN8nStudioModalOpen] = useState<boolean>(false);
   const [n8nNeuralConfigOpen, setN8nNeuralConfigOpen] = useState<boolean>(false);
+  const [cameraVisionOpen, setCameraVisionOpen] = useState<boolean>(false);
+  const [screenCaptureOpen, setScreenCaptureOpen] = useState<boolean>(false);
+  const [skinSensoryOpen, setSkinSensoryOpen] = useState<boolean>(false);
+  const [isContinuousListening, setIsContinuousListening] = useState<boolean>(false);
+  const [liveInterimSpeech, setLiveInterimSpeech] = useState<string>('');
 
   // Modo TV & Dispositivos
   const [tvMode, setTvMode] = useState<boolean>(false);
@@ -270,6 +283,75 @@ export default function App() {
     if (result.outcome === 'accepted') {
       setInstallPromptEvent(null);
     }
+  };
+
+  // =========================================================================
+  // CANAL DE VOZ: CÓRTEX AUDITIVO CONTÍNUO (STT / TTS EM TEMPO REAL)
+  // =========================================================================
+  const toggleContinuousListening = async () => {
+    if (isContinuousListening) {
+      voiceService.stopContinuousCortex();
+      setIsContinuousListening(false);
+      setIsDictatingVoice(false);
+      setIsOperationMode(false);
+      setLiveInterimSpeech('');
+      return;
+    }
+
+    try {
+      await voiceService.requestMicrophonePermission();
+      setIsContinuousListening(true);
+      setIsOperationMode(true);
+      setVoiceErrorMessage(null);
+      voiceService.playBeepSound();
+      dispararSinapsePontual('dendrite-webhook-voice', 'Córtex Auditivo: Escuta Contínua Ativada');
+
+      voiceService.startContinuousCortex({
+        onStart: () => {
+          setIsDictatingVoice(true);
+          setIsOperationMode(true);
+        },
+        onInterim: (liveText) => {
+          setLiveInterimSpeech(liveText);
+          setInputMessage(liveText);
+        },
+        onFinal: (finalText, detectedSpeaker) => {
+          setLiveInterimSpeech(finalText);
+          setInputMessage(finalText);
+          const speaker = detectedSpeaker || activeProfile;
+          setActiveProfile(speaker);
+          const emocao = SentimentEngine.analisar(finalText);
+          setActiveSentiment(emocao);
+          processarComandoJarvis(finalText, speaker, emocao);
+
+          // Transcrição instantânea enviada em milissegundos para o n8n
+          sensoryInputService.dispatchToUniversalInbox({
+            textCommand: finalText,
+          }).catch(() => {});
+        },
+        onError: (errMsg) => {
+          setVoiceErrorMessage(errMsg);
+        },
+        onStateChange: (active) => {
+          setIsContinuousListening(active);
+          setIsDictatingVoice(active);
+        },
+      });
+    } catch (err: any) {
+      setIsContinuousListening(false);
+      setVoiceErrorMessage('Erro ao iniciar áudio contínuo do microfone.');
+    }
+  };
+
+  const entrarModoOperacao = async (speaker?: FamilyProfile) => {
+    if (speaker) setActiveProfile(speaker);
+    if (!isContinuousListening) {
+      await toggleContinuousListening();
+    }
+  };
+
+  const handleMicrophoneClick = async () => {
+    await toggleContinuousListening();
   };
 
   // Inicializar o Ouvinte da Wake-Word "Jarvis" em segundo plano (se não estiver no modo ditado)
@@ -356,57 +438,7 @@ export default function App() {
     setAlertaSentinelaAtivo(null);
   };
 
-  // =========================================================================
-  // MODO DE OPERAÇÃO JARVIS: ENTRADA AUTOMÁTICA AO DETECTAR "JARVIS" OU CLIQUE
-  // =========================================================================
-  const entrarModoOperacao = async (speakerParam?: FamilyProfile) => {
-    const speaker = speakerParam || activeProfile;
-    setActiveProfile(speaker);
-    setIsOperationMode(true);
-    setVoiceErrorMessage(null);
-    voiceService.playBeepSound();
-    dispararSinapsePontual(null, 'Modo de Operação Jarvis Ativado');
 
-    await voiceService.requestMicrophonePermission();
-
-    voiceService.startDirectDictation({
-      onStart: () => {
-        setIsDictatingVoice(true);
-        setIsOperationMode(true);
-      },
-      onInterim: (liveText) => {
-        setInputMessage(liveText);
-      },
-      onFinal: (finalText, detectedSpeaker) => {
-        setIsDictatingVoice(false);
-        setIsOperationMode(false);
-        setInputMessage(finalText);
-        const finalSpeaker = detectedSpeaker || speaker;
-        setActiveProfile(finalSpeaker);
-        const emocao = SentimentEngine.analisar(finalText);
-        setActiveSentiment(emocao);
-        processarComandoJarvis(finalText, finalSpeaker, emocao);
-      },
-      onError: (errMsg) => {
-        setIsDictatingVoice(false);
-        setIsOperationMode(false);
-        setVoiceErrorMessage(errMsg);
-      },
-      onEnd: () => {
-        setIsDictatingVoice(false);
-      },
-    });
-  };
-
-  const handleMicrophoneClick = async () => {
-    if (isDictatingVoice || isOperationMode) {
-      voiceService.stopDictation();
-      setIsDictatingVoice(false);
-      setIsOperationMode(false);
-      return;
-    }
-    await entrarModoOperacao();
-  };
 
   // Sincronização em Múltiplos Endereços de API diferentes para o JARVIS
   const handleSincronizarTodasApis = async () => {
@@ -965,6 +997,41 @@ export default function App() {
       }
     }
 
+    // 1.5. Identificação de Comandos Sensoriais: Câmera sob demanda, Captura de Tela ou Pele
+    if (lower.includes('câmera') || lower.includes('camera') || lower.includes('olhar pela webcam') || lower.includes('visão da camera') || lower.includes('visao da camera') || lower.includes('reconhecimento facial')) {
+      setCameraVisionOpen(true);
+      const resp = `Visão da câmera acionada sob demanda. Inicializando reconhecimento facial biométrico e identificação de crachá de permissão.`;
+      setJarvisResponseText(resp);
+      voiceService.speak(resp);
+      dispararSinapsePontual('dendrite-agent-cfo', 'Visão Computacional: Câmera Sob Demanda');
+      setLoadingAI(false);
+      setInputMessage('');
+      return;
+    }
+
+    if (lower.includes('print da tela') || lower.includes('capturar tela') || lower.includes('olhar tela') || lower.includes('ver tela') || lower.includes('desktop agent') || lower.includes('analisar código')) {
+      setScreenCaptureOpen(true);
+      const resp = `Canal de visão computacional da tela ativado. Capturando print da tela ativa em JPEG qualidade 80 para análise.`;
+      setJarvisResponseText(resp);
+      voiceService.speak(resp);
+      dispararSinapsePontual('dendrite-agent-cfo', 'Visão Computacional: Desktop Agent de Tela');
+      setLoadingAI(false);
+      setInputMessage('');
+      return;
+    }
+
+    if (lower.includes('pele') || lower.includes('tato') || lower.includes('somatossensorial') || lower.includes('háptico') || lower.includes('haptico') || lower.includes('estímulo na pele')) {
+      setSkinSensoryOpen(true);
+      sensoryInputService.triggerSkinStimulus();
+      const resp = `Córtex Somatossensorial acionado no Lobo Parietal. Estímulo cutâneo da pele registrado a 36.5°C com feedback háptico.`;
+      setJarvisResponseText(resp);
+      voiceService.speak(resp);
+      dispararSinapsePontual('dendrite-agent-cfo', 'Capitula de Pele: Córtex Somatossensorial Parietal');
+      setLoadingAI(false);
+      setInputMessage('');
+      return;
+    }
+
     // 2. Identificar menção a ativos B3 / Cripto / Bazin
     const tickersConhecidos = ['TAEE11', 'BBAS3', 'WEGE3', 'BTC', 'PETR4', 'VALE3', 'ITUB4', 'ELET3', 'CPLE6'];
     let tickerEncontrado = tickersConhecidos.find((t) => texto.toUpperCase().includes(t));
@@ -1115,21 +1182,54 @@ export default function App() {
       {/* ==================================================================== */}
       <header className="z-50 w-full px-2.5 sm:px-4 py-2 sm:py-2.5 bg-slate-950/85 backdrop-blur-xl border-b border-cyan-500/20 shadow-xl flex items-center justify-between gap-1.5 sm:gap-3">
         
-        {/* 1. Microfone */}
+        {/* 1. Microfone com Córtex Auditivo Contínuo */}
         <button
           type="button"
           onClick={handleMicrophoneClick}
           className={`p-2 sm:p-2.5 rounded-xl sm:rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center shrink-0 cursor-pointer ${
-            isDictatingVoice || isOperationMode
-              ? 'bg-red-600 text-white shadow-[0_0_25px_rgba(239,68,68,0.7)] animate-pulse'
+            isContinuousListening
+              ? 'bg-red-600 text-white shadow-[0_0_25px_rgba(239,68,68,0.8)] animate-pulse ring-2 ring-red-400'
               : 'bg-gradient-to-tr from-cyan-600 via-sky-500 to-blue-600 text-white shadow-[0_0_15px_rgba(14,165,233,0.35)] hover:scale-105'
           }`}
-          title={isDictatingVoice ? 'Escutando sua voz... Clique para concluir' : 'Falar com o Jarvis por voz'}
+          title={isContinuousListening ? 'Córtex Auditivo Contínuo ATIVO (Clique para pausar)' : 'Ativar Córtex Auditivo Contínuo (STT em Tempo Real)'}
         >
           <Mic className="w-4 h-4 sm:w-5 sm:h-5" />
         </button>
 
-        {/* 2. Chat com Teclado na Parte Superior */}
+        {/* 2. Botões Sensoriais: Câmera Sob Demanda, Desktop Agent de Tela e Capitula de Pele */}
+        <div className="flex items-center gap-1 shrink-0">
+          {/* Câmera sob demanda (Olhos / Reconhecimento Facial) */}
+          <button
+            type="button"
+            onClick={() => setCameraVisionOpen(true)}
+            className="p-2 sm:p-2.5 rounded-xl sm:rounded-2xl bg-slate-900/90 hover:bg-cyan-950/60 border border-cyan-500/30 hover:border-cyan-400 text-cyan-400 hover:text-cyan-200 transition-all shadow-md active:scale-95 cursor-pointer"
+            title="Olhos: Ativar Câmera Sob Demanda & Reconhecimento Facial Biométrico"
+          >
+            <Eye className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+          </button>
+
+          {/* Desktop Agent (Canal de Visão de Tela - JPEG q80) */}
+          <button
+            type="button"
+            onClick={() => setScreenCaptureOpen(true)}
+            className="p-2 sm:p-2.5 rounded-xl sm:rounded-2xl bg-slate-900/90 hover:bg-sky-950/60 border border-sky-500/30 hover:border-sky-400 text-sky-400 hover:text-sky-200 transition-all shadow-md active:scale-95 cursor-pointer"
+            title="Olhos: Capturar Tela Ativa do Computador (Desktop Agent Python)"
+          >
+            <Monitor className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+          </button>
+
+          {/* Capitula de Pele / Córtex Somatossensorial (Lobo Parietal) */}
+          <button
+            type="button"
+            onClick={() => setSkinSensoryOpen(true)}
+            className="p-2 sm:p-2.5 rounded-xl sm:rounded-2xl bg-slate-900/90 hover:bg-purple-950/60 border border-purple-500/30 hover:border-purple-400 text-purple-400 hover:text-purple-200 transition-all shadow-md active:scale-95 cursor-pointer"
+            title="Capitula de Pele: Córtex Somatossensorial (Temperatura 36.5°C, Tato & Háptico)"
+          >
+            <Hand className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+          </button>
+        </div>
+
+        {/* 3. Chat com Teclado na Parte Superior */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -1146,7 +1246,7 @@ export default function App() {
             type="text"
             value={inputMessage}
             onChange={(e) => setInputMessage(e.target.value)}
-            placeholder={isDictatingVoice ? 'Escutando sua voz...' : 'Digite aqui para conversar com o Jarvis ou acionar agentes...'}
+            placeholder={isContinuousListening ? 'Córtex auditivo contínuo ativo... Fale livremente' : 'Digite aqui para conversar com o Jarvis ou acionar agentes...'}
             className="flex-1 bg-transparent text-xs sm:text-sm text-slate-100 placeholder-slate-500 outline-none font-sans"
           />
           <button
@@ -1159,7 +1259,7 @@ export default function App() {
           </button>
         </form>
 
-        {/* 3. Ações Rápidas: N8N Neural Studio & Ferramentas */}
+        {/* 4. Ações Rápidas: N8N Neural Studio & Ferramentas */}
         <div className="flex items-center gap-2 shrink-0">
           {/* Botão N8N Neural Studio (Oracle VM & Grafo) */}
           <button
@@ -1518,6 +1618,35 @@ export default function App() {
           dispararSinapsePontual(null, label);
           setActiveSynapsePulse(label);
           setTimeout(() => setActiveSynapsePulse(null), 3000);
+        }}
+      />
+
+      {/* Visualizador de Ondas Senoidais & Partículas Reluzentes (Córtex Auditivo Contínuo) */}
+      <VoiceVisualizerOverlay
+        isListeningContinuous={isContinuousListening}
+        onToggleContinuousListening={toggleContinuousListening}
+        lastTranscript={liveInterimSpeech}
+        isJarvisSpeaking={isJarvisSpeaking}
+      />
+
+      {/* Modal: Visão da Câmera Sob Demanda & Reconhecimento Facial Biométrico (InsightFace/OpenCV) */}
+      <CameraVisionModal
+        isOpen={cameraVisionOpen}
+        onClose={() => setCameraVisionOpen(false)}
+      />
+
+      {/* Modal: Canal de Visão Computacional (Olhos) via Desktop Agent de Tela (JPEG q80 Base64) */}
+      <ScreenCaptureModal
+        isOpen={screenCaptureOpen}
+        onClose={() => setScreenCaptureOpen(false)}
+      />
+
+      {/* Modal: Capitula de Pele & Córtex Somatossensorial (Lobo Parietal) */}
+      <SkinSensoryModal
+        isOpen={skinSensoryOpen}
+        onClose={() => setSkinSensoryOpen(false)}
+        onTriggerSkinStimulus={() => {
+          dispararSinapsePontual('dendrite-agent-cfo', 'Estímulo Háptico na Pele (Lobo Parietal)');
         }}
       />
     </div>
