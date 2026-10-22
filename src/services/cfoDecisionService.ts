@@ -324,18 +324,22 @@ class CfoDecisionService {
     };
 
     try {
-      const response = await fetch(webhookUrl, {
+      const response = await fetch('/api/n8n/forward-decision', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Jarvis-Event': 'CFO_DECISION',
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          webhookUrl,
+          payload,
+          origem: 'CFO_DECISION',
+        }),
       });
 
+      const data = await response.json().catch(() => ({}));
       return {
-        success: response.ok,
-        status: response.status,
+        success: response.ok && data.success !== false,
+        status: data.status || response.status,
       };
     } catch (err: any) {
       console.warn('Erro ao disparar webhook para n8n:', err);
@@ -378,25 +382,29 @@ class CfoDecisionService {
     };
 
     try {
-      const res = await fetch(webhookUrl, {
+      const res = await fetch('/api/n8n/forward-decision', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Jarvis-Event': 'CFO_DECISION_TEST',
         },
-        body: JSON.stringify(payloadTeste),
+        body: JSON.stringify({
+          webhookUrl,
+          payload: payloadTeste,
+          origem: 'CFO_DECISION_TEST',
+        }),
       });
 
-      if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success !== false) {
         return {
           success: true,
-          message: `Webhook recebido com sucesso pelo n8n (Status ${res.status})!`,
+          message: data.message || `Webhook recebido com sucesso pelo n8n (Status ${data.status || res.status})!`,
           payload: payloadTeste,
         };
       } else {
         return {
           success: false,
-          message: `O n8n respondeu com status ${res.status}: ${res.statusText}`,
+          message: data.error || `O n8n respondeu com status ${res.status}: ${res.statusText}`,
           payload: payloadTeste,
         };
       }

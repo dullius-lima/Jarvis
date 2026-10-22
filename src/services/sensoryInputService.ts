@@ -8,6 +8,7 @@
  * 5. Caixa de Entrada Universal (Webhooks Escaláveis com HMAC, rate limiting e sanitização)
  */
 import { brainLinkService } from './brainLinkService';
+import { N8nEngineService, KNOWN_BIOMETRIC_PROFILES } from './n8nEngineService';
 
 export interface IdentityBadge {
   userId: string;
@@ -211,6 +212,18 @@ export class SensoryInputService {
     this.currentBadge = profiles[target] || profiles.matheus;
     this.salvar();
 
+    // Sincroniza crachá biométrico com o Orquestrador n8n
+    const n8nMap: Record<string, string> = {
+      matheus: 'bio-matheus',
+      marina: 'bio-marina',
+      filha: 'bio-filha',
+      funcionario: 'bio-convidado',
+    };
+    const matchedProfile = KNOWN_BIOMETRIC_PROFILES.find((p) => p.personId === n8nMap[target]);
+    if (matchedProfile) {
+      N8nEngineService.getInstance().setActiveBadge(matchedProfile);
+    }
+
     // Pulso no cérebro 3D indicando reconhecimento biométrico no córtex
     brainLinkService.emitManualPulse(
       'axon-core-cfo',
@@ -260,6 +273,7 @@ export class SensoryInputService {
 
     this.lastCameraFrame = packet;
     this.salvar();
+    N8nEngineService.getInstance().setLastCameraSnapshot(dataUrl);
 
     brainLinkService.emitManualPulse(
       'axon-core-cfo',
@@ -320,6 +334,7 @@ export class SensoryInputService {
 
         this.lastScreenCapture = packet;
         this.salvar();
+        N8nEngineService.getInstance().setLastScreenSnapshot(dataUrl);
 
         brainLinkService.emitManualPulse(
           'axon-core-cfo',
@@ -390,6 +405,7 @@ export class SensoryInputService {
 
     this.lastScreenCapture = packet;
     this.salvar();
+    N8nEngineService.getInstance().setLastScreenSnapshot(dataUrl);
     return packet;
   }
 

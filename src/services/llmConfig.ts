@@ -162,8 +162,11 @@ export class UniversalLLMService {
   private providerKeys: Partial<Record<LLMProviderType, string>> = {};
   private providerEndpoints: Partial<Record<LLMProviderType, string>> = {};
 
+  private serverConfiguredProviders: Set<string> = new Set();
+
   private constructor() {
     this.carregarConfig();
+    this.syncWithServerVault();
   }
 
   public static getInstance(): UniversalLLMService {
@@ -171,6 +174,65 @@ export class UniversalLLMService {
       UniversalLLMService.instance = new UniversalLLMService();
     }
     return UniversalLLMService.instance;
+  }
+
+  public async syncWithServerVault(): Promise<void> {
+    if (typeof window === 'undefined') return;
+    try {
+      // 1. Envia quaisquer chaves locais salvas no cliente para o cofre do servidor
+      const entries = Object.entries(this.providerKeys);
+      for (const [prov, key] of entries) {
+        if (key && key.trim().length > 0 && !key.includes('****')) {
+          fetch('/api/config/keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: prov, apiKey: key.trim() }),
+          }).catch(() => {});
+        }
+      }
+
+      // 2. Consulta o cofre do servidor para saber quais provedores já possuem chave configurada no backend
+      const res = await fetch('/api/config/keys');
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.providers) {
+          Object.entries(data.providers).forEach(([prov, info]: [string, any]) => {
+            if (info?.configured) {
+              this.serverConfiguredProviders.add(prov);
+            }
+          });
+        }
+      }
+    } catch {
+      // Silencioso caso offline na inicialização
+    }
+  }
+
+  public setProviderKeyFromStudio(providerId: string, rawKey: string): void {
+    const prov = providerId.toLowerCase().trim() as LLMProviderType;
+    if (!rawKey || !rawKey.trim()) return;
+    this.providerKeys[prov] = rawKey.trim();
+    this.serverConfiguredProviders.add(prov);
+    if (this.config.provider === prov) {
+      this.config.apiKey = rawKey.trim();
+    }
+    this.persistToStorage();
+  }
+
+  private persistToStorage(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.config));
+      localStorage.setItem(
+        PERMANENT_KEYS_STORAGE,
+        JSON.stringify({
+          keys: this.providerKeys,
+          endpoints: this.providerEndpoints,
+        })
+      );
+    } catch (e) {
+      console.warn('Erro ao salvar LLM config permanente:', e);
+    }
   }
 
   private carregarConfig() {
@@ -241,6 +303,17 @@ export class UniversalLLMService {
     // Atualiza o mapa permanente da chave se informada
     if (newConfig.apiKey !== undefined && targetProvider) {
       this.providerKeys[targetProvider] = newConfig.apiKey;
+      if (typeof window !== 'undefined' && newConfig.apiKey.trim().length > 0 && !newConfig.apiKey.includes('****')) {
+        this.serverConfiguredProviders.add(targetProvider);
+        fetch('/api/config/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            provider: targetProvider,
+            apiKey: newConfig.apiKey.trim(),
+          }),
+        }).catch(() => {});
+      }
     }
 
     // Atualiza endpoint se informado
@@ -267,20 +340,7 @@ export class UniversalLLMService {
       providerEndpoints: { ...this.providerEndpoints },
     };
 
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.config));
-        localStorage.setItem(
-          PERMANENT_KEYS_STORAGE,
-          JSON.stringify({
-            keys: this.providerKeys,
-            endpoints: this.providerEndpoints,
-          })
-        );
-      } catch (e) {
-        console.warn('Erro ao salvar LLM config permanente:', e);
-      }
-    }
+    this.persistToStorage();
     return { ...this.config };
   }
 
@@ -298,7 +358,12 @@ export class UniversalLLMService {
     endpoint?: string;
   }> {
     return SUPPORTED_PROVIDERS.map((p) => {
-      const hasKey = Boolean(this.providerKeys[p.id]?.trim() || (p.id === 'gemini'));
+      const hasKey = Boolean(
+        this.providerKeys[p.id]?.trim() ||
+        this.serverConfiguredProviders.has(p.id) ||
+        p.id === 'gemini' ||
+        p.id === 'ollama'
+      );
       return {
         id: p.id,
         name: p.name,

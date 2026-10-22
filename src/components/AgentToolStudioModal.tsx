@@ -12,6 +12,7 @@ import { aiProvidersGistService, GistModelsMap, GistSyncStatus } from '../servic
 import { sessionMemoryService, ChatSession, ChatMessage, SpecialistContextMemory } from '../services/sessionMemoryService';
 import { dynamicDatabaseService, StoredDynamicDocument } from '../services/dynamicDatabaseService';
 import { sensoryInputService, IdentityBadge, ScreenCapturePacket, UniversalInboxPacket } from '../services/sensoryInputService';
+import { UniversalLLMService } from '../services/llmConfig';
 import {
   Bot,
   Wrench,
@@ -801,6 +802,9 @@ async function execute(params) {
           updatedAt: data.updatedAt || new Date().toISOString(),
         },
       }));
+
+      // Sincroniza com o serviço global de LLM do navegador
+      UniversalLLMService.getInstance().setProviderKeyFromStudio(provider, apiKey.trim());
 
       // Limpar o campo de texto por segurança após gravar
       setKeyInputValues((prev) => ({ ...prev, [provider]: '' }));

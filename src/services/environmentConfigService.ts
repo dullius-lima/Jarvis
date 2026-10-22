@@ -63,6 +63,23 @@ export class EnvironmentConfigService {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.config));
       this.notificar();
+
+      // Sincroniza variáveis de ambiente de rede e porta do n8n com o backend Node.js
+      fetch('/api/config/environment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.config),
+      }).catch(() => {});
+
+      fetch('/api/config/n8n-neural', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customHost: this.config.serverHost,
+          customPort: this.config.serverPort,
+          webhookUrl: `${this.getBaseWebhookUrl()}jarvis-voice`,
+        }),
+      }).catch(() => {});
     } catch (e) {
       console.warn('Erro ao salvar SystemEnvironmentConfig:', e);
     }

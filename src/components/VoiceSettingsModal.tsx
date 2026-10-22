@@ -40,8 +40,12 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
     setVoices(filterUniqueVoices(available));
 
     if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.onvoiceschanged = () => {
+      const handleVoicesChanged = () => {
         setVoices(filterUniqueVoices(window.speechSynthesis.getVoices()));
+      };
+      window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
+      return () => {
+        window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
       };
     }
   }, [config, isOpen]);

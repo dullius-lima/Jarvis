@@ -163,6 +163,20 @@ export class DynamicDatabaseService {
     this.processedEventIds.add(eventKey);
     this.salvar();
 
+    if (typeof window !== 'undefined') {
+      fetch('/api/db/dynamic-save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          collectionName: rawName,
+          documentData: newDoc.data,
+          eventId: eventKey,
+          decisionReasoning: newDoc.decisionReasoning,
+          webhookSource: newDoc.webhookSource,
+        }),
+      }).catch(() => {});
+    }
+
     return newDoc;
   }
 
@@ -247,11 +261,30 @@ export class DynamicDatabaseService {
   }
 
   private async executeHttpWithRetry(url: string, method: string, body: any, headers: any, maxRetries = 2): Promise<any> {
+    const isExternalUrl = url.startsWith('http://') || url.startsWith('https://');
     let attempt = 0;
     while (attempt <= maxRetries) {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 4000);
+        const timeout = setTimeout(() => controller.abort(), 4500);
+
+        if (isExternalUrl) {
+          const proxyRes = await fetch('/api/n8n/forward-decision', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              webhookUrl: url,
+              payload: body || {},
+              origem: 'DYNAMIC_DATABASE_DUAL_COMMIT',
+            }),
+            signal: controller.signal,
+          }).finally(() => clearTimeout(timeout));
+
+          if (!proxyRes.ok && proxyRes.status >= 500 && attempt < maxRetries) {
+            throw new Error(`HTTP ${proxyRes.status}`);
+          }
+          return await proxyRes.json().catch(() => ({ status: proxyRes.status }));
+        }
 
         const res = await fetch(url, {
           method,

@@ -379,15 +379,19 @@ export default function App() {
         },
         undefined,
         (listeningState) => {
-          setIsListening(listeningState);
+          if (!voiceService.isContinuousCortexActive()) {
+            setIsListening(listeningState);
+          }
         }
       );
-    } else {
+    } else if (!isDictatingVoice) {
       voiceService.stopWakeWordListening();
     }
 
     return () => {
-      voiceService.stopWakeWordListening();
+      if (!voiceService.isContinuousCortexActive()) {
+        voiceService.stopWakeWordListening();
+      }
     };
   }, [wakeWordActive, voiceConfig, isDictatingVoice]);
 

@@ -96,9 +96,17 @@ export class JarvisVoiceService {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
       return false;
     }
+    if (this.micStream && this.micStream.active) {
+      return true;
+    }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
+      this.micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       return true;
     } catch (err) {
       console.warn('Permissão de microfone rejeitada ou indisponível:', err);
@@ -233,6 +241,19 @@ export class JarvisVoiceService {
     if (!SpeechRecognition) {
       callbacks.onError?.('Navegador sem suporte a SpeechRecognition nativo.');
       return;
+    }
+
+    // Garante que nenhuma outra instância de SpeechRecognition (WakeWord ou Dictation avulso) concorra pelo hardware
+    if (this.wakeRecognition) {
+      this.isListeningContinuous = false;
+      try {
+        this.wakeRecognition.abort();
+      } catch {}
+    }
+    if (this.dictationRecognition) {
+      try {
+        this.dictationRecognition.abort();
+      } catch {}
     }
 
     this.isContinuousCortex = true;
@@ -484,6 +505,12 @@ export class JarvisVoiceService {
     this.onWakeWordDetectedCallback = onWake;
     this.onSpeechResultCallback = onSpeech || null;
     this.onStateChangeCallback = onState || null;
+
+    // Se o Córtex Auditivo Contínuo já está ativo, não inicia segunda instância concorrente
+    if (this.isContinuousCortex) {
+      return;
+    }
+
     this.isListeningContinuous = true;
 
     if (!this.wakeRecognition) {
@@ -498,7 +525,7 @@ export class JarvisVoiceService {
   public stopWakeWordListening() {
     this.isListeningContinuous = false;
     try {
-      this.wakeRecognition?.stop();
+      this.wakeRecognition?.abort();
     } catch {}
     this.onStateChangeCallback?.(false);
   }
