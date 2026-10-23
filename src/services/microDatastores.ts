@@ -516,4 +516,27 @@ export class MicroDatastoresService {
 
     return alertas;
   }
+
+  // Excluir uma partição / silo de banco de dados isolado
+  public excluirParticao(chave: string): boolean {
+    const key = chave.toUpperCase().trim();
+    if (!this.datastores[key]) return false;
+    delete this.datastores[key];
+    this.persistir();
+    this.registrarLog({
+      chaveParticao: key,
+      evento: `Silo Isolado Excluído [${key}]`,
+      detalhes: `Partição ${key} e seu agente sentinela foram removidos com segurança sem impactar os demais silos.`,
+      latenciaMs: 0.02,
+      tipo: 'acesso_isolado',
+    });
+    return true;
+  }
+
+  // Excluir um registro individual de log de isolamento
+  public excluirLog(logId: string): void {
+    this.logsIsolamento = this.logsIsolamento.filter((l) => l.id !== logId);
+    this.persistirLogs();
+  }
 }
+

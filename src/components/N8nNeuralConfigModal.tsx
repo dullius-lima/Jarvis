@@ -207,6 +207,18 @@ export const N8nNeuralConfigModal: React.FC<N8nNeuralConfigModalProps> = ({
     setIsSaving(true);
     setFeedback(null);
     try {
+      // 1. Executa a bifurcação inteligente de porta (.env == input -> Healthcheck Loopback; .env != input -> TCP Free Check + Rewrite .env + Restart Container)
+      const portRes = await fetch('/api/n8n/port-manager', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          port: portInput.trim(),
+          force: true,
+        }),
+      });
+      const portData = await portRes.json().catch(() => ({}));
+
+      // 2. Salva configuração neural completa
       const res = await fetch('/api/config/n8n-neural', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -222,10 +234,11 @@ export const N8nNeuralConfigModal: React.FC<N8nNeuralConfigModalProps> = ({
       const data = await res.json();
       if (data.success) {
         if (data.maskedSecret) setMaskedSecret(data.maskedSecret);
-        setFeedback(`✓ Porta :${portInput} e Webhook do n8n salvos com sucesso e persistidos no .env!`);
-        setTimeout(() => setFeedback(null), 5000);
+        const portMsg = portData.message || `✓ Porta :${portInput} e Webhook do n8n salvos com sucesso e persistidos no .env!`;
+        setFeedback(portMsg);
+        setTimeout(() => setFeedback(null), 6500);
         if (onTriggerSynapse) {
-          onTriggerSynapse(`Porta :${portInput} e configurações n8n salvas!`);
+          onTriggerSynapse(portMsg);
         }
       } else {
         setFeedback(`Erro ao salvar: ${data.message || 'Falha desconhecida.'}`);

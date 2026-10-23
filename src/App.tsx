@@ -18,6 +18,7 @@ import { VoiceVisualizerOverlay } from './components/VoiceVisualizerOverlay';
 import { CameraVisionModal } from './components/CameraVisionModal';
 import { ScreenCaptureModal } from './components/ScreenCaptureModal';
 import { SkinSensoryModal } from './components/SkinSensoryModal';
+import { ConnectionsHubModal } from './components/ConnectionsHubModal';
 import { sensoryInputService } from './services/sensoryInputService';
 import { multiDeviceSyncService } from './services/multiDeviceSyncService';
 import { authService } from './services/authService';
@@ -75,6 +76,7 @@ import {
   Eye,
   Monitor,
   Hand,
+  Share2,
 } from 'lucide-react';
 import { ApiSyncService, MultiApiSyncReport } from './services/apiSyncService';
 
@@ -229,6 +231,7 @@ export default function App() {
   const [cameraVisionOpen, setCameraVisionOpen] = useState<boolean>(false);
   const [screenCaptureOpen, setScreenCaptureOpen] = useState<boolean>(false);
   const [skinSensoryOpen, setSkinSensoryOpen] = useState<boolean>(false);
+  const [connectionsHubOpen, setConnectionsHubOpen] = useState<boolean>(false);
   const [isContinuousListening, setIsContinuousListening] = useState<boolean>(false);
   const [liveInterimSpeech, setLiveInterimSpeech] = useState<string>('');
 
@@ -1263,8 +1266,19 @@ export default function App() {
           </button>
         </form>
 
-        {/* 4. Ações Rápidas: N8N Neural Studio & Ferramentas */}
+        {/* 4. Ações Rápidas: Omnichannel & VM Oracle, N8N Neural Studio & Ferramentas */}
         <div className="flex items-center gap-2 shrink-0">
+          {/* Botão Central Omnichannel (WhatsApp, Telegram, Workspace, Outlook) & Instalador VM Oracle (2 OCPU / 12GB RAM) */}
+          <button
+            type="button"
+            onClick={() => setConnectionsHubOpen(true)}
+            className="px-3 py-2 rounded-2xl bg-gradient-to-r from-emerald-600/25 via-teal-500/25 to-cyan-600/30 hover:from-emerald-500/35 hover:to-cyan-500/40 border border-emerald-500/50 hover:border-emerald-400 text-emerald-300 transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5 text-xs font-mono font-bold"
+            title="Central Omnichannel (WhatsApp, Telegram, Google Workspace, Outlook) & Download de Dependências VM Oracle (2 OCPU / 12GB RAM)"
+          >
+            <Share2 className="w-4 h-4 text-emerald-400" />
+            <span className="hidden md:inline">Canais & VM Oracle</span>
+          </button>
+
           {/* Botão N8N Neural Studio (Oracle VM & Grafo) */}
           <button
             type="button"
@@ -1652,6 +1666,16 @@ export default function App() {
         onTriggerSkinStimulus={() => {
           dispararSinapsePontual('dendrite-agent-cfo', 'Estímulo Háptico na Pele (Lobo Parietal)');
         }}
+      />
+
+      {/* Modal: Central Omnichannel (WhatsApp, Telegram, Google Workspace, Outlook) & Instalador VM Oracle (2 OCPU / 12GB RAM) */}
+      <ConnectionsHubModal
+        isOpen={connectionsHubOpen}
+        onClose={() => setConnectionsHubOpen(false)}
+        onOpenWorkspace={() => setWorkspaceModalOpen(true)}
+        onOpenHomeAssistant={() => setHomeAssistantModalOpen(true)}
+        onOpenN8nStudio={() => setN8nStudioModalOpen(true)}
+        onTriggerSynapse={(label) => dispararSinapsePontual(null, label)}
       />
     </div>
   );

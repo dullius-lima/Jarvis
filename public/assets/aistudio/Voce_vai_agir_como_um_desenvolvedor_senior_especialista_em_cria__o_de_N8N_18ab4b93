@@ -1,0 +1,102 @@
+﻿Voce vai agir como um desenvolvedor senior especialista em criação de N8N, voce deve criar o proprio N8N , que vai rodas de inicio na maqui da oracle  2 ocpu e 12g de ram
+
+
+Arquitetura Unificada e Especificação Técnica do Ecossistema Jarvis & n8n
+Este documento estabelece a especificação completa, detalhada e consolidada do ecossistema inteligente Jarvis & n8n, abrangendo desde a infraestrutura do servidor até a metáfora biológica 3D, camadas sensoriais, gerenciamento de memória, persistência dinâmica, governança, segurança e interface de usuário.
+
+
+1. Visão Geral da Arquitetura e Infraestrutura de Execução
+O ecossistema é projetado para rodar inicialmente em uma instância da Oracle Cloud Infrastructure (OCI), utilizando o Visual Studio Code (VSCode) como ambiente principal de desenvolvimento. A infraestrutura técnica do núcleo é dividida da seguinte forma:
+* Backend: Desenvolvido em Node.js com TypeScript, garantindo alta eficiência no processamento assíncrono de milhares de execuções concorrentes de fluxos e eventos.
+* Frontend (Interface Gráfica & HUD 3D): Construído em Vue.js com TypeScript, integrando renderização 3D interativa (via Three.js/WebGL) e painéis de controle semi-transparentes.
+* Armazenamento Principal: Utiliza PostgreSQL (com extensão Pgvector) ou SQLite para gerenciamento de estado dos workflows, dados relacionais e vetoriais.
+* Execução de Código Customizado: Suporte a blocos de código nativos em JavaScript/TypeScript e Python (via Pyodide ou ambiente nativo no n8n) para manipulação avançada de dados nos nós.
+
+
+2. Camada Sensorial e de Entrada (Percepção, Captura e Webhooks)
+Como o n8n atua no backend, a Camada Sensorial estabelece a ponte entre o ambiente físico/digital e os Webhook Processors do ecossistema:
+* Canal de Voz (Córtex Auditivo - STT/TTS): Captura áudio do microfone em tempo real, realizando transcrição instantânea (Speech-to-Text) enviada em milissegundos ao n8n. A síntese de voz (Text-to-Speech) converte respostas em voz natural. O microfone atua como o Córtex Auditivo na interface 3D, gerando feedback visual com ondas senoidais e partículas reluzentes que reagem à amplitude da voz, vamos usar o Whisper local via Python/Node small
+
+
+* Canal de Visão Computacional (Olhos): Realiza monitoramento periódico ou sob demanda da tela ativa do computador para permitir análises visuais de código, leitura de documentos e acompanhamento de tarefas, utilizando Desktop Agent python. O agente bate o print da tela, compacta em JPEG (qualidade 80) e converte em texto Base64. A Base64 foi escolhida porque transforma dados binários em uma string ASCII segura, permitindo injetar imagens diretamente dentro de payloads JSON enviados via requisições HTTP POST para o n8n sem corromper os dados.
+
+
+* Reconhecimento Facial e Biométrico: Identifica os usuários presentes na câmera/webcam (administrador, familiares ou colaboradores), atribuindo um "Crachá de Identidade" e nível de permissão às requisições antes do processamento, utilizando o OpenCV/InsightFace local.
+* * Caixa de Entrada Universal e Webhooks Escaláveis: Rota HTTP genérica no backend que recebe payloads de qualquer webhook externo sem contratos rígidos de entrada. Esta porta conta com proteção de assinaturas HMAC, limitação de taxa (rate limiting), sanitização de payload e validação por API Key para mitigar ataques de spoofing, Prompt Injection e DoS.
+
+
+3. Metáfora Biológica, Grafo 3D e Barramento WebSocket
+A comunicação em tempo real e a renderização do cérebro 3D mapeiam os conceitos de neurociência diretamente para a estrutura de grafos:
+* Dendritos (Input Interfaces): Portas receptoras de dados dos nós (Webhooks, leitores de fila e funções) que geram estímulos elétricos ao receberem payloads JSON.
+* Axônios (Transmission Edges): Linhas físicas de conexão (arestas do grafo) que conectam o Jarvis aos Agentes Especialistas e Ferramentas, encapsulando o transporte assíncrono.
+* Sinapses (Data Payload Exchange): O momento exato de entrega da carga ao dendrito de destino, disparando animações visuais baseadas no tipo de neurotransmissor. Se a entrega falhar, o sistema emite uma animação de "Sinapse Quebrada" com faísca de desconexão.
+* Especificação do Evento WebSocket (BrainLinkEvent): Cada pulso transmitido contém a seguinte estrutura tipada:
+   * axon_id (string): Identificador único do axônio aceso.
+   * source_dendrite & target_dendrite (string): Identificadores dos nós emissor e receptor.
+   * direction: 'FORWARD' (comando/ida) ou 'BACKWARD' (resposta/volta).
+   * timestamp (number/ISO) & sequence_id (number): Garantem a ordenação cronológica e evitam animações fora de sequência.
+   * intensity (float 0.0 a 1.0): Controla a espessura da linha e brilho proporcional ao tamanho do payload.
+   * neurotransmitter_type: Mapeia o comportamento e a cor do pulso:
+      * ADRENALINA: Pulsação vermelha ultrarrápida para alarmes e alertas críticos.
+      * DOPAMINA: Brilho dourado para comandos e tarefas concluídos com sucesso.
+      * SEROTONINA: Pulso azul cadenciado para rotinas e processamento de fundo.
+      * ACETILCOLINA: Pulso violeta indicando escuta ativa do microfone e transcrição.
+      * CORTISOL: Amarelo/laranja pulsante sinalizando erros, falhas de execução e retentativas.
+      * GABA: Roxo inibitório para contenção de taxa (rate limiting) e barramentos bloqueados.
+* Otimizações 3D: Suporte a loteamento de mensagens (BrainLinkEventBundle) para evitar sobrecarga no WebGL, gerenciamento de TTL e decaimento suave (fade-out) para que conexões desativadas apaguem progressivamente sem comprometer o FPS.
+
+
+4. Cérebro Central (JARVIS) e Agentes Especialistas
+* Agente Líder Fixo (JARVIS): Único ponto central de entrada e único executor autorizado de ações externas (Home Assistant, e-mails, APIs externas). O prompt do sistema e o modelo de LLM por trás do Jarvis são 100% editáveis em tempo real via painel. O Jarvis utiliza Dynamic Tool Calling, acessando uma ferramenta HTTP genérica capaz de realizar requisições GET, POST, PUT e DELETE com cabeçalhos e corpos dinâmicos.
+* Módulos de Especialistas Dinâmicos (CRUD Completo): Agentes subordinados em sub-workflows focados em nichos específicos. O sistema oferece CRUD completo no frontend para:
+   * Criar novos especialistas do zero.
+   * Editar nome, prompt do sistema e selecionar o modelo de LLM associado.
+   * Configurar localmente URLs de Webhooks e parâmetros de API (permitindo transitar suavemente entre localhost e domínios públicos).
+   * Excluir especialistas obsoletos.
+Os especialistas analisam os dados recebidos e obrigatoriamente retornam payloads JSON estruturados e validados por Zod para o Jarvis.
+será possivel tambem montar a estrutura conectando estre nós em sequência 
+
+
+5. Camada de Memória Modular e Contexto Dinâmico
+A arquitetura de memória é estruturada em três níveis isolados por Session ID:
+* Gerenciamento de Sessões (Session ID): Chave única gerada para cada interação do usuário que isola históricos de conversação e contextos técnicos entre usuários e dispositivos.
+* Memória Conversacional (Curto Prazo): Armazenada em banco relacional (PostgreSQL/SQLite) e conectada ao Jarvis. O usuário pode visualizar as mensagens no painel, editar itens ou deletar a sessão para resetar o contexto. Conta com janela de contexto com limitação de tokens e sumarização automática.
+* Memória Semântica e RAG (Longo Prazo): Usa banco vetorial (Pgvector/Qdrant) para realizar buscas por significado em documentos, PDFs, manuais da casa e diretrizes corporativas.
+* Memória Biográfica e Evolução: Guarda o perfil biométrico dos familiares, níveis de permissão e registros de erros/acertos do próprio sistema para aprimoramento contínuo da LLM própria.
+
+
+6. Banco de Dados Dinâmico e Ferramenta de Persistência
+A ferramenta DynamicDatabaseTool concede autonomia à LLM para criar coleções e salvar registros com total flexibilidade:
+* Interface DynamicDatabaseSaveInput: Define a estrutura do payload gerado pela IA:
+   * collectionName (string): Nome da coleção validado obrigatoriamente pela regex /^[a-z0-9_]+$/.
+   * documentData (Record<string, unknown>): Payload JSON filtrado e limpo extraído do webhook bruto.
+   * eventId / idempotencyKey (string): Identificador único indexado para evitar duplicidades por reenviou de webhooks.
+* Método saveToDatabase no JarvisOrchestrator: Recebe a configuração e anexa automaticamente metadados de auditoria: createdAt: new Date(), decisionReasoning (justificativa da IA), webhookSource e executionStatus.
+* Tomada de Decisão Autônoma: Ao receber o payload universal, o Jarvis utiliza Structured Outputs / Function Calling para decidir se o evento será Descartado, Executado via HTTP, Salvo no Banco ou Ambas as ações. Para a execução dual (banco e HTTP), utiliza-se Promise.allSettled() com retentativas e exponential backoff, garantindo resiliência.
+
+
+7. Governança, Segurança, Resiliência e UX/UI
+* Segurança e RBAC: Controle de Acesso Baseado em Funções (RBAC) com privilégio mínimo para evitar execuções destrutivas (ex: DELETE) pelo Jarvis sem supervisão humana. Credenciais e chaves são isoladas em um cofre de segredos / variáveis de ambiente (.env).
+* Fila de Mensagens e Observabilidade: Inserção de um message broker (Redis/BullMQ) entre a caixa de entrada universal e o Jarvis para amortecer picos de tráfego. Auditoria com registros de consumo de tokens, custos por sessão, tempo de latência dos especialistas e suporte a integrações como Langfuse/LangSmith.
+* Recursos do Painel CRUD: Contém funcionalidade de "Playground/Sandbox" para testar prompts e respostas de especialistas de forma isolada, além de suporte a versionamento de prompts para rollback. O sistema utiliza variáveis de ambiente locais (ex: BASE_URL, SERVER_IP) para montagem dinâmica das rotas.
+Design UX/UI Integrado: O Chat é exibido como um HUD semi-transparente e retrátil. Clicar em mensagens do chat destaca as sinapses e axônios correspondentes no cérebro 3D (Highlight de Fluxo). A Chave de Ferramentas / Painel do Córtex Pré-Frontal permite ajustar filtros de visualização, controlar limites de performance (FPS, densidade de partículas e glow) e gerenciar conectores dinâmicos.
+
+
+8. Banco de Segurança e Proteção da Infraestrutura
+Esta seção estabelece as diretrizes e mecanismos fundamentais de proteção para a infraestrutura do ecossistema Jarvis & n8n, garantindo resiliência contra vulnerabilidades e acessos não autorizados:
+* Autenticação JWT na API de Configuração: Todas as rotas administrativas e de configuração do painel CRUD e agentes exigem tokens JWT (JSON Web Tokens) assinados com algoritmos robustos (ex: RS256/HS256) e expiração curta, prevenindo chamadas não autorizadas à API.
+* Sanitização Estrita e Validação de Tipos: O backend valida rigorosamente a tipagem de entrada via schemas Zod e aplica sanitização em todos os campos de texto e payloads de webhooks, eliminando vetores de injeção de comandos (Command/Prompt Injection) e XSS.
+* Manipulação Segura do Arquivo .env: A alteração e leitura de variáveis de ambiente no servidor são realizadas de forma cirúrgica por rotas autenticadas e isoladas, mascarando chaves e segredos para impedir a exposição de dados sensíveis em logs ou no frontend.
+* Criptografia de Ponta a Ponta (HTTPS/SSL): Todo o tráfego entre a interface gráfica, webhooks, barramento WebSocket e serviços externos é forçado através de conexões encriptadas com TLS 1.3 (HTTPS/WSS), protegendo os dados em trânsito.
+* Politicas de Rate Limiting e Proteção DoS: Implementação de limites de taxa de requisições por IP e chave de API utilizando Redis, prevenindo ataques de força bruta no login e mitagando tentativas de negação de serviço (DoS/DDoS) na caixa de entrada universal.
+Backups Automatizados e Criptografados: Rotinas diárias automáticas geram cópias de segurança do banco de dados relacional/vetorial e das configurações do n8n. Os arquivos de backup são encriptados (AES-256) e armazenados em bucket seguro e isolado com política de retenção.
+
+
+
+
+Quando o usuário digita o número da porta e clica em salvar, a primeira ação do script gerenciador é ler o arquivo de ambiente .env atual para capturar e armazenar na memória qual é a porta em que o n8n está rodando naquele exato momento. Com esses dois valores em mãos — a porta digitada na tela e a porta atualmente salva no arquivo —, o backend realiza uma bifurcação na tomada de decisão. Se o número vindo do frontend for exatamente igual à porta registrada no .env, o sistema entende que não há uma troca de porta, mas sim uma tentativa de revalidação ou salvamento de rotina. Nesse cenário específico, o script ignora o teste de porta livre e realiza uma requisição HTTP do tipo GET diretamente para o endpoint de saúde do n8n, utilizando o endereço interno loopback seguido da porta e do caminho padrão de checagem do sistema. Se o n8n responder a essa requisição com um código de status de sucesso, o backend valida a operação imediatamente e confirma para o frontend que a porta está correta e operando de forma saudável sob o controle do próprio n8n. Por outro lado, se o número digitado na tela for diferente do valor que está salvo no arquivo .env, o sistema detecta que o usuário deseja mover o n8n para um novo endereço de rede. Para essa segunda situação, o backend aciona uma rotina de conexão via soquete TCP para tentar escutar a nova porta informada. Se o sistema operacional retornar que a nova porta está totalmente livre e desimpedida, o script prossegue com segurança, reescreve a linha correspondente à variável de ambiente no arquivo .env com o novo valor digitado, salva o documento no disco e executa o comando de terminal para reiniciar o container do n8n, liberando a porta antiga e assumindo o controle da nova porta de maneira automatizada e sem interrupções indesejadas.
+criei automação para a atulização dos provedores de IA , este e ó link onde eu criei na github 
+https://gist.githubusercontent.com/dullius-lima/f672db978789103941a45d2968e386e5/raw/eb792d5188df30bc34d2de06382b54f584e06543/models.json 
+
+
+logo abaixo como ficou configurado.

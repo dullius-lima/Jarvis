@@ -25,7 +25,8 @@ import {
   Info,
   HelpCircle,
   Check,
-  Search
+  Search,
+  Trash2
 } from 'lucide-react';
 
 interface MicroDatastoresModalProps {
@@ -430,6 +431,19 @@ export const MicroDatastoresModal: React.FC<MicroDatastoresModalProps> = ({
                             className="text-cyan-400 hover:text-cyan-300 font-bold flex items-center gap-1"
                           >
                             Consultar Silo com o JARVIS <ArrowRight className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              service.excluirParticao(ds.chave);
+                              setBancos(service.listarTodos());
+                              setLogs(service.obterLogsIsolamento());
+                              setMensagemSucesso(`Silo isolado [${ds.chave}] excluído com sucesso.`);
+                              setTimeout(() => setMensagemSucesso(null), 3500);
+                            }}
+                            className="text-rose-400 hover:text-rose-200 font-bold flex items-center gap-1 bg-rose-950/60 hover:bg-rose-900 px-2 py-0.5 rounded border border-rose-500/40 transition-colors cursor-pointer"
+                            title={`Excluir partição ${ds.chave}`}
+                          >
+                            <Trash2 className="w-3 h-3" /> Excluir Silo
                           </button>
                         </div>
                       </div>

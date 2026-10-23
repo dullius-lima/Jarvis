@@ -281,16 +281,145 @@ export class N8nEngineService {
     this.notify();
   }
 
+  private sequentialLinks: Array<{
+    id: string;
+    sourceNodeId: string;
+    sourceNodeName: string;
+    targetNodeId: string;
+    targetNodeName: string;
+    conditionLabel: string;
+    order: number;
+  }> = [
+    {
+      id: 'seq-1',
+      sourceNodeId: 'SENSOR_GATEWAY',
+      sourceNodeName: '1. Gateway Sensorial (Voz Whisper + JPEG q80 + Biometria)',
+      targetNodeId: 'RBAC_FILTER',
+      targetNodeName: '2. Gatekeeper RBAC & Redis BullMQ Queue',
+      conditionLabel: 'HMAC-SHA256 Validado',
+      order: 1,
+    },
+    {
+      id: 'seq-2',
+      sourceNodeId: 'RBAC_FILTER',
+      sourceNodeName: '2. Gatekeeper RBAC & Redis BullMQ Queue',
+      targetNodeId: 'ORCHESTRATOR_CORE',
+      targetNodeName: '3. Cérebro Orquestrador Central (Roteamento Híbrido)',
+      conditionLabel: 'Crachá Biométrico Ativo',
+      order: 2,
+    },
+    {
+      id: 'seq-3',
+      sourceNodeId: 'ORCHESTRATOR_CORE',
+      sourceNodeName: '3. Cérebro Orquestrador Central (Roteamento Híbrido)',
+      targetNodeId: 'MOD_3_FINANCEIRO',
+      targetNodeName: '4. Agente de APIs & Integrações n8n',
+      conditionLabel: 'Se ADMIN_TOTAL -> Executa Pipeline',
+      order: 3,
+    },
+    {
+      id: 'seq-4',
+      sourceNodeId: 'MOD_3_FINANCEIRO',
+      sourceNodeName: '4. Agente de APIs & Integrações n8n',
+      targetNodeId: 'MOD_1_NOTAS',
+      targetNodeName: '5. Agente de Notas & Registros Rápidos',
+      conditionLabel: 'Assentar Resultado no PGVector / Sheets',
+      order: 4,
+    },
+  ];
+
   public getSubWorkflows(): SubWorkflowDefinition[] {
     return this.subWorkflows;
+  }
+
+  public addSubWorkflow(workflow: Omit<SubWorkflowDefinition, 'id' | 'status'> & { id?: string }): SubWorkflowDefinition {
+    const newWf: SubWorkflowDefinition = {
+      ...workflow,
+      id: (workflow.id || `MOD_CUSTOM_${Date.now()}`) as SubWorkflowModuleId,
+      status: 'IDLE',
+    };
+    this.subWorkflows = [...this.subWorkflows, newWf];
+    this.notify();
+    return newWf;
+  }
+
+  public deleteSubWorkflow(id: string): void {
+    this.subWorkflows = this.subWorkflows.filter((w) => w.id !== id);
+    this.sequentialLinks = this.sequentialLinks.filter(
+      (l) => l.sourceNodeId !== id && l.targetNodeId !== id
+    );
+    this.notify();
+  }
+
+  public getSequentialConnections() {
+    return [...this.sequentialLinks].sort((a, b) => a.order - b.order);
+  }
+
+  public addSequentialConnection(
+    sourceNodeId: string,
+    sourceNodeName: string,
+    targetNodeId: string,
+    targetNodeName: string,
+    conditionLabel: string = 'Execução em Sequência'
+  ) {
+    const nextOrder = this.sequentialLinks.length > 0
+      ? Math.max(...this.sequentialLinks.map((l) => l.order)) + 1
+      : 1;
+    const newLink = {
+      id: `seq-${Date.now()}`,
+      sourceNodeId,
+      sourceNodeName,
+      targetNodeId,
+      targetNodeName,
+      conditionLabel,
+      order: nextOrder,
+    };
+    this.sequentialLinks = [...this.sequentialLinks, newLink];
+    this.notify();
+    return newLink;
+  }
+
+  public deleteSequentialConnection(linkId: string): void {
+    this.sequentialLinks = this.sequentialLinks
+      .filter((l) => l.id !== linkId)
+      .map((l, idx) => ({ ...l, order: idx + 1 }));
+    this.notify();
   }
 
   public getRagDocuments() {
     return this.ragDocs;
   }
 
+  public addRagDocument(title: string, category: 'INVESTIMENTOS_BAZIN' | 'REGRAS_CASA' | 'ORACLE_TI' | 'CONTRATOS', snippet: string) {
+    const newDoc = {
+      id: `rag-${Date.now()}`,
+      title,
+      category,
+      snippet,
+      similarityScore: 0.95,
+    };
+    this.ragDocs = [newDoc, ...this.ragDocs];
+    this.notify();
+    return newDoc;
+  }
+
+  public deleteRagDocument(docId: string): void {
+    this.ragDocs = this.ragDocs.filter((d) => d.id !== docId);
+    this.notify();
+  }
+
   public getExecutionHistory() {
     return this.executionHistory;
+  }
+
+  public deleteExecutionHistoryItem(requestId: string): void {
+    this.executionHistory = this.executionHistory.filter((item) => item.requestId !== requestId);
+    this.notify();
+  }
+
+  public clearExecutionHistory(): void {
+    this.executionHistory = [];
+    this.notify();
   }
 
   public setLastScreenSnapshot(dataUrl: string | null) {
@@ -718,9 +847,41 @@ return {
       ]
     };
 
+    const pythonRequirements = `# Dependências Python para Agente Sensorial Local/VM (2 OCPU / 12GB RAM)
+openai-whisper==20231117
+opencv-python-headless==4.10.0.84
+insightface==0.7.3
+onnxruntime==1.19.2
+Pillow==10.4.0
+mss==9.0.2
+requests==2.32.3
+websocket-client==1.8.0
+numpy==1.26.4`;
+
+    const sensoryPythonAgent = `#!/usr/bin/env python3
+# Agente Sensorial Jarvis (Whisper Small + OpenCV/InsightFace + Captura JPEG q80 Base64)
+import io, os, time, base64, hashlib, hmac, json, requests
+from PIL import Image
+import mss
+
+JARVIS_WEBHOOK_URL = os.getenv("JARVIS_WEBHOOK_URL", "http://127.0.0.1:3000/api/sensory/ingest")
+SHARED_SECRET = os.getenv("N8N_SHARED_SECRET_KEY", "jarvis_sec_8f92a10b4c73e91d")
+
+def capture_screen_jpeg_q80_base64() -> str:
+    with mss.mss() as sct:
+        sct_img = sct.grab(sct.monitors[1])
+        img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+        img.thumbnail((1280, 720))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=80, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
+`;
+
     return {
       dockerCompose,
       oracleSetupBash,
+      pythonRequirements,
+      sensoryPythonAgent,
       masterWorkflowJson: JSON.stringify(masterWorkflowJson, null, 2),
       vscodeConfig: JSON.stringify(vscodeConfig, null, 2),
     };

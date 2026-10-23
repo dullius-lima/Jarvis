@@ -110,11 +110,9 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
   if (!isOpen) return null;
 
   const handleLimparTodosAgentes = () => {
-    if (window.confirm('Deseja excluir todos os agentes para deixar o ficheiro 100% limpo e criar novos agentes do zero?')) {
-      agentService.clearAllAgents();
-      setAgents([]);
-      onTriggerSynapse('Ficheiro de agentes limpo com sucesso.');
-    }
+    agentService.clearAllAgents();
+    setAgents([]);
+    onTriggerSynapse('Ficheiro de agentes limpo com sucesso.');
   };
 
   const recarregar = () => {
@@ -364,11 +362,9 @@ export const AgentRegistryModal: React.FC<AgentRegistryModalProps> = ({
   };
 
   const handleExcluirAgente = (id: string, name: string) => {
-    if (confirm(`Deseja desativar e excluir o agente "${name}"?`)) {
-      agentService.deleteAgent(id);
-      recarregar();
-      onTriggerSynapse(`Agente ${name} Removido`);
-    }
+    agentService.deleteAgent(id);
+    recarregar();
+    onTriggerSynapse(`Agente ${name} Removido`);
   };
 
   const bancosDisponiveis = microService.listarTodos();

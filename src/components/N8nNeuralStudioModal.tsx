@@ -45,6 +45,8 @@ import {
   Home,
   Sliders,
   Code,
+  Trash2,
+  Plus,
 } from 'lucide-react';
 
 interface N8nNeuralStudioModalProps {
@@ -81,8 +83,18 @@ export const N8nNeuralStudioModal: React.FC<N8nNeuralStudioModalProps> = ({
   // Copiado feedback
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // Nó selecionado no grafo
+  // Nó selecionado no grafo e Conexões em Sequência
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>('node-orchestrator');
+  const [sequentialLinks, setSequentialLinks] = useState(() => n8nService.getSequentialConnections());
+  const [seqSourceName, setSeqSourceName] = useState('Orquestrador Central');
+  const [seqTargetName, setSeqTargetName] = useState('Agente de APIs & Integrações n8n');
+  const [seqCondition, setSeqCondition] = useState('Execução em Sequência Direta');
+
+  // Novo Sub-Workflow
+  const [showNewSwForm, setShowNewSwForm] = useState(false);
+  const [newSwName, setNewSwName] = useState('');
+  const [newSwPath, setNewSwPath] = useState('/api/n8n/webhook/custom');
+  const [newSwDesc, setNewSwDesc] = useState('');
 
   useEffect(() => {
     const unsub = n8nService.subscribe(() => {
@@ -91,6 +103,7 @@ export const N8nNeuralStudioModal: React.FC<N8nNeuralStudioModalProps> = ({
       setSubWorkflows(n8nService.getSubWorkflows());
       setExecutionHistory(n8nService.getExecutionHistory());
       setScreenSnapshot(n8nService.getLastScreenSnapshot());
+      setSequentialLinks(n8nService.getSequentialConnections());
     });
     return () => unsub();
   }, []);
@@ -534,6 +547,87 @@ export const N8nNeuralStudioModal: React.FC<N8nNeuralStudioModalProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Construtor de Estrutura Conectando Nós em Sequência */}
+              <div className="p-4 rounded-2xl bg-slate-950 border border-purple-500/40 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+                  <span className="font-bold text-xs font-mono text-purple-300 flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-purple-400" />
+                    CONSTRUTOR DE PIPELINE: CONECTAR NÓS EM SEQUÊNCIA ({sequentialLinks.length} ETAPAS)
+                  </span>
+                  <span className="text-[10px] font-mono text-slate-400">
+                    Defina a ordem exata de disparo entre nós e sub-workflows
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs">
+                  <input
+                    type="text"
+                    placeholder="Nó de Origem"
+                    value={seqSourceName}
+                    onChange={(e) => setSeqSourceName(e.target.value)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-white"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Nó de Destino (Próximo da Sequência)"
+                    value={seqTargetName}
+                    onChange={(e) => setSeqTargetName(e.target.value)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-white"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Regra / Condição"
+                    value={seqCondition}
+                    onChange={(e) => setSeqCondition(e.target.value)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-cyan-300 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!seqSourceName.trim() || !seqTargetName.trim()) return;
+                      n8nService.addSequentialConnection(
+                        `node-${Date.now()}`,
+                        seqSourceName.trim(),
+                        `target-${Date.now()}`,
+                        seqTargetName.trim(),
+                        seqCondition.trim() || 'Sequência Direta'
+                      );
+                      onTriggerSynapse?.(`Conexão sequencial adicionada: ${seqSourceName} -> ${seqTargetName}`);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Conectar em Sequência
+                  </button>
+                </div>
+
+                <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                  {sequentialLinks.map((link) => (
+                    <div
+                      key={link.id}
+                      className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between text-xs font-mono gap-2"
+                    >
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-500/40 font-bold">
+                          Passo #{link.order}
+                        </span>
+                        <span className="text-white font-bold">{link.sourceNodeName}</span>
+                        <ChevronRight className="w-3.5 h-3.5 text-cyan-400" />
+                        <span className="text-emerald-300 font-bold">{link.targetNodeName}</span>
+                        <span className="text-[10px] text-slate-400">({link.conditionLabel})</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => n8nService.deleteSequentialConnection(link.id)}
+                        className="p-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-500/30 flex items-center gap-1 text-[10px] cursor-pointer shrink-0"
+                        title="Excluir conexão sequencial"
+                      >
+                        <Trash2 className="w-3 h-3" /> Excluir
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
@@ -649,10 +743,80 @@ export const N8nNeuralStudioModal: React.FC<N8nNeuralStudioModalProps> = ({
           {/* ---------------------------------------------------------------- */}
           {activeTab === 'subworkflows' && (
             <div className="space-y-4">
-              <div className="p-3 rounded-xl bg-slate-950/80 border border-purple-500/30 text-xs font-mono text-slate-300 flex items-center justify-between">
+              <div className="p-3 rounded-xl bg-slate-950/80 border border-purple-500/30 text-xs font-mono text-slate-300 flex flex-wrap items-center justify-between gap-2">
                 <span>Arquitetura Desacoplada: Cada módulo roda como um Sub-Workflow independente no n8n acionado sob demanda.</span>
-                <span className="text-purple-400 font-bold">{subWorkflows.length} Módulos Registrados</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-purple-400 font-bold">{subWorkflows.length} Módulos Registrados</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewSwForm(!showNewSwForm)}
+                    className="px-3 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Novo Sub-Workflow
+                  </button>
+                </div>
               </div>
+
+              {showNewSwForm && (
+                <div className="p-4 rounded-2xl bg-slate-950 border border-purple-500/40 space-y-3 text-xs">
+                  <div className="font-bold text-purple-300 font-mono">CRIAR NOVO SUB-WORKFLOW ESPECIALISTA</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Nome do Sub-Workflow (ex: Agente WhatsApp/Telegram)"
+                      value={newSwName}
+                      onChange={(e) => setNewSwName(e.target.value)}
+                      className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Webhook Path (/api/n8n/webhook/...)"
+                      value={newSwPath}
+                      onChange={(e) => setNewSwPath(e.target.value)}
+                      className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-cyan-300 font-mono"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Descrição da função"
+                      value={newSwDesc}
+                      onChange={(e) => setNewSwDesc(e.target.value)}
+                      className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowNewSwForm(false)}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newSwName.trim()) return;
+                        n8nService.addSubWorkflow({
+                          name: newSwName.trim(),
+                          moduleGroup: 'MOD_3_COMPLEXIDADE',
+                          moduleGroupName: 'Módulo Customizado',
+                          description: newSwDesc.trim() || 'Sub-workflow modular integrado ao Orquestrador Central.',
+                          iconName: 'Code',
+                          bodyPartAttached: 'coracao',
+                          codeLanguage: 'TypeScript',
+                          triggerWebhookPath: newSwPath.trim() || '/api/n8n/webhook/custom',
+                          requiredPermission: 'canAccessDailyRoutines',
+                        });
+                        setNewSwName('');
+                        setNewSwDesc('');
+                        setShowNewSwForm(false);
+                      }}
+                      className="px-4 py-1.5 rounded-lg bg-purple-600 text-white font-bold cursor-pointer"
+                    >
+                      Salvar Sub-Workflow
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {subWorkflows.map((sw) => (
@@ -670,9 +834,19 @@ export const N8nNeuralStudioModal: React.FC<N8nNeuralStudioModalProps> = ({
                           <span className="text-[10px] text-purple-400 font-mono">{sw.moduleGroupName}</span>
                         </div>
                       </div>
-                      <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-slate-900 border border-slate-700 text-slate-300">
-                        {sw.codeLanguage}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-slate-900 border border-slate-700 text-slate-300">
+                          {sw.codeLanguage}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => n8nService.deleteSubWorkflow(sw.id)}
+                          className="p-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-500/30 cursor-pointer"
+                          title="Excluir Sub-Workflow"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     <p className="text-xs text-slate-400 font-sans">
@@ -711,9 +885,19 @@ export const N8nNeuralStudioModal: React.FC<N8nNeuralStudioModalProps> = ({
                 <div className="space-y-2.5">
                   {n8nService.getRagDocuments().map((doc) => (
                     <div key={doc.id} className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
-                      <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center justify-between text-xs gap-2">
                         <span className="font-bold text-slate-200">{doc.title}</span>
-                        <span className="text-[10px] text-cyan-400 font-mono">{Math.round(doc.similarityScore * 100)}% match</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[10px] text-cyan-400 font-mono">{Math.round(doc.similarityScore * 100)}% match</span>
+                          <button
+                            type="button"
+                            onClick={() => n8nService.deleteRagDocument(doc.id)}
+                            className="p-1 rounded bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-500/30 cursor-pointer"
+                            title="Excluir documento RAG"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       </div>
                       <p className="text-[11px] text-slate-400">{doc.snippet}</p>
                     </div>

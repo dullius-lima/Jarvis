@@ -3906,16 +3906,29 @@ ON CONFLICT (provider) DO UPDATE SET
                       specialistContexts.map((ctx) => (
                         <div
                           key={ctx.id}
-                          className="p-3 rounded-xl bg-slate-950 border border-purple-500/30 flex items-center justify-between text-xs font-mono"
+                          className="p-3 rounded-xl bg-slate-950 border border-purple-500/30 flex items-center justify-between text-xs font-mono gap-2"
                         >
-                          <div>
+                          <div className="truncate">
                             <span className="text-purple-300 font-bold">{ctx.specialistName}:</span>
                             <span className="text-slate-400 ml-2">{ctx.contextKey} =</span>
                             <code className="text-amber-300 ml-1.5 font-bold">{JSON.stringify(ctx.contextValue)}</code>
                           </div>
-                          <span className="text-[10px] text-slate-500">
-                            {new Date(ctx.updatedAt).toLocaleTimeString('pt-BR')}
-                          </span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[10px] text-slate-500">
+                              {new Date(ctx.updatedAt).toLocaleTimeString('pt-BR')}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                sessionMemoryService.deleteSpecialistContext(ctx.id);
+                                setSpecialistContexts(sessionMemoryService.getSpecialistContext(activeSessionId));
+                              }}
+                              className="p-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 cursor-pointer"
+                              title="Excluir contexto do especialista"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
                         </div>
                       ))
                     )}
@@ -3977,18 +3990,37 @@ ON CONFLICT (provider) DO UPDATE SET
                       </h4>
                     </div>
 
-                    <select
-                      value={selectedCollection}
-                      onChange={(e) => {
-                        setSelectedCollection(e.target.value);
-                        setCollectionDocs(dynamicDatabaseService.getDocuments(e.target.value));
-                      }}
-                      className="px-3 py-1 bg-slate-950 border border-slate-700 rounded-xl text-xs text-teal-300 font-mono"
-                    >
-                      {dynamicCollections.map((col) => (
-                        <option key={col} value={col}>📁 {col}</option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={selectedCollection}
+                        onChange={(e) => {
+                          setSelectedCollection(e.target.value);
+                          setCollectionDocs(dynamicDatabaseService.getDocuments(e.target.value));
+                        }}
+                        className="px-3 py-1 bg-slate-950 border border-slate-700 rounded-xl text-xs text-teal-300 font-mono"
+                      >
+                        {dynamicCollections.map((col) => (
+                          <option key={col} value={col}>📁 {col}</option>
+                        ))}
+                      </select>
+                      {dynamicCollections.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            dynamicDatabaseService.deleteCollection(selectedCollection);
+                            const remaining = dynamicDatabaseService.listCollections();
+                            const nextCol = remaining[0] || 'cfo_audit_logs';
+                            setDynamicCollections(remaining);
+                            setSelectedCollection(nextCol);
+                            setCollectionDocs(dynamicDatabaseService.getDocuments(nextCol));
+                          }}
+                          className="px-2 py-1 rounded-lg bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 text-[10px] font-mono flex items-center gap-1 cursor-pointer"
+                          title="Excluir coleção inteira"
+                        >
+                          <Trash2 className="w-3 h-3" /> Excluir Coleção
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
@@ -4004,7 +4036,20 @@ ON CONFLICT (provider) DO UPDATE SET
                         >
                           <div className="flex items-center justify-between text-[10px] text-slate-400">
                             <span className="text-teal-400 font-bold">{doc._id}</span>
-                            <span>{new Date(doc.createdAt).toLocaleTimeString('pt-BR')}</span>
+                            <div className="flex items-center gap-2">
+                              <span>{new Date(doc.createdAt).toLocaleTimeString('pt-BR')}</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  dynamicDatabaseService.deleteDocument(selectedCollection, doc._id);
+                                  setCollectionDocs(dynamicDatabaseService.getDocuments(selectedCollection));
+                                }}
+                                className="px-1.5 py-0.5 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 flex items-center gap-1 cursor-pointer"
+                                title="Excluir documento"
+                              >
+                                <Trash2 className="w-3 h-3" /> Excluir
+                              </button>
+                            </div>
                           </div>
                           <div className="text-[11px] text-slate-300 italic">
                             Motivo: {doc.decisionReasoning}

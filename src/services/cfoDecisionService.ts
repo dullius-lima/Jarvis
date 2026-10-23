@@ -417,6 +417,19 @@ class CfoDecisionService {
     }
   }
 
+  public excluirDecisao(id: string): boolean {
+    try {
+      const atuais = this.listarDecisoes();
+      const filtradas = atuais.filter((d) => d.id !== id);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(filtradas));
+      this.notificarListeners();
+      return filtradas.length !== atuais.length;
+    } catch (e) {
+      console.warn('Falha ao excluir decisão do CFO:', e);
+      return false;
+    }
+  }
+
   public limparHistorico(): void {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify([]));

@@ -200,6 +200,28 @@ export class GoogleWorkspaceService {
   }
 
   /**
+   * Exclui um evento do Google Calendar
+   */
+  public async deleteCalendarEvent(eventId: string): Promise<boolean> {
+    const token = cachedAccessToken;
+    if (!token || !eventId) return false;
+
+    try {
+      const res = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      return res.ok || res.status === 204;
+    } catch (e) {
+      console.warn('Erro ao excluir evento do Google Calendar:', e);
+      return false;
+    }
+  }
+
+  /**
    * Consulta últimos e-mails não lidos via Gmail API
    */
   public async listUnreadEmails(): Promise<any[]> {
@@ -223,4 +245,49 @@ export class GoogleWorkspaceService {
     }
     return [];
   }
+
+  /**
+   * Move um e-mail do Gmail para a lixeira / exclui
+   */
+  public async trashEmailMessage(messageId: string): Promise<boolean> {
+    const token = cachedAccessToken;
+    if (!token || !messageId) return false;
+
+    try {
+      const res = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}/trash`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      return res.ok;
+    } catch (e) {
+      console.warn('Erro ao excluir mensagem no Gmail:', e);
+      return false;
+    }
+  }
+
+  /**
+   * Exclui uma planilha ou arquivo criado no Google Drive
+   */
+  public async deleteDriveFile(fileId: string): Promise<boolean> {
+    const token = cachedAccessToken;
+    if (!token || !fileId) return false;
+
+    try {
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      return res.ok || res.status === 204;
+    } catch (e) {
+      console.warn('Erro ao excluir arquivo no Google Drive:', e);
+      return false;
+    }
+  }
 }
+
