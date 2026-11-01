@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  ollama-local:
+    image: ollama/ollama:latest
+    container_name: n8n_ollama_engine
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
+    # Descomente a linha abaixo caso sua máquina tenha GPU NVIDIA:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    networks:
+      - n8n_network
+
+networks:
+  n8n_network:
+    driver: bridge

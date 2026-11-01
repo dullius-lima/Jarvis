@@ -1,0 +1,18 @@
+# Dependências e ambientes virtuais
+node_modules/
+whisper-env/
+dist/
+
+# Ficheiros sensíveis e credenciais (NUNCA ENVIAR)
+.env
+.env.local
+.env.*.local
+
+# Backups criptografados locais
+backups/
+*.enc
+
+# Logs e ficheiros temporários do sistema
+*.log
+.DS_Store
+Thumbs.db
