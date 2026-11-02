@@ -184,10 +184,8 @@ export async function executeExternalConnector({
       if (!res.ok) throw new Error(data.error?.message || 'Falha ao enviar e-mail via Gmail API.');
 
       return { success: true, provider: 'gmail', action: 'send_email', data };
-    }git add .
-git commit -m "fix: alinhamento definitivo de build, server routes e acoes do gmail"
-git push origin main
-      
+    }
+
     case 'google_sheets': {
       const accessToken = token || process.env.GOOGLE_SHEETS_TOKEN || '';
       const spreadsheetId = config.spreadsheet_id || payload.spreadsheetId;
@@ -237,7 +235,6 @@ git push origin main
     }
 
     default: {
-      // Execução genérica para Custom Tools (HTTP / Webhook / MCP) salvas em external_connectors
       const endpoint = payload.endpoint || config.endpoint_url;
       if (!endpoint) {
         return {
@@ -284,9 +281,6 @@ git push origin main
   }
 }
 
-/**
- * Função unificada invocada por integrationAndProtocolService.ts e orchestratorService.ts
- */
 export async function executeNodeIntegration(
   agentOrSlug: any,
   payload: Record<string, any> = {}
