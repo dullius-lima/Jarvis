@@ -84,8 +84,12 @@ function resolveRouter(mod: any): express.Router {
   return express.Router();
 }
 
-const app = express();
-const PORT = Number(process.env.PORT || 3333);
+// Constantes declaradas FORA da função resolveRouter:
+const triggerRoutes = resolveRouter(triggerRoutesMod);
+const authRoutes = resolveRouter(authRoutesMod);
+const agentRoutes = resolveRouter(agentRoutesMod);
+const ragRoutes = resolveRouter(ragRoutesMod);
+const messagingRoutes = resolveRouter(messagingRoutesMod);
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));

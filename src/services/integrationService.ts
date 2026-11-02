@@ -74,11 +74,10 @@ export async function executeExternalConnector({
         throw new Error('Token OAuth2 do Gmail não configurado no Hub de Conexões.');
       }
 
-      // 1. AÇÃO: MOVER PARA A LIXEIRA / EXCLUIR MENSAGEM
+      // 1. MOVER PARA A LIXEIRA / EXCLUIR MENSAGEM
       if (action === 'delete_message' || action === 'trash_message' || action === 'delete_email') {
         let targetId = payload.id || payload.messageId;
 
-        // Se nenhum ID for passado, busca automaticamente o último e-mail recebido
         if (!targetId) {
           const listRes = await fetch(
             'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=1',
@@ -92,7 +91,6 @@ export async function executeExternalConnector({
           return { success: false, provider: 'gmail', message: 'Nenhuma mensagem encontrada para excluir.' };
         }
 
-        // Move para a Lixeira do Gmail (seguro e reversível)
         const trashRes = await fetch(
           `https://gmail.googleapis.com/gmail/v1/users/me/messages/${targetId}/trash`,
           {
@@ -115,8 +113,8 @@ export async function executeExternalConnector({
         };
       }
 
-      // 2. AÇÃO: LER CAIXA DE ENTRADA
-      if (action === 'read_inbox' || action === 'list_messages' || action === 'get_messages') {
+      // 2. LER CAIXA DE ENTRADA
+      if (action === 'read_inbox' || action === 'list_messages' || action === 'get_messages' || (!payload.to && !action)) {
         const maxResults = payload.maxResults || 5;
         const q = payload.query ? `&q=${encodeURIComponent(payload.query)}` : '';
 
@@ -132,7 +130,7 @@ export async function executeExternalConnector({
 
         const messages = listData.messages || [];
         if (messages.length === 0) {
-          return { success: true, provider: 'gmail', count: 0, messages: [], message: 'Caixa de entrada sem mensagens.' };
+          return { success: true, provider: 'gmail', count: 0, messages: [], message: 'Caixa de entrada vazia.' };
         }
 
         const details = await Promise.all(
@@ -165,32 +163,30 @@ export async function executeExternalConnector({
         };
       }
 
-      // 3. AÇÃO: ENVIAR E-MAIL (Base64URL RFC 2822)
-      if (action === 'send_email' || payload.to) {
-        const rawEmail = Buffer.from(
-          `To: ${payload.to}\r\nSubject: =?utf-8?B?${Buffer.from(payload.subject || 'JARVIS').toString('base64')}?=\r\nContent-Type: text/plain; charset="UTF-8"\r\nMIME-Version: 1.0\r\n\r\n${payload.body || payload.text || ''}`
-        )
-          .toString('base64')
-          .replace(/\+/g, '-')
-          .replace(/\//g, '_')
-          .replace(/=+$/, '');
+      // 3. ENVIAR E-MAIL
+      const rawEmail = Buffer.from(
+        `To: ${payload.to}\r\nSubject: =?utf-8?B?${Buffer.from(payload.subject || 'JARVIS').toString('base64')}?=\r\nContent-Type: text/plain; charset="UTF-8"\r\nMIME-Version: 1.0\r\n\r\n${payload.body || payload.text || ''}`
+      )
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
 
-        const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ raw: rawEmail })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error?.message || 'Falha ao enviar e-mail via Gmail API.');
+      const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ raw: rawEmail })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error?.message || 'Falha ao enviar e-mail via Gmail API.');
 
-        return { success: true, provider: 'gmail', action: 'send_email', data };
-      }
-
-      throw new Error(`Ação [${action}] não suportada para o provedor Gmail.`);
-    }
+      return { success: true, provider: 'gmail', action: 'send_email', data };
+    }git add .
+git commit -m "fix: alinhamento definitivo de build, server routes e acoes do gmail"
+git push origin main
       
     case 'google_sheets': {
       const accessToken = token || process.env.GOOGLE_SHEETS_TOKEN || '';

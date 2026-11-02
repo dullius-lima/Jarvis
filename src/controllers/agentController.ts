@@ -5,7 +5,6 @@ import {
   validateAutonomousAgentBlueprint
 } from '../services/credentialMapperService.js';
 import { listAvailableCredentials } from '../controllers/agentController.js';
-agentRoutes.get('/credentials', listAvailableCredentials);
 import { Request, Response } from 'express';
 import { pool } from '../config/database.js';
 import { emitBrainLinkEvent } from '../services/brainSocketService.js';
