@@ -74,28 +74,67 @@ export async function executeExternalConnector({
         throw new Error('Token OAuth2 do Gmail não configurado no Hub de Conexões.');
       }
 
-      // 1. AÇÃO: LER CAIXA DE ENTRADA / LISTAR MENSAGENS
-      if (action === 'read_inbox' || action === 'list_messages' || action === 'get_messages' || !payload.to) {
+      // 1. AÇÃO: MOVER PARA A LIXEIRA / EXCLUIR MENSAGEM
+      if (action === 'delete_message' || action === 'trash_message' || action === 'delete_email') {
+        let targetId = payload.id || payload.messageId;
+
+        // Se nenhum ID for passado, busca automaticamente o último e-mail recebido
+        if (!targetId) {
+          const listRes = await fetch(
+            'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=1',
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          const listData: any = await listRes.json().catch(() => ({}));
+          targetId = listData.messages?.[0]?.id;
+        }
+
+        if (!targetId) {
+          return { success: false, provider: 'gmail', message: 'Nenhuma mensagem encontrada para excluir.' };
+        }
+
+        // Move para a Lixeira do Gmail (seguro e reversível)
+        const trashRes = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${targetId}/trash`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}` }
+          }
+        );
+        const trashData: any = await trashRes.json().catch(() => ({}));
+
+        if (!trashRes.ok) {
+          throw new Error(trashData.error?.message || `Erro ao mover mensagem ${targetId} para a lixeira.`);
+        }
+
+        return {
+          success: true,
+          provider: 'gmail',
+          action: 'trash_message',
+          messageId: targetId,
+          message: `Mensagem ${targetId} movida para a lixeira com sucesso.`
+        };
+      }
+
+      // 2. AÇÃO: LER CAIXA DE ENTRADA
+      if (action === 'read_inbox' || action === 'list_messages' || action === 'get_messages') {
         const maxResults = payload.maxResults || 5;
         const q = payload.query ? `&q=${encodeURIComponent(payload.query)}` : '';
-        
-        // Busca a lista de IDs de e-mails
+
         const listRes = await fetch(
           `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}${q}`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
         const listData: any = await listRes.json().catch(() => ({}));
-        
+
         if (!listRes.ok) {
           throw new Error(listData.error?.message || `Erro HTTP ${listRes.status} ao listar Gmail.`);
         }
 
         const messages = listData.messages || [];
         if (messages.length === 0) {
-          return { success: true, provider: 'gmail', count: 0, messages: [], message: 'Caixa de entrada sem novas mensagens.' };
+          return { success: true, provider: 'gmail', count: 0, messages: [], message: 'Caixa de entrada sem mensagens.' };
         }
 
-        // Obtém detalhes (Assunto, Remetente, Data, Resumo) de cada e-mail
         const details = await Promise.all(
           messages.slice(0, maxResults).map(async (msgItem: any) => {
             const detailRes = await fetch(
@@ -126,27 +165,31 @@ export async function executeExternalConnector({
         };
       }
 
-      // 2. AÇÃO: ENVIAR E-MAIL (Base64URL RFC 2822)
-      const rawEmail = Buffer.from(
-        `To: ${payload.to}\r\nSubject: =?utf-8?B?${Buffer.from(payload.subject || 'JARVIS').toString('base64')}?=\r\nContent-Type: text/plain; charset="UTF-8"\r\nMIME-Version: 1.0\r\n\r\n${payload.body || payload.text || ''}`
-      )
-        .toString('base64')
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
+      // 3. AÇÃO: ENVIAR E-MAIL (Base64URL RFC 2822)
+      if (action === 'send_email' || payload.to) {
+        const rawEmail = Buffer.from(
+          `To: ${payload.to}\r\nSubject: =?utf-8?B?${Buffer.from(payload.subject || 'JARVIS').toString('base64')}?=\r\nContent-Type: text/plain; charset="UTF-8"\r\nMIME-Version: 1.0\r\n\r\n${payload.body || payload.text || ''}`
+        )
+          .toString('base64')
+          .replace(/\+/g, '-')
+          .replace(/\//g, '_')
+          .replace(/=+$/, '');
 
-      const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ raw: rawEmail })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error?.message || 'Falha ao enviar e-mail via Gmail API.');
+        const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ raw: rawEmail })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error?.message || 'Falha ao enviar e-mail via Gmail API.');
 
-      return { success: true, provider: 'gmail', action: 'send_email', data };
+        return { success: true, provider: 'gmail', action: 'send_email', data };
+      }
+
+      throw new Error(`Ação [${action}] não suportada para o provedor Gmail.`);
     }
       
     case 'google_sheets': {
