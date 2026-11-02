@@ -69,9 +69,66 @@ export async function executeExternalConnector({
     }
 
     case 'gmail': {
-      const accessToken = token || process.env.GMAIL_ACCESS_TOKEN || '';
+      const accessToken = token || config.access_token || process.env.GMAIL_ACCESS_TOKEN || '';
+      if (!accessToken) {
+        throw new Error('Token OAuth2 do Gmail não configurado no Hub de Conexões.');
+      }
+
+      // 1. AÇÃO: LER CAIXA DE ENTRADA / LISTAR MENSAGENS
+      if (action === 'read_inbox' || action === 'list_messages' || action === 'get_messages' || !payload.to) {
+        const maxResults = payload.maxResults || 5;
+        const q = payload.query ? `&q=${encodeURIComponent(payload.query)}` : '';
+        
+        // Busca a lista de IDs de e-mails
+        const listRes = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}${q}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        const listData: any = await listRes.json().catch(() => ({}));
+        
+        if (!listRes.ok) {
+          throw new Error(listData.error?.message || `Erro HTTP ${listRes.status} ao listar Gmail.`);
+        }
+
+        const messages = listData.messages || [];
+        if (messages.length === 0) {
+          return { success: true, provider: 'gmail', count: 0, messages: [], message: 'Caixa de entrada sem novas mensagens.' };
+        }
+
+        // Obtém detalhes (Assunto, Remetente, Data, Resumo) de cada e-mail
+        const details = await Promise.all(
+          messages.slice(0, maxResults).map(async (msgItem: any) => {
+            const detailRes = await fetch(
+              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgItem.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
+              { headers: { Authorization: `Bearer ${accessToken}` } }
+            );
+            const detailData: any = await detailRes.json().catch(() => ({}));
+            const headers = detailData.payload?.headers || [];
+            const getH = (name: string) => headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+
+            return {
+              id: msgItem.id,
+              threadId: msgItem.threadId,
+              subject: getH('Subject') || '(Sem Assunto)',
+              from: getH('From'),
+              date: getH('Date'),
+              snippet: detailData.snippet || ''
+            };
+          })
+        );
+
+        return {
+          success: true,
+          provider: 'gmail',
+          action: 'read_inbox',
+          total: details.length,
+          messages: details
+        };
+      }
+
+      // 2. AÇÃO: ENVIAR E-MAIL (Base64URL RFC 2822)
       const rawEmail = Buffer.from(
-        `To: ${payload.to || ''}\r\nSubject: ${payload.subject || 'JARVIS'}\r\n\r\n${payload.body || payload.text || ''}`
+        `To: ${payload.to}\r\nSubject: =?utf-8?B?${Buffer.from(payload.subject || 'JARVIS').toString('base64')}?=\r\nContent-Type: text/plain; charset="UTF-8"\r\nMIME-Version: 1.0\r\n\r\n${payload.body || payload.text || ''}`
       )
         .toString('base64')
         .replace(/\+/g, '-')
@@ -87,9 +144,11 @@ export async function executeExternalConnector({
         body: JSON.stringify({ raw: rawEmail })
       });
       const data = await res.json().catch(() => ({}));
-      return { success: res.ok, provider: 'gmail', data };
-    }
+      if (!res.ok) throw new Error(data.error?.message || 'Falha ao enviar e-mail via Gmail API.');
 
+      return { success: true, provider: 'gmail', action: 'send_email', data };
+    }
+      
     case 'google_sheets': {
       const accessToken = token || process.env.GOOGLE_SHEETS_TOKEN || '';
       const spreadsheetId = config.spreadsheet_id || payload.spreadsheetId;
