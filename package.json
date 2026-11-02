@@ -7,7 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "dev:frontend": "vite",
     "build:frontend": "vite build",
-    "build": "tsup src && vite build",
+    "build": "tsup src/server.ts --format cjs --clean",
     "start": "node dist/server.js"
   },
   "dependencies": {
