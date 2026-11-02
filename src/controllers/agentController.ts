@@ -1,4 +1,11 @@
 // src/controllers/agentController.ts
+import {
+  listAvailableCredentialsMetadata,
+  resolveSecretByCredentialId,
+  validateAutonomousAgentBlueprint
+} from '../services/credentialMapperService.js';
+import { listAvailableCredentials } from '../controllers/agentController.js';
+agentRoutes.get('/credentials', listAvailableCredentials);
 import { Request, Response } from 'express';
 import { pool } from '../config/database.js';
 import { emitBrainLinkEvent } from '../services/brainSocketService.js';
@@ -340,6 +347,15 @@ export async function createAgent(req: Request, res: Response) {
       ? slugify(slug)
       : `${slugify(name)}_${Date.now().toString(36).slice(-4)}`;
     const defaultIcon = agent_type === 'mcp' ? '🔌' : agent_type === 'api' ? '🌐' : '🤖';
+
+    // Se foi enviado um credential_id (ex: "llm_cred:groq" ou "ext_cred:brapi"), resolve no cofre interno
+    const resolvedCred = await resolveSecretByCredentialId(
+      req.body?.credential_id || req.body?.credentials?.id
+    );
+    const finalProvider = resolvedCred.provider || provider;
+    const finalApiKey = api_key || resolvedCred.api_key || '';
+    const finalAuthToken = auth_token || resolvedCred.auth_token || '';
+    const finalEndpointUrl = endpoint_url || resolvedCred.endpoint_url || '';
 
     const result = await pool.query(
       `INSERT INTO ai_agents (
@@ -710,6 +726,22 @@ export async function resolveWaitStateDecision(req: Request, res: Response) {
       message: `Aprovação confirmada! Fluxo do agente [${agent.name}] retomado com sucesso.`,
       waitState: updatedWait,
       executionResult: resumedResult
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+/**
+ * Endpoint GET /api/v1/agents/credentials
+ * Lista todas as credenciais salvas no servidor retornando APENAS IDs e metadados
+ */
+export async function listAvailableCredentials(_req: Request, res: Response) {
+  try {
+    const credentials = await listAvailableCredentialsMetadata();
+    return res.status(200).json({
+      success: true,
+      total: credentials.length,
+      data: credentials
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
