@@ -1,12 +1,9 @@
-// src/controllers/brainConfigController.ts
 import { Request, Response } from 'express';
 import { pool } from '../config/database.js';
 import fs from 'fs';
 import path from 'path';
 import net from 'net';
 
-
-// Trecho essencial para src/controllers/brainConfigController.ts
 export const KNOWN_ENDPOINTS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
   gemini: 'https://generativelanguage.googleapis.com/v1beta',
@@ -25,125 +22,6 @@ export const DEFAULT_MODELS: Record<string, string> = {
   ollama: 'llama3.1:8b'
 };
 
-export async function validateLLMConnection(req: Request, res: Response) {
-  try {
-    const { provider = 'groq', model, api_key, base_url } = req.body || {};
-    const apiKey = api_key ? String(api_key).trim() : '';
-
-    // Detecta automaticamente o provedor real pelo prefixo da chave
-    let effectiveProvider = String(provider).toLowerCase().trim();
-    if (apiKey.startsWith('gsk_')) effectiveProvider = 'groq';
-    else if (apiKey.startsWith('AIza')) effectiveProvider = 'gemini';
-
-    if (!apiKey && effectiveProvider !== 'ollama') {
-      return res.status(200).json({
-        success: false,
-        error: `Chave de API não informada para o provedor ${effectiveProvider.toUpperCase()}.`
-      });
-    }
-
-    let targetModel = model ? String(model).trim() : DEFAULT_MODELS[effectiveProvider];
-
-    // 1. Validação Nativa Direta para Google Gemini
-    if (effectiveProvider === 'gemini') {
-      if (!targetModel.startsWith('gemini') || targetModel.includes('argon') || targetModel.includes('3.8') || targetModel.includes('2.0')) {
-        targetModel = 'gemini-2.5-flash';
-      }
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`;
-      const response = await fetch(geminiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: 'Responda apenas OK' }] }] }),
-        signal: AbortSignal.timeout(12000)
-      });
-      const data: any = await response.json();
-      if (!response.ok) {
-        return res.status(200).json({
-          success: false,
-          error: `[Gemini Recusou (${response.status})]: ${data?.error?.message || JSON.stringify(data)}`
-        });
-      }
-      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'OK';
-      return res.status(200).json({
-        success: true,
-        message: `Conexão bem-sucedida com GEMINI! Modelo [${targetModel}] respondeu: "${reply}"`,
-        provider: 'gemini',
-        model: targetModel
-      });
-    }
-
-    // 2. Validação Direta para Groq / OpenAI / DeepSeek / OpenRouter
-    if (effectiveProvider === 'groq' && (!targetModel || targetModel.startsWith('gemini') || targetModel.startsWith('gpt'))) {
-      targetModel = 'llama-3.3-70b-versatile';
-    } else if (effectiveProvider === 'openai' && !targetModel.startsWith('gpt') && !targetModel.startsWith('o')) {
-      targetModel = 'gpt-4o-mini';
-    }
-
-    const resolvedBaseUrl = (KNOWN_ENDPOINTS[effectiveProvider] || base_url?.trim() || KNOWN_ENDPOINTS.groq).replace(/\/+$/, '');
-    const response = await fetch(`${resolvedBaseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(apiKey && effectiveProvider !== 'ollama' ? { Authorization: `Bearer ${apiKey}` } : {})
-      },
-      body: JSON.stringify({
-        model: targetModel,
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: 5
-      }),
-      signal: AbortSignal.timeout(12000)
-    });
-
-    const data: any = await response.json();
-
-    // Fallback automático na Groq para llama-3.1-8b-instant caso o 70B dê erro 404/429
-    if (!response.ok && effectiveProvider === 'groq' && targetModel !== 'llama-3.1-8b-instant') {
-      const retryRes = await fetch(`${resolvedBaseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          messages: [{ role: 'user', content: 'ping' }],
-          max_tokens: 5
-        })
-      });
-      const retryData: any = await retryRes.json();
-      if (retryRes.ok) {
-        return res.status(200).json({
-          success: true,
-          message: `Conexão bem-sucedida com GROQ! Modelo [llama-3.1-8b-instant] respondeu: "${retryData?.choices?.[0]?.message?.content?.trim() || 'OK'}"`,
-          provider: 'groq',
-          model: 'llama-3.1-8b-instant'
-        });
-      }
-    }
-
-    if (!response.ok) {
-      return res.status(200).json({
-        success: false,
-        error: `[${effectiveProvider.toUpperCase()} Recusou (${response.status})]: ${data?.error?.message || JSON.stringify(data)}`
-      });
-    }
-
-    const reply = data?.choices?.[0]?.message?.content?.trim() || 'OK';
-    return res.status(200).json({
-      success: true,
-      message: `Conexão bem-sucedida com ${effectiveProvider.toUpperCase()}! Modelo [${targetModel}] respondeu: "${reply}"`,
-      provider: effectiveProvider,
-      model: targetModel
-    });
-  } catch (error: any) {
-    return res.status(200).json({
-      success: false,
-      error: `Falha na conexão: ${error.message}`
-    });
-  }
-}
-
-// Catálogo local de contingência (mesma estrutura do seu GitHub Gist)
 export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string }>> = {
   groq: [
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
@@ -182,17 +60,11 @@ export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string
   ]
 };
 
-// URL sem o hash de commit para buscar sempre a revisão mais recente do seu GitHub Gist
-const GITHUB_MODELS_GIST_URL =
+const DEFAULT_GIST_RAW_URL =
   process.env.MODELS_GIST_RAW_URL ||
+  process.env.MODELS_GIST_URL ||
   'https://gist.githubusercontent.com/dullius-lima/f672db978789103941a45d2968e386e5/raw/models.json';
 
-let cachedGistModels: Record<string, Array<{ label: string; value: string }>> | null = null;
-let lastGistSync: string | null = null;
-
-/**
- * Exportado para uso no orchestratorService.ts
- */
 export function getEnvRegisteredPort(): number {
   const envPort = Number(process.env.PORT);
   return !isNaN(envPort) && envPort > 0 ? envPort : 3333;
@@ -208,9 +80,6 @@ async function ensureSystemConfigsTable() {
   `);
 }
 
-/**
- * Normaliza a lista vinda do Gist para garantir que todos os provedores tenham a opção CUSTOM_INPUT
- */
 function normalizeModelsCatalog(rawCatalog: any): Record<string, Array<{ label: string; value: string }>> {
   const merged: Record<string, Array<{ label: string; value: string }>> = { ...CATALOG_MODELS };
   if (!rawCatalog || typeof rawCatalog !== 'object') return merged;
@@ -239,13 +108,12 @@ function normalizeModelsCatalog(rawCatalog: any): Record<string, Array<{ label: 
 
 /**
  * GET /api/v1/brain-config/models
- * Busca automaticamente os modelos do seu GitHub Gist (ou força atualização com ?refresh=true)
+ * Busca automaticamente os modelos do GitHub Gist e alinha agentes com modelos obsoletos
  */
 export async function syncModelsFromGistAndHealAgents(): Promise<{
   catalog: Record<string, { label: string; value: string }[]>;
   source: string;
 }> {
-  // Remove qualquer hash de commit caso exista no .env para garantir sempre a última versão do Gist
   const rawEnvUrl = (process.env.MODELS_GIST_URL || DEFAULT_GIST_RAW_URL).trim();
   const cleanGistUrl = rawEnvUrl.replace(/\/raw\/[a-f0-9]{20,40}\//i, '/raw/');
   const fetchUrl = `${cleanGistUrl}${cleanGistUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
@@ -259,13 +127,14 @@ export async function syncModelsFromGistAndHealAgents(): Promise<{
       headers: {
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         Pragma: 'no-cache'
-      }
+      },
+      signal: AbortSignal.timeout(8000)
     });
 
     if (response.ok) {
       const remoteJson = await response.json();
       if (remoteJson && typeof remoteJson === 'object') {
-        activeCatalog = { ...CATALOG_MODELS, ...remoteJson };
+        activeCatalog = normalizeModelsCatalog(remoteJson);
         source = 'GitHub Gist (Tempo Real)';
       }
     }
@@ -273,7 +142,6 @@ export async function syncModelsFromGistAndHealAgents(): Promise<{
     console.warn('[Gist Auto-Sync] Falha ao ler Gist remoto, mantendo fallback:', err.message);
   }
 
-  // AUTO-ATUALIZAÇÃO DOS AGENTES E DO CÉREBRO CENTRAL NO POSTGRESQL
   try {
     for (const [providerKey, modelsList] of Object.entries(activeCatalog)) {
       if (!Array.isArray(modelsList)) continue;
@@ -283,9 +151,8 @@ export async function syncModelsFromGistAndHealAgents(): Promise<{
         .filter((val) => val && val !== 'CUSTOM_INPUT');
 
       if (validModels.length === 0) continue;
-      const primaryRecommendedModel = validModels[0]; // Primeiro modelo válido do seu Gist para aquele provedor
+      const primaryRecommendedModel = validModels[0];
 
-      // 1. Atualiza automaticamente todos os Agentes Especialistas daquele provedor cujo modelo não esteja na lista atualizada
       await pool.query(
         `UPDATE ai_agents
          SET model = $1, updated_at = NOW()
@@ -295,7 +162,6 @@ export async function syncModelsFromGistAndHealAgents(): Promise<{
       );
     }
 
-    // 2. Verifica se o Cérebro Central (JARVIS) está com modelo desatualizado e o alinha automaticamente
     const brainRes = await pool.query(
       `SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;`
     );
@@ -324,7 +190,7 @@ export async function syncModelsFromGistAndHealAgents(): Promise<{
   return { catalog: activeCatalog, source };
 }
 
-export async function getSupportedModels(req: Request, res: Response) {
+export async function getSupportedModels(_req: Request, res: Response) {
   const { catalog, source } = await syncModelsFromGistAndHealAgents();
   return res.status(200).json({
     success: true,
@@ -334,17 +200,18 @@ export async function getSupportedModels(req: Request, res: Response) {
   });
 }
 
+export const getHomologatedModels = getSupportedModels;
+
 /**
  * GET /api/v1/brain-config
- * Carrega a configuração do Cérebro Central (JARVIS) e o cofre saved_keys
  */
 export async function getBrainConfig(_req: Request, res: Response) {
   const activePort = getEnvRegisteredPort();
   try {
     await ensureSystemConfigsTable();
     const result = await pool.query(`
-      SELECT value FROM system_configs 
-      WHERE key IN ('brain_llm_config', 'brain_llm') 
+      SELECT value FROM system_configs
+      WHERE key IN ('brain_llm_config', 'brain_llm', 'brain_config')
       ORDER BY updated_at DESC LIMIT 1;
     `);
 
@@ -417,7 +284,6 @@ export async function getBrainConfig(_req: Request, res: Response) {
 
 /**
  * PUT /api/v1/brain-config
- * Salva as configurações do JARVIS preservando o cofre saved_keys de cada provedor
  */
 export async function updateBrainConfig(req: Request, res: Response) {
   const activePort = getEnvRegisteredPort();
@@ -438,7 +304,6 @@ export async function updateBrainConfig(req: Request, res: Response) {
 
     const normalizedProvider = (provider || 'groq').toLowerCase().trim();
 
-    // Carrega configuração anterior para preservar chaves salvas de outros provedores
     const existingRes = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_llm_config';");
     let existingData: any = {};
     if (existingRes.rows.length > 0) {
@@ -458,7 +323,6 @@ export async function updateBrainConfig(req: Request, res: Response) {
 
     const finalApiKey = cleanApiKey || mergedKeys[normalizedProvider] || '';
 
-    // Evita que a Base URL de um provedor antigo fique presa ao trocar de provedor
     const isKnownOtherEndpoint = Object.entries(KNOWN_ENDPOINTS).some(
       ([k, url]) => k !== normalizedProvider && base_url?.trim() === url
     );
@@ -485,12 +349,11 @@ export async function updateBrainConfig(req: Request, res: Response) {
     await pool.query(
       `INSERT INTO system_configs (key, value, updated_at)
        VALUES ('brain_llm_config', $1, NOW())
-       ON CONFLICT (key) DO UPDATE 
+       ON CONFLICT (key) DO UPDATE
        SET value = EXCLUDED.value, updated_at = NOW();`,
       [JSON.stringify(newConfig)]
     );
 
-    // Salva histórico de versão de prompt se houver mudança
     try {
       const historyRes = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_prompt_versions';");
       const versions: any[] = historyRes.rows.length > 0 ? historyRes.rows[0].value : [];
@@ -522,25 +385,38 @@ export async function updateBrainConfig(req: Request, res: Response) {
 
 /**
  * POST /api/v1/brain-config/validate
- * Valida a conexão e a chave de API com qualquer provedor (com fallback inteligente de modelo)
+ * Valida a conexão e a chave de API (declaração única e unificada)
  */
 export async function validateLLMConnection(req: Request, res: Response) {
   try {
-    const { provider, model, api_key, base_url } = req.body || {};
-    const normalizedProvider = (provider || 'groq').toLowerCase().trim();
-    const cleanKey = (api_key || '').trim();
-    const selectedModel = (model && model !== 'CUSTOM_INPUT' ? model : DEFAULT_MODELS[normalizedProvider]).trim();
+    const { provider = 'groq', model, api_key, base_url } = req.body || {};
+    const cleanKey = api_key ? String(api_key).trim() : '';
 
-    if (normalizedProvider !== 'ollama' && !cleanKey) {
+    let effectiveProvider = String(provider).toLowerCase().trim();
+    if (cleanKey.startsWith('gsk_')) effectiveProvider = 'groq';
+    else if (cleanKey.startsWith('AIza')) effectiveProvider = 'gemini';
+
+    if (!cleanKey && effectiveProvider !== 'ollama') {
       return res.status(200).json({
         success: false,
-        error: `A Chave de API (API Key) para ${normalizedProvider.toUpperCase()} está vazia.`
+        error: `A Chave de API (API Key) para ${effectiveProvider.toUpperCase()} não foi informada.`
       });
     }
 
-    // 1. Validação direta na API do Google Gemini (suporta chave Google AI Studio)
-    if (normalizedProvider === 'gemini') {
-      const testModels = Array.from(new Set([selectedModel, 'gemini-2.5-flash', 'gemini-1.5-flash']));
+    const rawSelectedModel =
+      model && model !== 'CUSTOM_INPUT' ? String(model).trim() : DEFAULT_MODELS[effectiveProvider];
+
+    // 1. Validação direta na API do Google Gemini
+    if (effectiveProvider === 'gemini') {
+      const sanitizedModel =
+        !rawSelectedModel.startsWith('gemini') ||
+        rawSelectedModel.includes('argon') ||
+        rawSelectedModel.includes('3.8') ||
+        rawSelectedModel.includes('2.0')
+          ? 'gemini-2.5-flash'
+          : rawSelectedModel;
+
+      const testModels = Array.from(new Set([sanitizedModel, 'gemini-2.5-flash', 'gemini-1.5-flash']));
       let lastErr = '';
 
       for (const m of testModels) {
@@ -557,11 +433,10 @@ export async function validateLLMConnection(req: Request, res: Response) {
         if (resp.ok) {
           return res.status(200).json({
             success: true,
+            provider: 'gemini',
+            model: m,
             usedModel: m,
-            message:
-              m !== selectedModel
-                ? `Chave Gemini validada! (O modelo '${selectedModel}' não estava habilitado na sua conta; conectado via '${m}').`
-                : `Conexão com Google Gemini (${m}) validada com sucesso!`
+            message: `Conexão com Google Gemini (${m}) validada com sucesso!`
           });
         }
         const errBody = await resp.text();
@@ -570,22 +445,29 @@ export async function validateLLMConnection(req: Request, res: Response) {
 
       return res.status(200).json({
         success: false,
-        error: `Falha ao validar Gemini (${selectedModel}): ${lastErr}`
+        error: `Falha ao validar Gemini (${sanitizedModel}): ${lastErr}`
       });
     }
 
-    // 2. Demais provedores compatíveis com OpenAI (Groq, OpenAI, DeepSeek, OpenRouter, Ollama)
+    // 2. Provedores compatíveis com OpenAI (Groq, OpenAI, DeepSeek, OpenRouter, Ollama)
+    let selectedModel = rawSelectedModel;
+    if (effectiveProvider === 'groq' && (!selectedModel || selectedModel.startsWith('gemini') || selectedModel.startsWith('gpt'))) {
+      selectedModel = 'llama-3.3-70b-versatile';
+    } else if (effectiveProvider === 'openai' && !selectedModel.startsWith('gpt') && !selectedModel.startsWith('o')) {
+      selectedModel = 'gpt-4o-mini';
+    }
+
     const isOtherKnown = Object.entries(KNOWN_ENDPOINTS).some(
-      ([k, url]) => k !== normalizedProvider && base_url?.trim() === url
+      ([k, url]) => k !== effectiveProvider && base_url?.trim() === url
     );
     const targetBaseUrl = (
       !base_url?.trim() || isOtherKnown
-        ? KNOWN_ENDPOINTS[normalizedProvider] || KNOWN_ENDPOINTS.groq
+        ? KNOWN_ENDPOINTS[effectiveProvider] || KNOWN_ENDPOINTS.groq
         : base_url.trim()
     ).replace(/\/+$/, '');
 
     const candidateModels =
-      normalizedProvider === 'groq'
+      effectiveProvider === 'groq'
         ? Array.from(new Set([selectedModel, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant']))
         : [selectedModel];
 
@@ -595,12 +477,12 @@ export async function validateLLMConnection(req: Request, res: Response) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${cleanKey || 'ollama'}`
+          ...(cleanKey && effectiveProvider !== 'ollama' ? { Authorization: `Bearer ${cleanKey}` } : {})
         },
         body: JSON.stringify({
           model: candidate,
-          messages: [{ role: 'user', content: 'Responda apenas OK.' }],
-          max_tokens: 10
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 5
         }),
         signal: AbortSignal.timeout(12000)
       });
@@ -608,11 +490,10 @@ export async function validateLLMConnection(req: Request, res: Response) {
       if (resp.ok) {
         return res.status(200).json({
           success: true,
+          provider: effectiveProvider,
+          model: candidate,
           usedModel: candidate,
-          message:
-            candidate !== selectedModel
-              ? `Chave ${normalizedProvider.toUpperCase()} validada! (Modelo ajustado automaticamente para '${candidate}').`
-              : `Conexão com ${normalizedProvider.toUpperCase()} (${candidate}) validada com sucesso!`
+          message: `Conexão com ${effectiveProvider.toUpperCase()} (${candidate}) validada com sucesso!`
         });
       }
       const errText = await resp.text();
@@ -621,7 +502,7 @@ export async function validateLLMConnection(req: Request, res: Response) {
 
     return res.status(200).json({
       success: false,
-      error: `Falha na validação (${normalizedProvider.toUpperCase()} - ${selectedModel}): ${lastErrorMsg}`
+      error: `Falha na validação (${effectiveProvider.toUpperCase()} - ${selectedModel}): ${lastErrorMsg}`
     });
   } catch (error: any) {
     return res.status(200).json({
@@ -631,7 +512,6 @@ export async function validateLLMConnection(req: Request, res: Response) {
   }
 }
 
-// Alias para compatibilidade com server.ts
 export const validateBrainConnection = validateLLMConnection;
 
 /**
@@ -652,7 +532,6 @@ export async function listPromptVersions(_req: Request, res: Response) {
 
 /**
  * POST /api/v1/brain-config/port
- * Gerenciador de Porta TCP e atualização segura do .env
  */
 export async function manageServerPortAndEnv(req: Request, res: Response) {
   try {
@@ -670,7 +549,6 @@ export async function manageServerPortAndEnv(req: Request, res: Response) {
       });
     }
 
-    // Verifica se a porta está livre via socket TCP
     const isPortFree = await new Promise<boolean>((resolve) => {
       const tester = net
         .createServer()
