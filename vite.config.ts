@@ -11,24 +11,29 @@ export default defineConfig({
     hmr: {
       overlay: false
     },
+    fs: {
+      strict: false,
+      deny: ['.git', '**/.git/**', '**/node_modules/.git/**']
+    },
     watch: {
-      ignored: ['**/.git/**', '**/node_modules/**', '**/dist/**']
+      ignored: ['**/.git/**', '**/node_modules/**', '**/dist/**', '**/backups/**']
     },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:3333',
-        changeOrigin: true,
+        changeOrigin: true
       }
     }
   },
   optimizeDeps: {
+    entries: ['index.html', 'settings.html'],
     exclude: ['.git']
   },
   build: {
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
-        settings: resolve(__dirname, 'settings.html'),
+        settings: resolve(__dirname, 'settings.html')
       }
     }
   }
