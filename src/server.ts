@@ -1,4 +1,3 @@
-// src/server.ts
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -12,7 +11,6 @@ import { initializeTriggerSchema, dispatchErrorTrigger } from './services/errorT
 import { startScheduleTriggerEngine } from './services/scheduleTriggerService.js';
 import { startMemoryAndBackupScheduler } from './services/securityGovernanceService.js';
 import { startAgentWatchdog } from './services/agentWatchdogService.js';
-import { getSupportedModels, syncModelsFromGistAndHealAgents } from './controllers/brainConfigController.js';
 
 import * as triggerRoutesMod from './routes/triggerRoutes.js';
 import * as authRoutesMod from './routes/authRoutes.js';
@@ -46,7 +44,10 @@ import {
   getBrainConfig,
   updateBrainConfig,
   validateLLMConnection,
-  getSupportedModels
+  getSupportedModels,
+  syncModelsFromGistAndHealAgents,
+  listPromptVersions,
+  manageServerPortAndEnv
 } from './controllers/brainConfigController.js';
 import * as connectorController from './controllers/connectorController.js';
 
@@ -85,28 +86,32 @@ function resolveRouter(mod: any): express.Router {
   return express.Router();
 }
 
-// Constantes declaradas FORA da função resolveRouter:
 const triggerRoutes = resolveRouter(triggerRoutesMod);
 const authRoutes = resolveRouter(authRoutesMod);
 const agentRoutes = resolveRouter(agentRoutesMod);
 const ragRoutes = resolveRouter(ragRoutesMod);
 const messagingRoutes = resolveRouter(messagingRoutesMod);
 
+const app = express();
+const PORT = Number(process.env.PORT || 3333);
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 // 1. Módulos Principais de Rotas
-app.use('/api/v1/auth', resolveRouter(authRoutesMod));
-app.use('/api/v1/agents', resolveRouter(agentRoutesMod));
-app.use('/api/v1/rag', resolveRouter(ragRoutesMod));
-app.use('/api/v1/messaging', resolveRouter(messagingRoutesMod));
-app.use('/api/v1/triggers', resolveRouter(triggerRoutesMod));
+app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/agents', agentRoutes);
+app.use('/api/v1/rag', ragRoutes);
+app.use('/api/v1/messaging', messagingRoutes);
+app.use('/api/v1/triggers', triggerRoutes);
 
 // 2. Configurações Dinâmicas do Cérebro Central (JARVIS / SNC) + Sincronização GitHub Gist
 app.get('/api/v1/brain-config', getBrainConfig);
 app.put('/api/v1/brain-config', updateBrainConfig);
 app.post('/api/v1/brain-config/validate', validateLLMConnection);
 app.get('/api/v1/brain-config/models', getSupportedModels);
+app.get('/api/v1/brain-config/prompt-versions', listPromptVersions);
+app.post('/api/v1/brain-config/port', manageServerPortAndEnv);
 
 // 3. Conectores Externos & Chaves de API das Tools
 app.get('/api/v1/connectors', connectorController.listConnectors);
@@ -171,7 +176,7 @@ app.delete('/api/v1/docs-ssh/rag/documents/:id', handleDeleteRagDocument);
 app.post('/api/v1/docs-ssh/ssh/execute', handleSshExecute);
 app.post('/api/v1/docs-ssh/ssh/read-to-rag', handleSshReadToRag);
 
-// 6. Webhooks de Entrada (Orquestrador Central, Áudio Whisper e Agentes Diretos)
+// 6. Webhooks de Entrada
 app.post('/api/v1/webhook/ingress', handleWebhookIngress);
 app.post('/api/v1/audio/transcribe', handleLocalAudioTranscribe);
 app.all('/api/v1/webhook/agents/:slug', handleAgentProductionWebhook);
@@ -224,5 +229,50 @@ server.listen(PORT, async () => {
     startMemoryAndBackupScheduler();
   } catch (err: any) {
     console.error('❌ Falha na inicialização do banco/esquema:', err.message);
+  }
+});
+EOF
+
+# 3. Impedir que o vite build apague o dist/server.js (emptyOutDir: false)
+cat << 'EOF' > vite.config.ts
+import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
+import { resolve } from 'path';
+
+export default defineConfig({
+  plugins: [vue()],
+  root: '.',
+  server: {
+    host: '0.0.0.0',
+    port: 5173,
+    hmr: {
+      overlay: false
+    },
+    fs: {
+      strict: false,
+      deny: ['.git', '**/.git/**', '**/node_modules/.git/**']
+    },
+    watch: {
+      ignored: ['**/.git/**', '**/node_modules/**', '**/dist/**', '**/backups/**']
+    },
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:3333',
+        changeOrigin: true
+      }
+    }
+  },
+  optimizeDeps: {
+    entries: ['index.html', 'settings.html'],
+    exclude: ['.git']
+  },
+  build: {
+    emptyOutDir: false,
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        settings: resolve(__dirname, 'settings.html')
+      }
+    }
   }
 });
