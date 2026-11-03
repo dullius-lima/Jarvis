@@ -1,3 +1,4 @@
+// src/server.ts
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -176,7 +177,7 @@ app.delete('/api/v1/docs-ssh/rag/documents/:id', handleDeleteRagDocument);
 app.post('/api/v1/docs-ssh/ssh/execute', handleSshExecute);
 app.post('/api/v1/docs-ssh/ssh/read-to-rag', handleSshReadToRag);
 
-// 6. Webhooks de Entrada
+// 6. Webhooks de Entrada (Orquestrador Central, Áudio Whisper e Agentes Diretos)
 app.post('/api/v1/webhook/ingress', handleWebhookIngress);
 app.post('/api/v1/audio/transcribe', handleLocalAudioTranscribe);
 app.all('/api/v1/webhook/agents/:slug', handleAgentProductionWebhook);
@@ -229,50 +230,5 @@ server.listen(PORT, async () => {
     startMemoryAndBackupScheduler();
   } catch (err: any) {
     console.error('❌ Falha na inicialização do banco/esquema:', err.message);
-  }
-});
-EOF
-
-# 3. Impedir que o vite build apague o dist/server.js (emptyOutDir: false)
-cat << 'EOF' > vite.config.ts
-import { defineConfig } from 'vite';
-import vue from '@vitejs/plugin-vue';
-import { resolve } from 'path';
-
-export default defineConfig({
-  plugins: [vue()],
-  root: '.',
-  server: {
-    host: '0.0.0.0',
-    port: 5173,
-    hmr: {
-      overlay: false
-    },
-    fs: {
-      strict: false,
-      deny: ['.git', '**/.git/**', '**/node_modules/.git/**']
-    },
-    watch: {
-      ignored: ['**/.git/**', '**/node_modules/**', '**/dist/**', '**/backups/**']
-    },
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:3333',
-        changeOrigin: true
-      }
-    }
-  },
-  optimizeDeps: {
-    entries: ['index.html', 'settings.html'],
-    exclude: ['.git']
-  },
-  build: {
-    emptyOutDir: false,
-    rollupOptions: {
-      input: {
-        main: resolve(__dirname, 'index.html'),
-        settings: resolve(__dirname, 'settings.html')
-      }
-    }
   }
 });
