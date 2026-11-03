@@ -106,10 +106,6 @@ function normalizeModelsCatalog(rawCatalog: any): Record<string, Array<{ label: 
   return merged;
 }
 
-/**
- * GET /api/v1/brain-config/models
- * Busca automaticamente os modelos do GitHub Gist e alinha agentes com modelos obsoletos
- */
 export async function syncModelsFromGistAndHealAgents(): Promise<{
   catalog: Record<string, { label: string; value: string }[]>;
   source: string;
@@ -195,16 +191,15 @@ export async function getSupportedModels(_req: Request, res: Response) {
   return res.status(200).json({
     success: true,
     source,
+    models: catalog,
     catalog,
-    data: catalog
+    data: catalog,
+    endpoints: KNOWN_ENDPOINTS
   });
 }
 
 export const getHomologatedModels = getSupportedModels;
 
-/**
- * GET /api/v1/brain-config
- */
 export async function getBrainConfig(_req: Request, res: Response) {
   const activePort = getEnvRegisteredPort();
   try {
@@ -282,9 +277,6 @@ export async function getBrainConfig(_req: Request, res: Response) {
   }
 }
 
-/**
- * PUT /api/v1/brain-config
- */
 export async function updateBrainConfig(req: Request, res: Response) {
   const activePort = getEnvRegisteredPort();
   try {
@@ -383,10 +375,6 @@ export async function updateBrainConfig(req: Request, res: Response) {
   }
 }
 
-/**
- * POST /api/v1/brain-config/validate
- * Valida a conexão e a chave de API (declaração única e unificada)
- */
 export async function validateLLMConnection(req: Request, res: Response) {
   try {
     const { provider = 'groq', model, api_key, base_url } = req.body || {};
@@ -406,7 +394,6 @@ export async function validateLLMConnection(req: Request, res: Response) {
     const rawSelectedModel =
       model && model !== 'CUSTOM_INPUT' ? String(model).trim() : DEFAULT_MODELS[effectiveProvider];
 
-    // 1. Validação direta na API do Google Gemini
     if (effectiveProvider === 'gemini') {
       const sanitizedModel =
         !rawSelectedModel.startsWith('gemini') ||
@@ -449,7 +436,6 @@ export async function validateLLMConnection(req: Request, res: Response) {
       });
     }
 
-    // 2. Provedores compatíveis com OpenAI (Groq, OpenAI, DeepSeek, OpenRouter, Ollama)
     let selectedModel = rawSelectedModel;
     if (effectiveProvider === 'groq' && (!selectedModel || selectedModel.startsWith('gemini') || selectedModel.startsWith('gpt'))) {
       selectedModel = 'llama-3.3-70b-versatile';
@@ -514,9 +500,6 @@ export async function validateLLMConnection(req: Request, res: Response) {
 
 export const validateBrainConnection = validateLLMConnection;
 
-/**
- * GET /api/v1/brain-config/prompt-versions
- */
 export async function listPromptVersions(_req: Request, res: Response) {
   try {
     await ensureSystemConfigsTable();
@@ -530,9 +513,6 @@ export async function listPromptVersions(_req: Request, res: Response) {
   }
 }
 
-/**
- * POST /api/v1/brain-config/port
- */
 export async function manageServerPortAndEnv(req: Request, res: Response) {
   try {
     const newPort = Number(req.body?.port);
