@@ -241,55 +241,96 @@ function normalizeModelsCatalog(rawCatalog: any): Record<string, Array<{ label: 
  * GET /api/v1/brain-config/models
  * Busca automaticamente os modelos do seu GitHub Gist (ou força atualização com ?refresh=true)
  */
-export async function getSupportedModels(req: Request, res: Response) {
-  const forceRefresh = req.query.refresh === 'true';
+export async function syncModelsFromGistAndHealAgents(): Promise<{
+  catalog: Record<string, { label: string; value: string }[]>;
+  source: string;
+}> {
+  // Remove qualquer hash de commit caso exista no .env para garantir sempre a última versão do Gist
+  const rawEnvUrl = (process.env.MODELS_GIST_URL || DEFAULT_GIST_RAW_URL).trim();
+  const cleanGistUrl = rawEnvUrl.replace(/\/raw\/[a-f0-9]{20,40}\//i, '/raw/');
+  const fetchUrl = `${cleanGistUrl}${cleanGistUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+
+  let activeCatalog = CATALOG_MODELS;
+  let source = 'Catálogo Local (Fallback)';
 
   try {
-    if (!cachedGistModels || forceRefresh) {
-      const fetchUrl = `${GITHUB_MODELS_GIST_URL}${GITHUB_MODELS_GIST_URL.includes('?') ? '&' : '?'}t=${Date.now()}`;
-      const response = await fetch(fetchUrl, {
-        cache: 'no-store',
-        signal: AbortSignal.timeout(8000)
-      });
-
-      if (response.ok) {
-        const rawJson = await response.json();
-        cachedGistModels = normalizeModelsCatalog(rawJson);
-        lastGistSync = new Date().toISOString();
-
-        return res.status(200).json({
-          success: true,
-          source: 'github_gist',
-          gistUrl: GITHUB_MODELS_GIST_URL,
-          syncedAt: lastGistSync,
-          models: cachedGistModels,
-          catalog: cachedGistModels,
-          endpoints: KNOWN_ENDPOINTS
-        });
+    const response = await fetch(fetchUrl, {
+      method: 'GET',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache'
       }
-    } else {
-      return res.status(200).json({
-        success: true,
-        source: 'github_gist_cache',
-        gistUrl: GITHUB_MODELS_GIST_URL,
-        syncedAt: lastGistSync,
-        models: cachedGistModels,
-        catalog: cachedGistModels,
-        endpoints: KNOWN_ENDPOINTS
-      });
+    });
+
+    if (response.ok) {
+      const remoteJson = await response.json();
+      if (remoteJson && typeof remoteJson === 'object') {
+        activeCatalog = { ...CATALOG_MODELS, ...remoteJson };
+        source = 'GitHub Gist (Tempo Real)';
+      }
     }
-  } catch (error: any) {
-    console.warn('⚠️ [GitHub Gist Models] Usando fallback local:', error?.message);
+  } catch (err: any) {
+    console.warn('[Gist Auto-Sync] Falha ao ler Gist remoto, mantendo fallback:', err.message);
   }
 
+  // AUTO-ATUALIZAÇÃO DOS AGENTES E DO CÉREBRO CENTRAL NO POSTGRESQL
+  try {
+    for (const [providerKey, modelsList] of Object.entries(activeCatalog)) {
+      if (!Array.isArray(modelsList)) continue;
+
+      const validModels = modelsList
+        .map((m) => m.value)
+        .filter((val) => val && val !== 'CUSTOM_INPUT');
+
+      if (validModels.length === 0) continue;
+      const primaryRecommendedModel = validModels[0]; // Primeiro modelo válido do seu Gist para aquele provedor
+
+      // 1. Atualiza automaticamente todos os Agentes Especialistas daquele provedor cujo modelo não esteja na lista atualizada
+      await pool.query(
+        `UPDATE ai_agents
+         SET model = $1, updated_at = NOW()
+         WHERE LOWER(provider) = LOWER($2)
+           AND (model IS NULL OR model = '' OR NOT (model = ANY($3::text[])));`,
+        [primaryRecommendedModel, providerKey, validModels]
+      );
+    }
+
+    // 2. Verifica se o Cérebro Central (JARVIS) está com modelo desatualizado e o alinha automaticamente
+    const brainRes = await pool.query(
+      `SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;`
+    );
+    if (brainRes.rows.length > 0 && brainRes.rows[0].value) {
+      const cfg =
+        typeof brainRes.rows[0].value === 'string'
+          ? JSON.parse(brainRes.rows[0].value)
+          : brainRes.rows[0].value;
+      const prov = (cfg.provider || 'groq').toLowerCase();
+      const provModels = (activeCatalog[prov] || [])
+        .map((m) => m.value)
+        .filter((v) => v && v !== 'CUSTOM_INPUT');
+
+      if (provModels.length > 0 && !provModels.includes(cfg.model)) {
+        cfg.model = provModels[0];
+        await pool.query(
+          `UPDATE system_configs SET value = $1::jsonb, updated_at = NOW() WHERE key = 'brain_llm_config';`,
+          [JSON.stringify(cfg)]
+        );
+      }
+    }
+  } catch (dbErr: any) {
+    console.warn('[Auto-Heal Models] Aviso ao alinhar modelos no banco:', dbErr.message);
+  }
+
+  return { catalog: activeCatalog, source };
+}
+
+export async function getSupportedModels(req: Request, res: Response) {
+  const { catalog, source } = await syncModelsFromGistAndHealAgents();
   return res.status(200).json({
     success: true,
-    source: 'local_fallback',
-    gistUrl: GITHUB_MODELS_GIST_URL,
-    syncedAt: new Date().toISOString(),
-    models: CATALOG_MODELS,
-    catalog: CATALOG_MODELS,
-    endpoints: KNOWN_ENDPOINTS
+    source,
+    catalog,
+    data: catalog
   });
 }
 
