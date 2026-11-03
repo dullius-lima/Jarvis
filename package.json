@@ -6,10 +6,10 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "dev:frontend": "vite",
-    "build:frontend": "vite build",
-    "build": "tsup src/server.ts --format cjs --clean --external ws --external zod",
+    "build:frontend": "vite build --emptyOutDir false",
+    "build": "tsup src/server.ts --format cjs --external ws --external zod",
     "start": "node dist/server.js",
-    "deploy:vm": "git pull origin main && npm install && npm run build && pm2 flush && pm2 restart jarvis --update-env && pm2 restart jarvis-frontend && pm2 save"
+    "deploy:vm": "git pull origin main && npm install && npm run build && npm run build:frontend && pm2 flush && pm2 restart jarvis --update-env && pm2 restart jarvis-frontend && pm2 save"
   },
   "dependencies": {
     "cors": "^2.8.6",
