@@ -30,6 +30,7 @@ export default defineConfig({
     exclude: ['.git']
   },
   build: {
+    emptyOutDir: false,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
