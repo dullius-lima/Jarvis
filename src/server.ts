@@ -12,6 +12,7 @@ import { initializeTriggerSchema, dispatchErrorTrigger } from './services/errorT
 import { startScheduleTriggerEngine } from './services/scheduleTriggerService.js';
 import { startMemoryAndBackupScheduler } from './services/securityGovernanceService.js';
 import { startAgentWatchdog } from './services/agentWatchdogService.js';
+import { getSupportedModels, syncModelsFromGistAndHealAgents } from './controllers/brainConfigController.js';
 
 import * as triggerRoutesMod from './routes/triggerRoutes.js';
 import * as authRoutesMod from './routes/authRoutes.js';
@@ -203,6 +204,11 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     error: err.message || 'Falha interna no servidor.'
   });
 });
+
+syncModelsFromGistAndHealAgents().catch(() => {});
+setInterval(() => {
+  syncModelsFromGistAndHealAgents().catch(() => {});
+}, 5 * 60 * 1000);
 
 const server = http.createServer(app);
 initBrainWebSocketServer(server);
