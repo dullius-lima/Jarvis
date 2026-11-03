@@ -5,14 +5,15 @@ import fs from 'fs';
 import path from 'path';
 import net from 'net';
 
-// Endpoints oficiais exportados para uso no orchestratorService.ts
+
+// Trecho essencial para src/controllers/brainConfigController.ts
 export const KNOWN_ENDPOINTS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
-  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta',
   openai: 'https://api.openai.com/v1',
-  deepseek: 'https://api.deepseek.com/v1',
-  ollama: 'http://localhost:11434/v1',
-  openrouter: 'https://openrouter.ai/api/v1'
+  deepseek: 'https://api.deepseek.com',
+  openrouter: 'https://openrouter.ai/api/v1',
+  ollama: 'http://localhost:11434/v1'
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
@@ -20,9 +21,127 @@ export const DEFAULT_MODELS: Record<string, string> = {
   gemini: 'gemini-2.5-flash',
   openai: 'gpt-4o-mini',
   deepseek: 'deepseek-chat',
-  ollama: 'llama3.1',
-  openrouter: 'anthropic/claude-3.5-sonnet'
+  openrouter: 'anthropic/claude-3.5-sonnet',
+  ollama: 'llama3.1:8b'
 };
+
+export async function validateLLMConnection(req: Request, res: Response) {
+  try {
+    const { provider = 'groq', model, api_key, base_url } = req.body || {};
+    const apiKey = api_key ? String(api_key).trim() : '';
+
+    // Detecta automaticamente o provedor real pelo prefixo da chave
+    let effectiveProvider = String(provider).toLowerCase().trim();
+    if (apiKey.startsWith('gsk_')) effectiveProvider = 'groq';
+    else if (apiKey.startsWith('AIza')) effectiveProvider = 'gemini';
+
+    if (!apiKey && effectiveProvider !== 'ollama') {
+      return res.status(200).json({
+        success: false,
+        error: `Chave de API não informada para o provedor ${effectiveProvider.toUpperCase()}.`
+      });
+    }
+
+    let targetModel = model ? String(model).trim() : DEFAULT_MODELS[effectiveProvider];
+
+    // 1. Validação Nativa Direta para Google Gemini
+    if (effectiveProvider === 'gemini') {
+      if (!targetModel.startsWith('gemini') || targetModel.includes('argon') || targetModel.includes('3.8') || targetModel.includes('2.0')) {
+        targetModel = 'gemini-2.5-flash';
+      }
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: 'Responda apenas OK' }] }] }),
+        signal: AbortSignal.timeout(12000)
+      });
+      const data: any = await response.json();
+      if (!response.ok) {
+        return res.status(200).json({
+          success: false,
+          error: `[Gemini Recusou (${response.status})]: ${data?.error?.message || JSON.stringify(data)}`
+        });
+      }
+      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'OK';
+      return res.status(200).json({
+        success: true,
+        message: `Conexão bem-sucedida com GEMINI! Modelo [${targetModel}] respondeu: "${reply}"`,
+        provider: 'gemini',
+        model: targetModel
+      });
+    }
+
+    // 2. Validação Direta para Groq / OpenAI / DeepSeek / OpenRouter
+    if (effectiveProvider === 'groq' && (!targetModel || targetModel.startsWith('gemini') || targetModel.startsWith('gpt'))) {
+      targetModel = 'llama-3.3-70b-versatile';
+    } else if (effectiveProvider === 'openai' && !targetModel.startsWith('gpt') && !targetModel.startsWith('o')) {
+      targetModel = 'gpt-4o-mini';
+    }
+
+    const resolvedBaseUrl = (KNOWN_ENDPOINTS[effectiveProvider] || base_url?.trim() || KNOWN_ENDPOINTS.groq).replace(/\/+$/, '');
+    const response = await fetch(`${resolvedBaseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(apiKey && effectiveProvider !== 'ollama' ? { Authorization: `Bearer ${apiKey}` } : {})
+      },
+      body: JSON.stringify({
+        model: targetModel,
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 5
+      }),
+      signal: AbortSignal.timeout(12000)
+    });
+
+    const data: any = await response.json();
+
+    // Fallback automático na Groq para llama-3.1-8b-instant caso o 70B dê erro 404/429
+    if (!response.ok && effectiveProvider === 'groq' && targetModel !== 'llama-3.1-8b-instant') {
+      const retryRes = await fetch(`${resolvedBaseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'llama-3.1-8b-instant',
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 5
+        })
+      });
+      const retryData: any = await retryRes.json();
+      if (retryRes.ok) {
+        return res.status(200).json({
+          success: true,
+          message: `Conexão bem-sucedida com GROQ! Modelo [llama-3.1-8b-instant] respondeu: "${retryData?.choices?.[0]?.message?.content?.trim() || 'OK'}"`,
+          provider: 'groq',
+          model: 'llama-3.1-8b-instant'
+        });
+      }
+    }
+
+    if (!response.ok) {
+      return res.status(200).json({
+        success: false,
+        error: `[${effectiveProvider.toUpperCase()} Recusou (${response.status})]: ${data?.error?.message || JSON.stringify(data)}`
+      });
+    }
+
+    const reply = data?.choices?.[0]?.message?.content?.trim() || 'OK';
+    return res.status(200).json({
+      success: true,
+      message: `Conexão bem-sucedida com ${effectiveProvider.toUpperCase()}! Modelo [${targetModel}] respondeu: "${reply}"`,
+      provider: effectiveProvider,
+      model: targetModel
+    });
+  } catch (error: any) {
+    return res.status(200).json({
+      success: false,
+      error: `Falha na conexão: ${error.message}`
+    });
+  }
+}
 
 // Catálogo local de contingência (mesma estrutura do seu GitHub Gist)
 export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string }>> = {
