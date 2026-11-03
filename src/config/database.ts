@@ -1,11 +1,28 @@
-// src/config/database.ts
+
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
+import path from 'path';
 
+// Força o carregamento do .env a partir da raiz da aplicação
 dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+
+const dbPassword = String(
+  process.env.DB_PASSWORD || process.env.PGPASSWORD || '123456'
+);
+
+// Fallback robusto caso DATABASE_URL não venha preenchida
+const connectionString =
+  process.env.DATABASE_URL ||
+  `postgresql://postgres:${dbPassword}@127.0.0.1:5432/postgres`;
 
 export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString,
+  password: dbPassword,
+  user: process.env.DB_USER || 'postgres',
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT || 5432),
+  database: process.env.DB_DATABASE || 'postgres',
 });
 
 let cachedPgVectorStatus: boolean | null = null;
