@@ -1,5 +1,4 @@
 import { createApp } from 'vue';
 import SettingsApp from './SettingsApp.vue';
 
-const mountTarget = document.getElementById('settings-app') ? '#settings-app' : '#app';
-createApp(SettingsApp).mount(mountTarget);
+createApp(SettingsApp).mount('#app');
