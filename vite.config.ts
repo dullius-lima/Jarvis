@@ -8,12 +8,8 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    hmr: {
-      overlay: false
-    },
-    watch: {
-      ignored: ['**/.git/**', '**/node_modules/**', '**/dist/**']
-    },
+    hmr: { overlay: false },
+    watch: { ignored: ['**/.git/**', '**/node_modules/**', '**/dist/**'] },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:3333',
@@ -21,9 +17,7 @@ export default defineConfig({
       }
     }
   },
-  optimizeDeps: {
-    exclude: ['.git']
-  },
+  optimizeDeps: { exclude: ['.git'] },
   build: {
     emptyOutDir: false,
     rollupOptions: {
