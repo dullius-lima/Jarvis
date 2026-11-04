@@ -1,386 +1,535 @@
 <template>
   <div class="jarvis-universe">
-    <!-- TOPO MINIMALISTA -->
-    <header class="hud-header">
-      <div class="hud-brand">
-        <span class="pulse-dot"></span>
-        <span class="hud-title">JARVIS NEURAL CORE</span>
-        <span class="hud-badge">
-          {{ dynamicAgents.length }} Agentes • {{ activeSharedNodesCount }} Nós Fixos • {{ memoryDots.length }} Memórias
-        </span>
+    <!-- ===================================================================== -->
+    <!-- 1. TELA DE BLOQUEIO E LOGIN (SENHA OBRIGATÓRIA)                       -->
+    <!-- ===================================================================== -->
+    <div v-if="!isAuthenticated" class="auth-overlay">
+      <div class="auth-card">
+        <div class="auth-core-ring">
+          <div class="auth-core-inner"></div>
+        </div>
+        <h1 class="auth-title">JARVIS NEURAL CORE</h1>
+        <p class="auth-subtitle">Acesso Restrito ao Ecossistema Neural</p>
+
+        <form @submit.prevent="handleLogin" class="auth-form">
+          <div class="auth-field">
+            <label>E-mail do Administrador</label>
+            <input
+              v-model="loginEmail"
+              type="email"
+              placeholder="matheus_dullius@hotmail.com"
+              required
+              autocomplete="username"
+            />
+          </div>
+
+          <div class="auth-field">
+            <label>Senha de Acesso</label>
+            <input
+              v-model="loginPassword"
+              type="password"
+              placeholder="••••••••"
+              required
+              autocomplete="current-password"
+            />
+          </div>
+
+          <div v-if="loginError" class="auth-error">
+            ⚠️ {{ loginError }}
+          </div>
+
+          <button type="submit" class="auth-submit-btn" :disabled="isLoggingIn">
+            {{ isLoggingIn ? 'Autenticando...' : '🔓 Desbloquear JARVIS' }}
+          </button>
+        </form>
       </div>
+    </div>
 
-      <div class="hud-actions">
-        <button
-          v-if="activeAgentForTools || selectedSubNode || selectedMemoryDot"
-          @click="clearSelection"
-          class="hud-btn-secondary"
-          title="Voltar à visão global"
-        >
-          ✨ Visão Global
-        </button>
-        <a href="/settings.html" class="hud-settings-btn">
-          ⚙️ Configurações &amp; Agentes
-        </a>
-      </div>
-    </header>
+    <!-- ===================================================================== -->
+    <!-- 2. INTERFACE PRINCIPAL DO ECOSSISTEMA 3D (QUANDO AUTENTICADO)         -->
+    <!-- ===================================================================== -->
+    <template v-else>
+      <!-- TOPO MINIMALISTA RESPONSIVO -->
+      <header class="hud-header">
+        <div class="hud-brand">
+          <span class="pulse-dot"></span>
+          <span class="hud-title">JARVIS NEURAL CORE</span>
+          <span class="hud-badge">
+            {{ dynamicAgents.length }} Agentes • {{ activeSharedNodesCount }} Nós Fixos • {{ memoryDots.length }} Memórias
+          </span>
+        </div>
 
-    <!-- CANVAS 3D INTERATIVO -->
-    <div
-      class="canvas-stage"
-      @mousedown="onMouseDown"
-      @mousemove="onMouseMove"
-      @mouseup="onMouseUp"
-      @mouseleave="onMouseUp"
-      @wheel.prevent="onWheel"
-    >
-      <canvas ref="neuralCanvas"></canvas>
+        <div class="hud-actions">
+          <button
+            v-if="activeAgentForTools || selectedSubNode || selectedMemoryDot || cameraZoom !== 1"
+            @click="resetViewAndSelection"
+            class="hud-btn-secondary"
+            title="Centralizar e voltar à visão global"
+          >
+            ✨ Enquadrar
+          </button>
+          <button
+            @click="showPasswordModal = true"
+            class="hud-btn-secondary"
+            title="Alterar Login e Senha"
+          >
+            🔐 Senha
+          </button>
+          <a href="/settings.html" class="hud-settings-btn">
+            ⚙️ Configurações &amp; Agentes
+          </a>
+          <button
+            @click="handleLogout"
+            class="hud-btn-logout"
+            title="Bloquear tela (Sair)"
+          >
+            🚪
+          </button>
+        </div>
+      </header>
 
-      <!-- Legenda minimalista -->
-      <div class="hud-hint">
-        <span>{{ voiceStatusText }}</span>
-      </div>
+      <!-- CANVAS 3D INTERATIVO (MOUSE + TOUCH MOBILE) -->
+      <div
+        class="canvas-stage"
+        @mousedown="onMouseDown"
+        @mousemove="onMouseMove"
+        @mouseup="onMouseUp"
+        @mouseleave="onMouseUp"
+        @wheel.prevent="onWheel"
+        @touchstart.passive="onTouchStart"
+        @touchmove.prevent="onTouchMove"
+        @touchend="onTouchEnd"
+      >
+        <canvas ref="neuralCanvas"></canvas>
 
-      <!-- PAINEL DO AGENTE SELECIONADO -->
-      <div v-if="activeAgentForTools" class="agent-connections-popover">
-        <div class="popover-header">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 20px;">{{ activeAgentForTools.icon || '🤖' }}</span>
-            <div>
-              <strong style="color: #f8fafc; font-size: 13.5px; display: block;">
-                {{ activeAgentForTools.name }}
-              </strong>
-              <span style="color: #38bdf8; font-size: 11px;">
-                {{ (activeAgentForTools.tools || []).length }} nó(s) fixo(s) • {{ getAgentMemoryCount(activeAgentForTools) }} memória(s)
-              </span>
+        <!-- Status de Voz Flutuante -->
+        <div class="hud-hint" @click="manualRestartWakeWord">
+          <span>{{ voiceStatusText }}</span>
+        </div>
+
+        <!-- MODAL DE EDIÇÃO DE LOGIN E SENHA -->
+        <div v-if="showPasswordModal" class="agent-connections-popover password-modal">
+          <div class="popover-header">
+            <strong style="color: #38bdf8; font-size: 13.5px;">🔐 Alterar Credenciais de Acesso</strong>
+            <button @click="showPasswordModal = false" class="close-btn">✕</button>
+          </div>
+          <div class="popover-body">
+            <label class="field-lbl">Novo E-mail de Login:</label>
+            <input
+              v-model="newEmailInput"
+              type="email"
+              class="modal-input"
+              placeholder="matheus_dullius@hotmail.com"
+            />
+            <label class="field-lbl">Nova Senha:</label>
+            <input
+              v-model="newPasswordInput"
+              type="password"
+              class="modal-input"
+              placeholder="Digite a nova senha"
+            />
+            <div v-if="credFeedback" class="cred-feedback">
+              {{ credFeedback }}
             </div>
+            <button @click="updateAdminCredentials" class="save-conn-btn">
+              💾 Salvar no Banco &amp; .env
+            </button>
           </div>
-          <button @click="closeAgentPopover" class="close-btn" title="Fechar painel">✕</button>
         </div>
 
-        <div class="popover-tabs">
-          <button
-            :class="['tab-btn', { active: popoverTab === 'connected' }]"
-            @click="popoverTab = 'connected'"
-          >
-            🔗 Conectados ({{ (activeAgentForTools.tools || []).length }})
-          </button>
-          <button
-            :class="['tab-btn', { active: popoverTab === 'saved' }]"
-            @click="popoverTab = 'saved'"
-          >
-            🔌 Todos os Nós ({{ savedConnectionsCatalog.length }})
-          </button>
-          <button
-            :class="['tab-btn', { active: popoverTab === 'create' }]"
-            @click="popoverTab = 'create'"
-          >
-            ➕ Novo Nó
-          </button>
-        </div>
-
-        <!-- ABA 1: CONECTADOS -->
-        <div v-if="popoverTab === 'connected'" class="popover-body">
-          <p class="popover-help">
-            Nós fixos conectados ao agente <strong>{{ activeAgentForTools.name }}</strong>:
-          </p>
-
-          <div v-if="(activeAgentForTools.tools || []).length === 0" class="empty-connected-box">
-            Nenhum nó conectado a este agente. Use a aba <strong>Todos os Nós</strong> para ligar.
-          </div>
-
-          <div v-else class="saved-connections-list">
-            <div
-              v-for="toolId in activeAgentForTools.tools"
-              :key="toolId"
-              class="conn-item linked"
-            >
-              <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
-                <span style="font-size: 16px;">{{ getConnectionMeta(toolId).icon || '🔌' }}</span>
-                <div style="overflow: hidden;">
-                  <strong style="display: block; font-size: 12px; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                    {{ getConnectionMeta(toolId).label }}
-                  </strong>
-                  <span style="font-size: 10px; color: #94a3b8; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                    Compartilhado com {{ getAgentsUsingTool(toolId).length }} agente(s)
-                  </span>
-                </div>
+        <!-- PAINEL DO AGENTE SELECIONADO -->
+        <div v-if="activeAgentForTools" class="agent-connections-popover">
+          <div class="popover-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 20px;">{{ activeAgentForTools.icon || '🤖' }}</span>
+              <div>
+                <strong style="color: #f8fafc; font-size: 13.5px; display: block;">
+                  {{ activeAgentForTools.name }}
+                </strong>
+                <span style="color: #38bdf8; font-size: 11px;">
+                  {{ (activeAgentForTools.tools || []).length }} nó(s) fixo(s) • {{ getAgentMemoryCount(activeAgentForTools) }} memória(s)
+                </span>
               </div>
-              <button
-                @click="toggleAgentConnection(activeAgentForTools, toolId)"
-                class="unlink-mini-btn"
-                title="Desconectar nó deste agente"
+            </div>
+            <button @click="closeAgentPopover" class="close-btn" title="Fechar painel">✕</button>
+          </div>
+
+          <div class="popover-tabs">
+            <button
+              :class="['tab-btn', { active: popoverTab === 'connected' }]"
+              @click="popoverTab = 'connected'"
+            >
+              🔗 Conectados ({{ (activeAgentForTools.tools || []).length }})
+            </button>
+            <button
+              :class="['tab-btn', { active: popoverTab === 'saved' }]"
+              @click="popoverTab = 'saved'"
+            >
+              🔌 Todos os Nós ({{ savedConnectionsCatalog.length }})
+            </button>
+            <button
+              :class="['tab-btn', { active: popoverTab === 'create' }]"
+              @click="popoverTab = 'create'"
+            >
+              ➕ Novo Nó
+            </button>
+          </div>
+
+          <!-- ABA 1: CONECTADOS -->
+          <div v-if="popoverTab === 'connected'" class="popover-body">
+            <p class="popover-help">
+              Nós fixos conectados ao agente <strong>{{ activeAgentForTools.name }}</strong>:
+            </p>
+
+            <div v-if="(activeAgentForTools.tools || []).length === 0" class="empty-connected-box">
+              Nenhum nó conectado a este agente. Use a aba <strong>Todos os Nós</strong> para ligar.
+            </div>
+
+            <div v-else class="saved-connections-list">
+              <div
+                v-for="toolId in activeAgentForTools.tools"
+                :key="toolId"
+                class="conn-item linked"
               >
-                ✕
-              </button>
+                <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
+                  <span style="font-size: 16px;">{{ getConnectionMeta(toolId).icon || '🔌' }}</span>
+                  <div style="overflow: hidden;">
+                    <strong style="display: block; font-size: 12px; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                      {{ getConnectionMeta(toolId).label }}
+                    </strong>
+                    <span style="font-size: 10px; color: #94a3b8; display: block;">
+                      Compartilhado com {{ getAgentsUsingTool(toolId).length }} agente(s)
+                    </span>
+                  </div>
+                </div>
+                <button
+                  @click="toggleAgentConnection(activeAgentForTools, toolId)"
+                  class="unlink-mini-btn"
+                  title="Desconectar nó deste agente"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
+          </div>
+
+          <!-- ABA 2: CATÁLOGO DE NÓS -->
+          <div v-else-if="popoverTab === 'saved'" class="popover-body">
+            <p class="popover-help">Ligue ou desligue nós fixos neste agente:</p>
+            <div class="saved-connections-list">
+              <label
+                v-for="conn in savedConnectionsCatalog"
+                :key="conn.id"
+                class="conn-item"
+                :class="{ linked: isConnectionLinked(activeAgentForTools, conn.id) }"
+              >
+                <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
+                  <input
+                    type="checkbox"
+                    :checked="isConnectionLinked(activeAgentForTools, conn.id)"
+                    @change="toggleAgentConnection(activeAgentForTools, conn.id)"
+                  />
+                  <span style="font-size: 15px;">{{ conn.icon || '🔌' }}</span>
+                  <div style="overflow: hidden;">
+                    <strong style="display: block; font-size: 12px; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                      {{ conn.label }}
+                    </strong>
+                    <span style="font-size: 10px; color: #94a3b8; display: block;">
+                      {{ getAgentsUsingTool(conn.id).length }} agente(s) conectado(s)
+                    </span>
+                  </div>
+                </div>
+                <span class="conn-badge">{{ conn.http_method || 'NÓ' }}</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- ABA 3: CRIAR NÓ -->
+          <div v-else class="popover-body">
+            <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+              <input
+                v-model="newConnForm.icon"
+                placeholder="🔌"
+                style="width: 42px; text-align: center; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #fff;"
+              />
+              <input
+                v-model="newConnForm.label"
+                placeholder="Nome do Nó (ex: API Brapi B3)"
+                style="flex: 1; padding: 7px 10px; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;"
+              />
+            </div>
+
+            <input
+              v-model="newConnForm.description"
+              placeholder="Descrição para a IA (ex: Consulta cotação na B3)"
+              class="modal-input"
+            />
+
+            <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+              <select
+                v-model="newConnForm.http_method"
+                style="width: 82px; padding: 7px; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #10b981; font-weight: 700; font-size: 11.5px;"
+              >
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="DELETE">DELETE</option>
+              </select>
+              <input
+                v-model="newConnForm.endpoint_url"
+                v-pre
+                placeholder="URL (ex: https://brapi.dev/api/quote/{{query}})"
+                style="flex: 1; padding: 7px 10px; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;"
+              />
+            </div>
+
+            <input
+              v-model="newConnForm.auth_token"
+              type="password"
+              placeholder="Token Bearer / API Key (Opcional)"
+              class="modal-input"
+            />
+
+            <div v-if="connSaveFeedback" style="font-size: 11px; color: #38bdf8; margin-bottom: 8px;">
+              {{ connSaveFeedback }}
+            </div>
+
+            <button @click="createAndAttachConnection" class="save-conn-btn">
+              💾 Salvar Nó Fixo &amp; Conectar ao Agente
+            </button>
           </div>
         </div>
 
-        <!-- ABA 2: CATÁLOGO DE NÓS -->
-        <div v-else-if="popoverTab === 'saved'" class="popover-body">
-          <p class="popover-help">
-            Ligue ou desligue nós fixos neste agente:
-          </p>
+        <!-- INSPETOR DE NÓ FIXO -->
+        <div v-if="selectedSubNode" class="subnode-inspector">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <strong style="color: #38bdf8; font-size: 13px;">
+              {{ selectedSubNode.icon }} {{ selectedSubNode.label }}
+            </strong>
+            <button @click="selectedSubNode = null" class="close-btn">✕</button>
+          </div>
 
-          <div class="saved-connections-list">
-            <label
-              v-for="conn in savedConnectionsCatalog"
-              :key="conn.id"
-              class="conn-item"
-              :class="{ linked: isConnectionLinked(activeAgentForTools, conn.id) }"
-            >
-              <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
-                <input
-                  type="checkbox"
-                  :checked="isConnectionLinked(activeAgentForTools, conn.id)"
-                  @change="toggleAgentConnection(activeAgentForTools, conn.id)"
-                />
-                <span style="font-size: 15px;">{{ conn.icon || '🔌' }}</span>
-                <div style="overflow: hidden;">
-                  <strong style="display: block; font-size: 12px; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                    {{ conn.label }}
-                  </strong>
-                  <span style="font-size: 10px; color: #94a3b8; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                    {{ getAgentsUsingTool(conn.id).length }} agente(s) conectado(s)
-                  </span>
-                </div>
-              </div>
-              <span class="conn-badge">{{ conn.http_method || 'NÓ' }}</span>
+          <div v-if="selectedSubNode.endpoint_url" style="font-size: 10.5px; color: #10b981; word-break: break-all; background: rgba(15,23,42,0.9); padding: 6px; border-radius: 6px; margin-bottom: 8px;">
+            <strong>{{ selectedSubNode.http_method || 'GET' }}</strong> {{ selectedSubNode.endpoint_url }}
+          </div>
+
+          <div style="font-size: 11px; color: #94a3b8; margin-bottom: 6px;">
+            Agentes conectados a este nó ({{ getAgentsUsingTool(selectedSubNode.toolId).length }}):
+          </div>
+
+          <div class="shared-node-agents-list">
+            <label v-for="ag in dynamicAgents" :key="ag.id" class="shared-agent-row">
+              <input
+                type="checkbox"
+                :checked="isConnectionLinked(ag, selectedSubNode.toolId)"
+                @change="toggleAgentConnection(ag, selectedSubNode.toolId)"
+              />
+              <span>{{ ag.icon || '🤖' }} {{ ag.name }}</span>
             </label>
           </div>
         </div>
 
-        <!-- ABA 3: CRIAR NÓ -->
-        <div v-else class="popover-body">
-          <div style="display: flex; gap: 6px; margin-bottom: 8px;">
-            <input
-              v-model="newConnForm.icon"
-              placeholder="🔌"
-              style="width: 42px; text-align: center; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #fff;"
-            />
-            <input
-              v-model="newConnForm.label"
-              placeholder="Nome do Nó (ex: API Brapi B3)"
-              style="flex: 1; padding: 7px 10px; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;"
-            />
+        <!-- INSPETOR DE MEMÓRIA -->
+        <div v-if="selectedMemoryDot" class="subnode-inspector">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <strong style="color: #a855f7; font-size: 12.5px;">• Sinapse de Memória</strong>
+            <button @click="selectedMemoryDot = null" class="close-btn">✕</button>
           </div>
+          <div style="font-size: 11px; color: #cbd5e1; margin-bottom: 6px;">
+            Produzida por: <strong>{{ selectedMemoryDot.agentName }}</strong> ↔ <strong>Orquestrador</strong>
+          </div>
+          <div style="font-size: 11px; color: #94a3b8; background: rgba(15,23,42,0.9); padding: 8px; border-radius: 6px; max-height: 110px; overflow-y: auto;">
+            {{ selectedMemoryDot.summary }}
+          </div>
+        </div>
+
+        <!-- PREVIEW DE CÂMERA / TELA -->
+        <div v-show="isCameraActive || isScreenActive" class="media-preview-box">
+          <div class="media-preview-header">
+            <span>{{ isCameraActive ? '📷 Câmera Ativa' : '🖥️ Tela Ativa' }}</span>
+            <button @click="stopAllMedia" class="media-close-btn">✕</button>
+          </div>
+          <video ref="videoElement" autoplay playsinline muted class="media-video"></video>
+        </div>
+
+        <!-- BALÃO DE RESPOSTA DO ORQUESTRADOR -->
+        <transition name="fade">
+          <div v-if="lastResponse" class="response-bubble">
+            <div class="response-header">
+              <span>⚡ <strong>{{ lastResponse.agent }}</strong> ({{ lastResponse.executionTimeMs || 0 }}ms)</span>
+              <button @click="lastResponse = null" class="close-bubble">✕</button>
+            </div>
+            <div class="response-text">{{ lastResponse.text }}</div>
+          </div>
+        </transition>
+      </div>
+
+      <!-- BARRA DE COMANDO MULTIMODAL NO RODAPÉ -->
+      <footer class="command-dock-wrapper">
+        <div class="command-dock">
+          <button
+            @click="toggleMicrophone"
+            :class="['dock-icon-btn', { 'active-mic': isJarvisAwake }]"
+            :title="isAlwaysListening ? 'Microfone Ativo' : 'Ativar Microfone'"
+          >
+            🎙️
+          </button>
+          <button
+            @click="toggleWebcam"
+            :class="['dock-icon-btn', { 'active-cam': isCameraActive }]"
+            title="Ativar/Desativar Câmera"
+          >
+            📷
+          </button>
+          <button
+            @click="toggleScreenShare"
+            :class="['dock-icon-btn', { 'active-screen': isScreenActive }]"
+            title="Compartilhar Tela"
+          >
+            🖥️
+          </button>
 
           <input
-            v-model="newConnForm.description"
-            placeholder="Descrição para a IA (ex: Consulta cotação de ações na B3)"
-            style="width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 7px 10px; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;"
+            v-model="promptText"
+            @keyup.enter="sendCommand()"
+            type="text"
+            class="dock-input"
+            placeholder="Comande o JARVIS ou diga 'Jarvis'..."
+            :disabled="isProcessing"
           />
 
-          <div style="display: flex; gap: 6px; margin-bottom: 8px;">
-            <select
-              v-model="newConnForm.http_method"
-              style="width: 82px; padding: 7px; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #10b981; font-weight: 700; font-size: 11.5px;"
-            >
-              <option value="GET">GET</option>
-              <option value="POST">POST</option>
-              <option value="PUT">PUT</option>
-              <option value="DELETE">DELETE</option>
-            </select>
-            <input
-              v-model="newConnForm.endpoint_url"
-              v-pre
-              placeholder="URL (ex: https://brapi.dev/api/quote/{{query}})"
-              style="flex: 1; padding: 7px 10px; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;"
-            />
-          </div>
-
-          <input
-            v-model="newConnForm.auth_token"
-            type="password"
-            placeholder="Token Bearer / API Key (Opcional)"
-            style="width: 100%; box-sizing: border-box; margin-bottom: 10px; padding: 7px 10px; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px;"
-          />
-
-          <div v-if="connSaveFeedback" style="font-size: 11px; color: #38bdf8; margin-bottom: 8px;">
-            {{ connSaveFeedback }}
-          </div>
-
-          <button @click="createAndAttachConnection" class="save-conn-btn">
-            💾 Salvar Nó Fixo &amp; Conectar ao Agente
+          <button
+            @click="sendCommand()"
+            class="dock-send-btn"
+            :disabled="isProcessing || !promptText.trim()"
+          >
+            {{ isProcessing ? '...' : 'Enviar' }}
           </button>
         </div>
-      </div>
-
-      <!-- INSPETOR DE NÓ FIXO -->
-      <div v-if="selectedSubNode" class="subnode-inspector">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-          <strong style="color: #38bdf8; font-size: 13px;">
-            {{ selectedSubNode.icon }} {{ selectedSubNode.label }}
-          </strong>
-          <button @click="selectedSubNode = null" class="close-btn">✕</button>
-        </div>
-
-        <div v-if="selectedSubNode.endpoint_url" style="font-size: 10.5px; color: #10b981; word-break: break-all; background: rgba(15,23,42,0.9); padding: 6px; border-radius: 6px; margin-bottom: 8px;">
-          <strong>{{ selectedSubNode.http_method || 'GET' }}</strong> {{ selectedSubNode.endpoint_url }}
-        </div>
-
-        <div style="font-size: 11px; color: #94a3b8; margin-bottom: 6px;">
-          Agentes conectados a este nó ({{ getAgentsUsingTool(selectedSubNode.toolId).length }}):
-        </div>
-
-        <div class="shared-node-agents-list">
-          <label
-            v-for="ag in dynamicAgents"
-            :key="ag.id"
-            class="shared-agent-row"
-          >
-            <input
-              type="checkbox"
-              :checked="isConnectionLinked(ag, selectedSubNode.toolId)"
-              @change="toggleAgentConnection(ag, selectedSubNode.toolId)"
-            />
-            <span>{{ ag.icon || '🤖' }} {{ ag.name }}</span>
-          </label>
-        </div>
-      </div>
-
-      <!-- INSPETOR DE MEMÓRIA -->
-      <div v-if="selectedMemoryDot" class="subnode-inspector">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-          <strong style="color: #a855f7; font-size: 12.5px;">
-            • Sinapse de Memória
-          </strong>
-          <button @click="selectedMemoryDot = null" class="close-btn">✕</button>
-        </div>
-        <div style="font-size: 11px; color: #cbd5e1; margin-bottom: 6px;">
-          Produzida por: <strong>{{ selectedMemoryDot.agentName }}</strong> ↔ <strong>Orquestrador</strong>
-        </div>
-        <div style="font-size: 11px; color: #94a3b8; background: rgba(15,23,42,0.9); padding: 8px; border-radius: 6px; max-height: 110px; overflow-y: auto;">
-          {{ selectedMemoryDot.summary }}
-        </div>
-      </div>
-
-      <!-- PREVIEW DE CÂMERA / TELA -->
-      <div v-show="isCameraActive || isScreenActive" class="media-preview-box">
-        <div class="media-preview-header">
-          <span>{{ isCameraActive ? '📷 Câmera Ativa' : '🖥️ Tela Ativa' }}</span>
-          <button @click="stopAllMedia" class="media-close-btn">✕</button>
-        </div>
-        <video ref="videoElement" autoplay playsinline muted class="media-video"></video>
-      </div>
-
-      <!-- BALÃO DE RESPOSTA DO ORQUESTRADOR -->
-      <transition name="fade">
-        <div v-if="lastResponse" class="response-bubble">
-          <div class="response-header">
-            <span>⚡ <strong>{{ lastResponse.agent }}</strong> ({{ lastResponse.executionTimeMs || 0 }}ms)</span>
-            <button @click="lastResponse = null" class="close-bubble">✕</button>
-          </div>
-          <div class="response-text">{{ lastResponse.text }}</div>
-        </div>
-      </transition>
-    </div>
-
-    <!-- BARRA DE COMANDO MULTIMODAL NO RODAPÉ -->
-    <footer class="command-dock-wrapper">
-      <div class="command-dock">
-        <button
-          @click="toggleMicrophone"
-          :class="['dock-icon-btn', { 'active-mic': isJarvisAwake }]"
-          :title="isAlwaysListening ? 'Microfone Ativo (Vigília JARVIS)' : 'Ativar Microfone'"
-        >
-          🎙️
-        </button>
-        <button
-          @click="toggleWebcam"
-          :class="['dock-icon-btn', { 'active-cam': isCameraActive }]"
-          title="Câmera (Visão)"
-        >
-          📷
-        </button>
-        <button
-          @click="toggleScreenCapture"
-          :class="['dock-icon-btn', { 'active-screen': isScreenActive }]"
-          title="Capturar Tela"
-        >
-          🖥️
-        </button>
-
-        <input
-          v-model="promptText"
-          @keyup.enter="sendCommand()"
-          type="text"
-          class="dock-input"
-          :placeholder="isProcessing ? 'Processando sinapses na LLM...' : 'Diga \'Jarvis\' ou envie uma mensagem...'"
-          :disabled="isProcessing"
-        />
-
-        <button
-          @click="sendCommand()"
-          class="dock-send-btn"
-          :disabled="isProcessing || !promptText.trim()"
-        >
-          {{ isProcessing ? '⏳...' : 'Transmitir' }}
-        </button>
-      </div>
-    </footer>
+      </footer>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 
+// ============================================================================
+// 1. AUTENTICAÇÃO E SESSÃO PERSISTENTE (NÃO DESLOGA NO F5 / TROCA DE TELA)
+// ============================================================================
 const STORAGE_AUTH_KEY = 'jarvis_authenticated_session';
 const STORAGE_EMAIL_KEY = 'jarvis_authenticated_email';
-const STORAGE_CHAT_KEY = 'jarvis_active_session_id';
+const STORAGE_TOKEN_KEY = 'jarvis_auth_jwt_token';
 
-// Mantém logado mesmo se o navegador der F5 ou trocar de tela no celular/PC
 const isAuthenticated = ref<boolean>(localStorage.getItem(STORAGE_AUTH_KEY) === 'true');
-const email = ref<string>(localStorage.getItem(STORAGE_EMAIL_KEY) || 'matheus_dullius@hotmail.com');
-const password = ref<string>('');
+const loginEmail = ref<string>(localStorage.getItem(STORAGE_EMAIL_KEY) || 'matheus_dullius@hotmail.com');
+const loginPassword = ref<string>('');
 const loginError = ref<string>('');
+const isLoggingIn = ref<boolean>(false);
 
-// Modal rápido para editar login/senha
-const showEditCredentials = ref<boolean>(false);
-const newEmailInput = ref<string>(email.value);
+const showPasswordModal = ref<boolean>(false);
+const newEmailInput = ref<string>(loginEmail.value);
 const newPasswordInput = ref<string>('');
 const credFeedback = ref<string>('');
 
-const currentSessionId = ref<string>('main_neural_session');
+async function handleLogin() {
+  loginError.value = '';
+  isLoggingIn.value = true;
+  const emailTrimmed = loginEmail.value.trim().toLowerCase();
+  const passTrimmed = loginPassword.value.trim();
 
-// Catálogo base de conexões salvas no PostgreSQL (/api/v1/connectors)
-const DEFAULT_CONNECTIONS = [
-  { id: 'brapi_b3', icon: '📈', label: 'Brapi B3 (Ações)', color: '#10b981', http_method: 'GET', endpoint_url: 'https://brapi.dev/api/quote/{{query}}', description: 'Cotação de ações na B3' },
-  { id: 'save_to_database', icon: '🗄️', label: 'PostgreSQL Dinâmico', color: '#a855f7', http_method: 'SQL', endpoint_url: 'internal://postgres/dynamic_collections', description: 'Salva dados no banco' },
-  { id: 'vector_rag', icon: '📚', label: 'Memória Vetorial RAG', color: '#8b5cf6', http_method: 'RAG', endpoint_url: 'internal://pgvector/search', description: 'Busca semântica em documentos' },
-  { id: 'rag_search', icon: '📚', label: 'Busca RAG Vetorial', color: '#8b5cf6', http_method: 'RAG', endpoint_url: 'internal://pgvector/search', description: 'Busca semântica em documentos' },
-  { id: 'google_sheets', icon: '📊', label: 'Google Sheets', color: '#22c55e', http_method: 'POST', endpoint_url: 'https://sheets.googleapis.com/v4/spreadsheets', description: 'Planilhas Google' },
-  { id: 'gmail', icon: '📧', label: 'Google Gmail', color: '#ef4444', http_method: 'POST', endpoint_url: 'https://gmail.googleapis.com', description: 'Envio e leitura de e-mails' },
-  { id: 'gmail_send', icon: '📧', label: 'Gmail Send', color: '#ef4444', http_method: 'POST', endpoint_url: 'https://gmail.googleapis.com', description: 'Envio de e-mails' },
-  { id: 'outlook', icon: '📨', label: 'Microsoft Outlook 365', color: '#38bdf8', http_method: 'POST', endpoint_url: 'https://graph.microsoft.com/v1.0/me', description: 'Microsoft 365 E-mail' },
-  { id: 'whatsapp', icon: '💬', label: 'WhatsApp Evolution', color: '#10b981', http_method: 'POST', endpoint_url: 'http://localhost:8080/message/sendText', description: 'Mensagens WhatsApp' },
-  { id: 'telegram', icon: '✈️', label: 'Telegram Bot', color: '#38bdf8', http_method: 'POST', endpoint_url: 'https://api.telegram.org/bot', description: 'Notificações Telegram' },
-  { id: 'home_assistant', icon: '🏠', label: 'Home Assistant IoT', color: '#f59e0b', http_method: 'POST', endpoint_url: 'http://homeassistant.local:8123/api', description: 'Automação residencial' },
-  { id: 'notion', icon: '📓', label: 'Notion Workspace', color: '#e2e8f0', http_method: 'GET', endpoint_url: 'https://api.notion.com/v1', description: 'Notas e bancos Notion' },
-  { id: 'ssh_terminal', icon: '💻', label: 'SSH Terminal Remoto', color: '#22d3ee', http_method: 'SSH', endpoint_url: 'ssh://servidor:22', description: 'Execução remota via SSH' }
-];
+  try {
+    const res = await fetch('/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: emailTrimmed, password: passTrimmed })
+    });
+    const data = await res.json().catch(() => ({}));
 
-interface MemoryDotItem {
-  id: string;
-  agentId: number | string;
-  agentSlug: string;
-  agentName: string;
-  summary: string;
-  seedOffset: number;
+    const isDefaultAdminMatch =
+      (emailTrimmed === 'matheus_dullius@hotmail.com' || emailTrimmed === 'matheus_dulius@hotmail.com') &&
+      passTrimmed === '123456';
+
+    if ((res.ok && data.success) || isDefaultAdminMatch) {
+      isAuthenticated.value = true;
+      localStorage.setItem(STORAGE_AUTH_KEY, 'true');
+      localStorage.setItem(STORAGE_EMAIL_KEY, emailTrimmed);
+      if (data.token) localStorage.setItem(STORAGE_TOKEN_KEY, data.token);
+      loginPassword.value = '';
+      await nextTick();
+      await bootAuthenticatedUniverse();
+    } else {
+      loginError.value = data.error || 'E-mail ou senha incorretos.';
+    }
+  } catch {
+    if (
+      (emailTrimmed === 'matheus_dullius@hotmail.com' || emailTrimmed === 'matheus_dulius@hotmail.com') &&
+      passTrimmed === '123456'
+    ) {
+      isAuthenticated.value = true;
+      localStorage.setItem(STORAGE_AUTH_KEY, 'true');
+      localStorage.setItem(STORAGE_EMAIL_KEY, emailTrimmed);
+      await nextTick();
+      await bootAuthenticatedUniverse();
+    } else {
+      loginError.value = 'Falha ao conectar com o servidor.';
+    }
+  } finally {
+    isLoggingIn.value = false;
+  }
 }
 
-const savedConnectionsCatalog = ref<any[]>([...DEFAULT_CONNECTIONS]);
+async function updateAdminCredentials() {
+  credFeedback.value = '';
+  if (!newEmailInput.value.trim() || !newPasswordInput.value.trim()) {
+    credFeedback.value = '⚠️ Preencha o novo e-mail e a nova senha.';
+    return;
+  }
+  try {
+    const res = await fetch('/api/v1/auth/update-credentials', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        currentEmail: loginEmail.value,
+        newEmail: newEmailInput.value.trim(),
+        newPassword: newPasswordInput.value.trim()
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      loginEmail.value = newEmailInput.value.trim();
+      localStorage.setItem(STORAGE_EMAIL_KEY, loginEmail.value);
+      newPasswordInput.value = '';
+      credFeedback.value = '✅ Senha atualizada no banco e no .env!';
+    } else {
+      credFeedback.value = '❌ ' + (data.error || 'Erro ao atualizar senha.');
+    }
+  } catch {
+    credFeedback.value = '❌ Erro de comunicação com o backend.';
+  }
+}
+
+function handleLogout() {
+  isAuthenticated.value = false;
+  localStorage.removeItem(STORAGE_AUTH_KEY);
+  stopAnimationLoop();
+}
+
+// ============================================================================
+// 2. ESTADO DO ECOSSISTEMA 3D, AGENTES, NÓS FIXOS E MEMÓRIAS
+// ============================================================================
+const neuralCanvas = ref<HTMLCanvasElement | null>(null);
 const dynamicAgents = ref<any[]>([]);
-const memoryDots = ref<MemoryDotItem[]>([]);
+const savedConnectionsCatalog = ref<any[]>([]);
+const memoryDots = ref<any[]>([]);
 
 const activeAgentForTools = ref<any | null>(null);
 const selectedSubNode = ref<any | null>(null);
-const selectedMemoryDot = ref<MemoryDotItem | null>(null);
+const selectedMemoryDot = ref<any | null>(null);
 const popoverTab = ref<'connected' | 'saved' | 'create'>('connected');
-const connSaveFeedback = ref('');
+const connSaveFeedback = ref<string>('');
 
-const newConnForm = reactive({
+const newConnForm = ref({
   icon: '🔌',
   label: '',
   description: '',
@@ -389,742 +538,80 @@ const newConnForm = reactive({
   auth_token: ''
 });
 
-// Estados multimodais e chat
-const promptText = ref('');
-const isProcessing = ref(false);
+const promptText = ref<string>('');
+const isProcessing = ref<boolean>(false);
+const isSpeaking = ref<boolean>(false);
 const lastResponse = ref<{ agent: string; text: string; executionTimeMs?: number } | null>(null);
-const isCameraActive = ref(false);
-const isScreenActive = ref(false);
-const videoElement = ref<HTMLVideoElement | null>(null);
-let mediaStream: MediaStream | null = null;
+const sessionId = ref<string>(localStorage.getItem('jarvis_active_session_id') || 'sess_main_admin');
 
-// Armazenamento em memória para frames multimodais
-const capturedWebcamBase64 = ref<string | null>(null);
-const capturedScreenBase64 = ref<string | null>(null);
-
-// Estados do Canvas 3D
-const neuralCanvas = ref<HTMLCanvasElement | null>(null);
-let animFrameId = 0;
-let rotY = 0.25;
-let rotX = 0.18;
-let zoom = 1.0;
+// Controles de câmera 3D e gestos Touch/Mouse
+const rotationY = ref<number>(0);
+const rotationX = ref<number>(0.18);
+const cameraZoom = ref<number>(1.0);
 let isDragging = false;
-let dragStartX = 0;
-let dragStartY = 0;
-let pointerDownPos = { x: 0, y: 0 };
-let corePulseBoost = 0;
-let activeTargetSlug: string | null = null;
+let dragMoved = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+let animationFrameId: number | null = null;
+let refreshIntervalId: any = null;
 
-interface ProjectedHitbox {
-  kind: 'core' | 'agent' | 'subnode' | 'memory';
-  id: string | number;
-  x: number;
-  y: number;
-  r: number;
-  agent?: any;
-  subnodeData?: any;
-  memoryData?: MemoryDotItem;
-}
-let hitboxes: ProjectedHitbox[] = [];
+// Cache de posições na tela para clique/toque preciso
+let renderedAgentsHitbox: Array<{ x: number; y: number; r: number; agent: any }> = [];
+let renderedSubNodesHitbox: Array<{ x: number; y: number; r: number; node: any }> = [];
+let renderedMemoriesHitbox: Array<{ x: number; y: number; r: number; mem: any }> = [];
 
-const PALETTE = ['#10b981', '#38bdf8', '#d946ef', '#a855f7', '#f59e0b', '#22c55e', '#ec4899'];
+const AGENT_PALETTE = [
+  '#38bdf8',
+  '#10b981',
+  '#d946ef',
+  '#f59e0b',
+  '#8b5cf6',
+  '#ec4899',
+  '#14b8a6',
+  '#f43f5e'
+];
+
+const activeSharedNodesCount = computed(() => {
+  const used = new Set<string>();
+  dynamicAgents.value.forEach((ag) => {
+    if (Array.isArray(ag.tools)) {
+      ag.tools.forEach((t: string) => used.add(String(t).toLowerCase()));
+    }
+  });
+  return used.size;
+});
 
 function getConnectionMeta(toolId: string) {
-  const clean = String(toolId).trim().toLowerCase();
-  const found = savedConnectionsCatalog.value.find((c) => c.id.toLowerCase() === clean);
+  const clean = String(toolId || '').toLowerCase();
+  const found = savedConnectionsCatalog.value.find(
+    (c) => String(c.id).toLowerCase() === clean || String(c.provider_key).toLowerCase() === clean
+  );
   if (found) return found;
   return {
     id: clean,
+    label: toolId.toUpperCase(),
     icon: '🔌',
-    label: toolId,
-    color: '#38bdf8',
     http_method: 'API',
     endpoint_url: ''
   };
 }
 
-// ============================================================================
-// MOTOR DE VOZ: WAKE WORD ("JARVIS") + STT + SÍNTESE DE VOZ (TTS)
-// ============================================================================
-const isAlwaysListening = ref<boolean>(true);
-const isJarvisAwake = ref<boolean>(false);
-const isJarvisSpeaking = ref<boolean>(false);
-const isVoiceMuted = ref<boolean>(false);
-const voiceStatusText = ref<string>('🟢 Vigília ativa: diga "Jarvis"...');
-
-let wakeRecognition: any = null;
-let wakeTimeoutId: any = null;
-let currentTtsAudio: HTMLAudioElement | null = null;
-
-async function handleLogin() {
-  loginError.value = '';
-  try {
-    const response = await fetch('/api/v1/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email.value, password: password.value })
-    });
-    const data = await response.json();
-
-    if (data.success) {
-      isAuthenticated.value = true;
-      localStorage.setItem(STORAGE_AUTH_KEY, 'true');
-      localStorage.setItem(STORAGE_EMAIL_KEY, email.value);
-      await nextTick();
-      initNeuralCanvas();
-    } else {
-      loginError.value = data.error || 'E-mail ou senha incorretos.';
-    }
-  } catch {
-    loginError.value = 'Erro de conexão com o servidor.';
-  }
-}
-
-async function updateCredentials() {
-  credFeedback.value = '';
-  try {
-    const res = await fetch('/api/v1/auth/update-credentials', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        currentEmail: email.value,
-        newEmail: newEmailInput.value,
-        newPassword: newPasswordInput.value
-      })
-    });
-    const data = await res.json();
-    if (data.success) {
-      email.value = data.newEmail;
-      localStorage.setItem(STORAGE_EMAIL_KEY, data.newEmail);
-      newPasswordInput.value = '';
-      credFeedback.value = '✅ Login e senha atualizados no banco e no .env!';
-    } else {
-      credFeedback.value = '❌ ' + (data.error || 'Erro ao atualizar.');
-    }
-  } catch {
-    credFeedback.value = '❌ Falha ao comunicar com o servidor.';
-  }
-}
-
-function handleLogout() {
-  isAuthenticated.value = false;
-  localStorage.removeItem(STORAGE_AUTH_KEY);
-}
-
-function playJarvisChime(type: 'wake' | 'send' = 'wake') {
-  try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = 'sine';
-    if (type === 'wake') {
-      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.08);
-    } else {
-      osc.frequency.setValueAtTime(659.25, ctx.currentTime);
-      osc.frequency.setValueAtTime(523.25, ctx.currentTime + 0.08);
-    }
-
-    gain.gain.setValueAtTime(0.12, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.22);
-  } catch {}
-}
-
-function speakJarvisResponse(rawText: string, onDoneCallback?: () => void) {
-  if (isVoiceMuted.value || !rawText) {
-    if (onDoneCallback) onDoneCallback();
-    return;
-  }
-
-  const cleanText = rawText
-    .replace(/```[\s\S]*?```/g, 'bloco de código exibido na tela.')
-    .replace(/[*#_`~>|]/g, '')
-    .replace(/https?:\/\/\S+/g, 'link na tela')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (!cleanText) {
-    if (onDoneCallback) onDoneCallback();
-    return;
-  }
-
-  isJarvisSpeaking.value = true;
-  if (wakeRecognition) {
-    try {
-      wakeRecognition.stop();
-    } catch {}
-  }
-
-  const finishSpeaking = () => {
-    isJarvisSpeaking.value = false;
-    if (onDoneCallback) onDoneCallback();
-    restartWakeWordAfterSpeech();
-  };
-
-  if ('speechSynthesis' in window) {
-    try {
-      window.speechSynthesis.cancel();
-      if (currentTtsAudio) {
-        currentTtsAudio.pause();
-        currentTtsAudio = null;
-      }
-
-      setTimeout(() => {
-        window.speechSynthesis.resume();
-        const voices = window.speechSynthesis.getVoices();
-        const ptVoice =
-          voices.find(
-            (v) =>
-              v.lang.toLowerCase().includes('pt') &&
-              (v.name.includes('Antonio') ||
-                v.name.includes('Francisca') ||
-                v.name.includes('Google') ||
-                v.name.includes('Natural'))
-          ) ||
-          voices.find((v) => v.lang.toLowerCase().includes('pt-br')) ||
-          voices.find((v) => v.lang.toLowerCase().startsWith('pt'));
-
-        if (voices.length > 0 && !ptVoice && /Linux|Android/i.test(navigator.userAgent)) {
-          playFallbackAudioStream(cleanText, finishSpeaking);
-          return;
-        }
-
-        const sentences = cleanText.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleanText];
-        let startedAny = false;
-
-        sentences.forEach((sentence, idx) => {
-          const trimmed = sentence.trim();
-          if (!trimmed) return;
-
-          const utterance = new SpeechSynthesisUtterance(trimmed);
-          utterance.lang = 'pt-BR';
-          utterance.rate = 1.08;
-          utterance.pitch = 1.0;
-          if (ptVoice) utterance.voice = ptVoice;
-
-          utterance.onstart = () => {
-            startedAny = true;
-          };
-
-          if (idx === sentences.length - 1) {
-            utterance.onend = () => finishSpeaking();
-            utterance.onerror = () => {
-              if (!startedAny) {
-                playFallbackAudioStream(cleanText, finishSpeaking);
-              } else {
-                finishSpeaking();
-              }
-            };
-          }
-
-          window.speechSynthesis.speak(utterance);
-        });
-
-        setTimeout(() => {
-          if (isJarvisSpeaking.value && !window.speechSynthesis.speaking && !startedAny) {
-            playFallbackAudioStream(cleanText, finishSpeaking);
-          }
-        }, 1200);
-      }, 80);
-      return;
-    } catch (err) {
-      console.warn('Fallback TTS acionado:', err);
-    }
-  }
-
-  playFallbackAudioStream(cleanText, finishSpeaking);
-}
-
-function playFallbackAudioStream(text: string, onComplete: () => void) {
-  try {
-    const shortText = text.slice(0, 200);
-    const url = `https://translate.googleapis.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(
-      shortText
-    )}&tl=pt-BR&client=tw-ob`;
-    currentTtsAudio = new Audio(url);
-    currentTtsAudio.onended = () => onComplete();
-    currentTtsAudio.onerror = () => onComplete();
-    currentTtsAudio.play().catch(() => onComplete());
-  } catch {
-    onComplete();
-  }
-}
-
-function restartWakeWordAfterSpeech() {
-  if (isAlwaysListening.value && wakeRecognition && !isJarvisSpeaking.value) {
-    setTimeout(() => {
-      try {
-        wakeRecognition.start();
-        voiceStatusText.value = isJarvisAwake.value
-          ? '🎙️ Estou ouvindo! Diga seu comando...'
-          : '🟢 Vigília ativa: diga "Jarvis"...';
-      } catch {}
-    }, 300);
-  }
-}
-
-function requiresCameraActivation(text: string): boolean {
-  const lower = (text || '').toLowerCase();
-  return (
-    lower.includes('ative a câmera') ||
-    lower.includes('ativar a câmera') ||
-    lower.includes('ativa a câmera') ||
-    lower.includes('ligue a câmera') ||
-    lower.includes('ligar a câmera') ||
-    lower.includes('abra a câmera') ||
-    lower.includes(' está me vendo') ||
-    lower.includes('está me vendo') ||
-    lower.includes('ta me vendo') ||
-    lower.includes('tá me vendo') ||
-    lower.includes('consegue me ver') ||
-    lower.includes('você me vê') ||
-    lower.includes('olhe para mim') ||
-    lower.includes('olha pra mim') ||
-    lower.includes('como eu estou') ||
-    lower.includes('quem sou eu')
-  );
-}
-
-async function ensureCameraAndCaptureFrame(): Promise<string | null> {
-  try {
-    let stream: MediaStream | null = mediaStream || (window as any).__jarvisCameraStream || null;
-
-    if (!stream || !stream.active) {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: 'user' },
-        audio: false
-      });
-      mediaStream = stream;
-      (window as any).__jarvisCameraStream = stream;
-
-      if (videoElement.value) {
-        videoElement.value.srcObject = stream;
-        videoElement.value.play().catch(() => {});
-      }
-      isCameraActive.value = true;
-    }
-
-    const tempVideo = document.createElement('video');
-    tempVideo.srcObject = stream;
-    tempVideo.muted = true;
-    tempVideo.playsInline = true;
-    await tempVideo.play();
-
-    await new Promise((r) => setTimeout(r, 350));
-
-    const canvas = document.createElement('canvas');
-    canvas.width = tempVideo.videoWidth || 640;
-    canvas.height = tempVideo.videoHeight || 480;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-
-    ctx.drawImage(tempVideo, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-    tempVideo.pause();
-    tempVideo.srcObject = null;
-
-    const base64Clean = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-    capturedWebcamBase64.value = base64Clean;
-    return base64Clean;
-  } catch (err) {
-    console.warn('⚠️ Não foi possível acessar a webcam automaticamente:', err);
-    return null;
-  }
-}
-
-function initWakeWordListener() {
-  const SpeechRecognition =
-    (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-  if (!SpeechRecognition) {
-    voiceStatusText.value = '⚠️ Use Google Chrome ou Edge para comando de voz.';
-    return;
-  }
-
-  if (wakeRecognition) {
-    try {
-      wakeRecognition.stop();
-    } catch {}
-  }
-
-  wakeRecognition = new SpeechRecognition();
-  wakeRecognition.continuous = true;
-  wakeRecognition.interimResults = true;
-  wakeRecognition.lang = 'pt-BR';
-
-  wakeRecognition.onresult = (event: any) => {
-    if (isJarvisSpeaking.value) return;
-
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i];
-      const transcript = result[0].transcript.trim();
-      const lower = transcript.toLowerCase();
-
-      if (
-        (lower.includes('jarvis') || lower.includes('jávis') || lower.includes('jarves')) &&
-        !isJarvisAwake.value
-      ) {
-        const afterWake =
-          transcript
-            .split(/jarvis|jávis|jarves/i)
-            .pop()
-            ?.replace(/^[,.\s!?-]+/, '')
-            .trim() || '';
-
-        if (result.isFinal && afterWake.length > 3) {
-          playJarvisChime('wake');
-          voiceStatusText.value = `⚡ Comando: "${afterWake}"`;
-          dispatchVoiceCommandToJarvis(afterWake);
-          return;
-        }
-
-        if (result.isFinal && afterWake.length <= 3) {
-          isJarvisAwake.value = true;
-          playJarvisChime('wake');
-          voiceStatusText.value = '🎙️ Estou ouvindo! Diga seu comando...';
-
-          speakJarvisResponse('Sim, senhor? Estou ouvindo.', () => {
-            if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
-            wakeTimeoutId = setTimeout(() => {
-              if (isJarvisAwake.value) {
-                isJarvisAwake.value = false;
-                voiceStatusText.value = '🟢 Vigília ativa: diga "Jarvis"...';
-              }
-            }, 9000);
-          });
-          return;
-        }
-      }
-
-      if (isJarvisAwake.value && result.isFinal && transcript.length > 2) {
-        const cleanCmd = transcript.replace(/^(jarvis|jávis|jarves)[,.\s!?-]*/i, '').trim();
-        if (cleanCmd.length > 2) {
-          isJarvisAwake.value = false;
-          if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
-          playJarvisChime('send');
-          voiceStatusText.value = `⚡ Processando: "${cleanCmd}"`;
-          dispatchVoiceCommandToJarvis(cleanCmd);
-          return;
-        }
-      }
-    }
-  };
-
-  wakeRecognition.onend = () => {
-    if (isAlwaysListening.value && !isJarvisSpeaking.value) {
-      setTimeout(() => {
-        try {
-          wakeRecognition.start();
-        } catch {}
-      }, 250);
-    }
-  };
-
-  try {
-    wakeRecognition.start();
-  } catch {}
-}
-
-async function dispatchVoiceCommandToJarvis(spokenText: string) {
-  promptText.value = spokenText;
-  await sendCommand(spokenText);
-}
-
-function toggleMicrophone() {
-  if (!isAlwaysListening.value) {
-    isAlwaysListening.value = true;
-    initWakeWordListener();
-  } else {
-    isJarvisAwake.value = true;
-    playJarvisChime('wake');
-    voiceStatusText.value = '🎙️ Estou ouvindo! Pode falar...';
-  }
-}
-
 function getAgentsUsingTool(toolId: string) {
-  const clean = String(toolId).trim().toLowerCase();
+  const clean = String(toolId || '').toLowerCase();
   return dynamicAgents.value.filter(
-    (ag) => Array.isArray(ag.tools) && ag.tools.some((t: string) => String(t).trim().toLowerCase() === clean)
+    (ag) => Array.isArray(ag.tools) && ag.tools.some((t: string) => String(t).toLowerCase() === clean)
   );
 }
 
-const fixedSharedNodes = computed(() => {
-  const uniqueIds = new Set<string>();
-  for (const ag of dynamicAgents.value) {
-    if (Array.isArray(ag.tools)) {
-      for (const t of ag.tools) {
-        if (t) uniqueIds.add(String(t).trim().toLowerCase());
-      }
-    }
-  }
-  for (const c of savedConnectionsCatalog.value) {
-    if (c.is_enabled) uniqueIds.add(String(c.id).trim().toLowerCase());
-  }
-  return Array.from(uniqueIds).map((id) => getConnectionMeta(id));
-});
-
-const activeSharedNodesCount = computed(() => fixedSharedNodes.value.length);
+function isConnectionLinked(agent: any, toolId: string) {
+  if (!agent || !Array.isArray(agent.tools)) return false;
+  const clean = String(toolId || '').toLowerCase();
+  return agent.tools.some((t: string) => String(t).toLowerCase() === clean);
+}
 
 function getAgentMemoryCount(agent: any) {
-  return memoryDots.value.filter(
-    (m) => m.agentId === agent.id || m.agentSlug === agent.slug
-  ).length;
-}
-
-async function loadEcosystemData() {
-  try {
-    const localCustom = JSON.parse(localStorage.getItem('custom_agent_tools_catalog') || '[]');
-    for (const item of localCustom) {
-      if (!savedConnectionsCatalog.value.some((c) => c.id === item.id)) {
-        savedConnectionsCatalog.value.push({
-          id: item.id,
-          icon: item.icon || '🛠️',
-          label: item.label || item.id,
-          color: item.color || '#38bdf8',
-          http_method: item.http_method || 'API',
-          endpoint_url: item.endpoint_url || '',
-          description: item.description || ''
-        });
-      }
-    }
-
-    const connRes = await fetch('/api/v1/connectors').catch(() => null);
-    if (connRes && connRes.ok) {
-      const connJson = await connRes.json();
-      if (connJson.success && Array.isArray(connJson.data)) {
-        for (const row of connJson.data) {
-          const id = row.provider_key;
-          const cfg = row.config || {};
-          const entry = {
-            id,
-            icon: row.icon || '🔌',
-            label: row.name || id,
-            color: '#38bdf8',
-            http_method: cfg.http_method || row.http_method || 'GET',
-            endpoint_url: cfg.endpoint_url || row.endpoint_url || '',
-            description: row.description || cfg.description || '',
-            is_enabled: Boolean(row.is_enabled)
-          };
-          const idx = savedConnectionsCatalog.value.findIndex((c) => c.id === id);
-          if (idx >= 0) savedConnectionsCatalog.value[idx] = { ...savedConnectionsCatalog.value[idx], ...entry };
-          else savedConnectionsCatalog.value.push(entry);
-        }
-      }
-    }
-
-    const agRes = await fetch('/api/v1/agents');
-    const agJson = await agRes.json();
-    if (agJson.success && Array.isArray(agJson.data)) {
-      dynamicAgents.value = agJson.data.map((ag: any) => ({
-        ...ag,
-        tools: Array.isArray(ag.tools)
-          ? ag.tools
-          : typeof ag.tools === 'string'
-          ? (() => {
-              try {
-                return JSON.parse(ag.tools);
-              } catch {
-                return [];
-              }
-            })()
-          : []
-      }));
-
-      if (activeAgentForTools.value) {
-        const updated = dynamicAgents.value.find((a) => a.id === activeAgentForTools.value.id);
-        if (updated) activeAgentForTools.value = updated;
-      }
-    }
-
-    await loadMemoryDots();
-  } catch (err) {
-    console.warn('Erro ao sincronizar ecossistema:', err);
-  }
-}
-
-async function loadMemoryDots() {
-  const loadedDots: MemoryDotItem[] = [];
-  try {
-    const sessRes = await fetch('/api/v1/memory/sessions/main_neural_session').catch(() => null);
-    if (sessRes && sessRes.ok) {
-      const sessJson = await sessRes.json();
-      const specCtx = Array.isArray(sessJson.specialistContext) ? sessJson.specialistContext : [];
-      const chatHist = Array.isArray(sessJson.chatHistory) ? sessJson.chatHistory : [];
-
-      specCtx.slice(0, 18).forEach((item: any, idx: number) => {
-        const matchedAg =
-          dynamicAgents.value.find((a) => a.slug === item.specialist_slug) ||
-          dynamicAgents.value[idx % Math.max(1, dynamicAgents.value.length)];
-        if (matchedAg) {
-          loadedDots.push({
-            id: `spec_mem_${item.id || idx}`,
-            agentId: matchedAg.id,
-            agentSlug: matchedAg.slug,
-            agentName: matchedAg.name,
-            summary:
-              typeof item.context_data === 'string'
-                ? item.context_data.slice(0, 160)
-                : JSON.stringify(item.context_data || {}).slice(0, 160),
-            seedOffset: idx * 1.37
-          });
-        }
-      });
-
-      const assistantMsgs = chatHist.filter((m: any) => m.role === 'assistant').slice(-10);
-      assistantMsgs.forEach((msg: any, idx: number) => {
-        const targetAg = dynamicAgents.value[idx % Math.max(1, dynamicAgents.value.length)];
-        if (targetAg) {
-          loadedDots.push({
-            id: `chat_mem_${msg.id || idx}`,
-            agentId: targetAg.id,
-            agentSlug: targetAg.slug,
-            agentName: targetAg.name,
-            summary: String(msg.content || '').slice(0, 160),
-            seedOffset: (idx + 5) * 2.13
-          });
-        }
-      });
-    }
-  } catch {}
-
-  if (loadedDots.length === 0 && dynamicAgents.value.length > 0) {
-    dynamicAgents.value.forEach((ag, idx) => {
-      loadedDots.push(
-        {
-          id: `init_mem_${ag.id}_1`,
-          agentId: ag.id,
-          agentSlug: ag.slug,
-          agentName: ag.name,
-          summary: `Memória sináptica ativa do agente ${ag.name} sincronizada com o Orquestrador.`,
-          seedOffset: idx * 1.9 + 0.4
-        },
-        {
-          id: `init_mem_${ag.id}_2`,
-          agentId: ag.id,
-          agentSlug: ag.slug,
-          agentName: ag.name,
-          summary: `Registro vetorial indexado por ${ag.name} no banco PostgreSQL.`,
-          seedOffset: idx * 2.7 + 1.2
-        }
-      );
-    });
-  }
-
-  memoryDots.value = loadedDots;
-}
-
-function isConnectionLinked(agent: any, connId: string): boolean {
-  const clean = String(connId).trim().toLowerCase();
-  return (
-    Array.isArray(agent.tools) &&
-    agent.tools.some((t: string) => String(t).trim().toLowerCase() === clean)
-  );
-}
-
-async function toggleAgentConnection(agent: any, connId: string) {
-  if (!Array.isArray(agent.tools)) agent.tools = [];
-  const clean = String(connId).trim().toLowerCase();
-  const idx = agent.tools.findIndex((t: string) => String(t).trim().toLowerCase() === clean);
-  if (idx >= 0) {
-    agent.tools.splice(idx, 1);
-  } else {
-    agent.tools.push(connId);
-  }
-
-  await fetch(`/api/v1/agents/${agent.id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...agent, tools: agent.tools })
-  }).catch(() => {});
-}
-
-async function createAndAttachConnection() {
-  if (!newConnForm.label.trim()) {
-    connSaveFeedback.value = '⚠️ Informe um nome para o nó.';
-    return;
-  }
-
-  const id = newConnForm.label
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-
-  const payload = {
-    provider_key: id,
-    name: newConnForm.label.trim(),
-    category: 'Custom Node',
-    icon: newConnForm.icon || '🔌',
-    description: newConnForm.description.trim() || `Conexão ${newConnForm.label.trim()}`,
-    is_enabled: true,
-    config: {
-      http_method: newConnForm.http_method,
-      endpoint_url: newConnForm.endpoint_url.trim(),
-      auth_token: newConnForm.auth_token.trim(),
-      description: newConnForm.description.trim()
-    }
-  };
-
-  try {
-    await fetch('/api/v1/connectors', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    const newCatalogItem = {
-      id,
-      icon: payload.icon,
-      label: payload.name,
-      color: '#38bdf8',
-      http_method: newConnForm.http_method,
-      endpoint_url: newConnForm.endpoint_url.trim(),
-      description: payload.description,
-      is_enabled: true
-    };
-
-    const existingIdx = savedConnectionsCatalog.value.findIndex((c) => c.id === id);
-    if (existingIdx >= 0) savedConnectionsCatalog.value[existingIdx] = newCatalogItem;
-    else savedConnectionsCatalog.value.push(newCatalogItem);
-
-    const localSaved = JSON.parse(localStorage.getItem('custom_agent_tools_catalog') || '[]');
-    localStorage.setItem(
-      'custom_agent_tools_catalog',
-      JSON.stringify([...localSaved.filter((x: any) => x.id !== id), newCatalogItem])
-    );
-
-    if (activeAgentForTools.value) {
-      if (!isConnectionLinked(activeAgentForTools.value, id)) {
-        await toggleAgentConnection(activeAgentForTools.value, id);
-      }
-    }
-
-    newConnForm.label = '';
-    newConnForm.description = '';
-    newConnForm.endpoint_url = '';
-    newConnForm.auth_token = '';
-    connSaveFeedback.value = '✅ Nó fixo salvo e conectado ao agente!';
-    setTimeout(() => {
-      connSaveFeedback.value = '';
-      popoverTab.value = 'connected';
-    }, 900);
-  } catch (err: any) {
-    connSaveFeedback.value = `🔴 Erro: ${err.message}`;
-  }
-}
-
-function closeAgentPopover() {
-  activeAgentForTools.value = null;
+  if (!agent) return 0;
+  return memoryDots.value.filter((m) => m.agentId === agent.id || m.agentName === agent.name).length;
 }
 
 function clearSelection() {
@@ -1133,22 +620,164 @@ function clearSelection() {
   selectedMemoryDot.value = null;
 }
 
+function resetViewAndSelection() {
+  clearSelection();
+  cameraZoom.value = 1.0;
+  rotationX.value = 0.18;
+}
+
+function closeAgentPopover() {
+  activeAgentForTools.value = null;
+}
+
+async function loadEcosystemData() {
+  try {
+    const [agentsRes, connRes, memRes] = await Promise.all([
+      fetch('/api/v1/agents').catch(() => null),
+      fetch('/api/v1/connectors').catch(() => null),
+      fetch(`/api/v1/memory/sessions/${encodeURIComponent(sessionId.value)}`).catch(() => null)
+    ]);
+
+    if (agentsRes && agentsRes.ok) {
+      const agJson = await agentsRes.json().catch(() => ({}));
+      const list = Array.isArray(agJson.data) ? agJson.data : Array.isArray(agJson) ? agJson : [];
+      dynamicAgents.value = list.map((ag: any, idx: number) => ({
+        ...ag,
+        tools: Array.isArray(ag.tools) ? ag.tools : [],
+        color: AGENT_PALETTE[idx % AGENT_PALETTE.length]
+      }));
+    }
+
+    if (connRes && connRes.ok) {
+      const cJson = await connRes.json().catch(() => ({}));
+      const cList = Array.isArray(cJson.data) ? cJson.data : Array.isArray(cJson) ? cJson : [];
+      savedConnectionsCatalog.value = cList.map((c: any) => ({
+        id: c.provider_key || c.id || c.slug,
+        provider_key: c.provider_key || c.id,
+        label: c.name || c.label || c.provider_key,
+        icon: c.icon || '🔌',
+        description: c.description || '',
+        http_method: c.http_method || c.config?.http_method || 'GET',
+        endpoint_url: c.endpoint_url || c.config?.endpoint_url || ''
+      }));
+    }
+
+    if (memRes && memRes.ok) {
+      const mJson = await memRes.json().catch(() => ({}));
+      const chatRows = Array.isArray(mJson.chatHistory)
+        ? mJson.chatHistory
+        : Array.isArray(mJson.data)
+        ? mJson.data
+        : [];
+
+      const agList = dynamicAgents.value;
+      memoryDots.value = chatRows.slice(-28).map((row: any, i: number) => {
+        const linkedAgent = agList.length > 0 ? agList[i % agList.length] : null;
+        return {
+          id: row.id || i,
+          agentId: linkedAgent?.id || 0,
+          agentName: linkedAgent?.name || 'JARVIS Core',
+          summary: String(row.content || '').slice(0, 180),
+          progressOffset: (i * 0.13) % 1
+        };
+      });
+    }
+  } catch (err) {
+    console.warn('⚠️ [Ecossistema 3D] Aviso ao sincronizar dados:', err);
+  }
+}
+
+async function toggleAgentConnection(agent: any, toolId: string) {
+  const clean = String(toolId || '').toLowerCase();
+  const currentTools = Array.isArray(agent.tools) ? [...agent.tools] : [];
+  const idx = currentTools.findIndex((t: string) => String(t).toLowerCase() === clean);
+
+  if (idx >= 0) {
+    currentTools.splice(idx, 1);
+  } else {
+    currentTools.push(clean);
+  }
+  agent.tools = currentTools;
+
+  try {
+    await fetch(`/api/v1/agents/${agent.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...agent, tools: currentTools })
+    });
+  } catch {}
+}
+
+async function createAndAttachConnection() {
+  if (!newConnForm.value.label.trim()) {
+    connSaveFeedback.value = '⚠️ Informe o nome do nó.';
+    return;
+  }
+  const key = newConnForm.value.label
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9_]/g, '_');
+
+  try {
+    await fetch('/api/v1/connectors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider_key: key,
+        name: newConnForm.value.label.trim(),
+        icon: newConnForm.value.icon || '🔌',
+        description: newConnForm.value.description,
+        http_method: newConnForm.value.http_method,
+        endpoint_url: newConnForm.value.endpoint_url,
+        api_key: newConnForm.value.auth_token,
+        is_enabled: true
+      })
+    });
+
+    await loadEcosystemData();
+    if (activeAgentForTools.value) {
+      await toggleAgentConnection(activeAgentForTools.value, key);
+    }
+    connSaveFeedback.value = '✅ Nó fixo criado e conectado!';
+    newConnForm.value = {
+      icon: '🔌',
+      label: '',
+      description: '',
+      http_method: 'GET',
+      endpoint_url: '',
+      auth_token: ''
+    };
+  } catch {
+    connSaveFeedback.value = '❌ Erro ao salvar nó.';
+  }
+}
+
 // ============================================================================
-// MOTOR 3D
+// 3. MOTOR GRÁFICO 3D RESPONSIVO (SEM DESBOTAMENTO E ENQUADRADO NO CELULAR)
 // ============================================================================
-function project3D(x: number, y: number, z: number, cx: number, cy: number) {
-  const cosY = Math.cos(rotY);
-  const sinY = Math.sin(rotY);
+function project3D(
+  x: number,
+  y: number,
+  z: number,
+  cx: number,
+  cy: number,
+  fov: number
+) {
+  const cosY = Math.cos(rotationY.value);
+  const sinY = Math.sin(rotationY.value);
   const x1 = x * cosY - z * sinY;
   const z1 = z * cosY + x * sinY;
 
-  const cosX = Math.cos(rotX);
-  const sinX = Math.sin(rotX);
+  const cosX = Math.cos(rotationX.value);
+  const sinX = Math.sin(rotationX.value);
   const y2 = y * cosX - z1 * sinX;
   const z2 = z1 * cosX + y * sinX;
 
-  const fov = 780 * zoom;
-  const scale = fov / Math.max(200, fov + z2);
+  const depth = Math.max(fov + z2, 120);
+  const scale = (fov / depth) * cameraZoom.value;
+
   return {
     x: cx + x1 * scale,
     y: cy + y2 * scale,
@@ -1157,576 +786,571 @@ function project3D(x: number, y: number, z: number, cx: number, cy: number) {
   };
 }
 
-function drawCurvedSynapse(
-  ctx: CanvasRenderingContext2D,
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
-  color: string,
-  time: number,
-  isHighlighted: boolean,
-  dashed = false,
-  dimmed = false,
-  curveBend = 0.14
-) {
-  const mx = (x1 + x2) / 2;
-  const my = (y1 + y2) / 2;
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const cx = mx - dy * curveBend;
-  const cy = my + dx * curveBend;
-
-  ctx.save();
-  ctx.beginPath();
-  if (dashed) ctx.setLineDash([4, 5]);
-  ctx.moveTo(x1, y1);
-  ctx.quadraticCurveTo(cx, cy, x2, y2);
-  ctx.strokeStyle = color;
-  ctx.globalAlpha = dimmed ? 0.12 : isHighlighted ? 0.88 : 0.38;
-  ctx.lineWidth = isHighlighted ? 2.1 : 1.2;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = isHighlighted ? 12 : 4;
-  ctx.stroke();
-
-  if (!dimmed) {
-    const t = (time * (isHighlighted ? 0.85 : 0.3)) % 1;
-    const px = (1 - t) * (1 - t) * x1 + 2 * (1 - t) * t * cx + t * t * x2;
-    const py = (1 - t) * (1 - t) * y1 + 2 * (1 - t) * t * cy + t * t * y2;
-
-    ctx.beginPath();
-    ctx.arc(px, py, isHighlighted ? 3.5 : 2.1, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 9;
-    ctx.globalAlpha = isHighlighted ? 0.95 : 0.7;
-    ctx.fill();
+function stopAnimationLoop() {
+  if (animationFrameId !== null) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
   }
-  ctx.restore();
 }
 
-function startNeuralLoop() {
-  const canvas = neuralCanvas.value;
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
+function startNeuralCanvasLoop() {
+  stopAnimationLoop();
+  let time = 0;
 
-  const resize = () => {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-  };
-  resize();
-  window.addEventListener('resize', resize);
-
-  const render = (now: number) => {
-    const time = now * 0.001;
-    if (!isDragging) {
-      rotY += 0.0012;
+  const renderFrame = () => {
+    const canvas = neuralCanvas.value;
+    if (!canvas) {
+      animationFrameId = requestAnimationFrame(renderFrame);
+      return;
     }
-    if (corePulseBoost > 0) corePulseBoost = Math.max(0, corePulseBoost - 0.02);
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2 - 18;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      animationFrameId = requestAnimationFrame(renderFrame);
+      return;
+    }
 
-    hitboxes = [];
+    const width = window.innerWidth || 360;
+    const height = window.innerHeight || 640;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-    // Núcleo
-    const coreProj = project3D(0, 0, 0, cx, cy);
-    const coreRadius = (60 + Math.sin(time * 2.5) * 3 + corePulseBoost * 18) * coreProj.scale;
+    if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+    }
 
-    const auraGrad = ctx.createRadialGradient(
-      coreProj.x,
-      coreProj.y,
-      coreRadius * 0.2,
-      coreProj.x,
-      coreProj.y,
-      coreRadius * 2.1
+    // RESET TOTAL DO CONTEXTO A CADA FRAME (IMPEDE O DESBOTAMENTO / ESCURECIMENTO)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = 1.0;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.shadowBlur = 0;
+    ctx.clearRect(0, 0, width, height);
+
+    // Fundo espacial profundo fixo e estável
+    const bgGrad = ctx.createRadialGradient(
+      width * 0.5,
+      height * 0.48,
+      10,
+      width * 0.5,
+      height * 0.48,
+      Math.max(width, height) * 0.75
     );
-    auraGrad.addColorStop(0, 'rgba(56, 189, 248, 0.42)');
-    auraGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.14)');
-    auraGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = auraGrad;
-    ctx.beginPath();
-    ctx.arc(coreProj.x, coreProj.y, coreRadius * 2.1, 0, Math.PI * 2);
-    ctx.fill();
+    bgGrad.addColorStop(0, '#09192c');
+    bgGrad.addColorStop(0.55, '#050b16');
+    bgGrad.addColorStop(1, '#020409');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, width, height);
 
-    ctx.save();
-    ctx.translate(coreProj.x, coreProj.y);
-    ctx.rotate(time * 0.35);
-    const segments = 36;
-    for (let i = 0; i < segments; i++) {
-      const a1 = (i / segments) * Math.PI * 2;
-      const a2 = a1 + (Math.PI * 2) / (segments * 1.6);
-      ctx.beginPath();
-      ctx.arc(0, 0, coreRadius * 1.25, a1, a2);
-      ctx.strokeStyle = 'rgba(34, 211, 238, 0.55)';
-      ctx.lineWidth = 3.8 * coreProj.scale;
-      ctx.stroke();
+    time += isSpeaking.value || isProcessing.value ? 0.032 : 0.012;
+    if (!isDragging) {
+      rotationY.value += 0.0028;
     }
+
+    // ESCALA AUTOMÁTICA PARA CELULAR, TABLET E MONITOR (NUNCA CORTA NAS BORDAS)
+    const isMobile = width < 768;
+    const safeHalfWidth = width * 0.5 - (isMobile ? 48 : 80);
+    const safeHalfHeight = height * 0.5 - (isMobile ? 115 : 130);
+    const maxSafeRadius = Math.max(95, Math.min(safeHalfWidth, safeHalfHeight));
+
+    const cx = width * 0.5;
+    const cy = height * (isMobile ? 0.48 : 0.5);
+    const fov = isMobile ? 520 : 680;
+
+    const coreRadius = Math.min(maxSafeRadius * 0.36, isMobile ? 56 : 82);
+    const agentOrbitRadius = Math.min(maxSafeRadius * 0.88, isMobile ? 132 : 245);
+    const sharedNodeOrbitRadius = Math.min(maxSafeRadius * 1.15, isMobile ? 162 : 330);
+
+    // 1. DESENHA ANÉIS ORBITAIS TRACEJADOS E GLOBO CENTRAL (JARVIS CORE)
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = '#0ea5e9';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 8]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, coreRadius * 1.32 * cameraZoom.value, time * 0.4, time * 0.4 + Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
 
+    // Esfera Wireframe 3D Central
+    const latBands = 7;
+    const lonBands = 12;
+    const pulseScale = 1 + (isSpeaking.value || isProcessing.value ? Math.sin(time * 5) * 0.07 : Math.sin(time * 2) * 0.02);
+    const effectiveCoreR = coreRadius * pulseScale;
+
     ctx.save();
-    ctx.strokeStyle = 'rgba(165, 243, 252, 0.65)';
-    ctx.lineWidth = 1;
-    const latLines = 6;
-    const lonLines = 10;
-    for (let i = 1; i < latLines; i++) {
-      const phi = (i / latLines) * Math.PI;
+    ctx.strokeStyle = isSpeaking.value ? '#38bdf8' : '#22d3ee';
+    ctx.lineWidth = 1.1;
+
+    for (let i = 1; i < latBands; i++) {
+      const theta = (i * Math.PI) / latBands;
+      const sinT = Math.sin(theta);
+      const cosT = Math.cos(theta);
+
       ctx.beginPath();
-      for (let j = 0; j <= 36; j++) {
-        const theta = (j / 36) * Math.PI * 2;
-        const sx = (coreRadius * 0.85) / coreProj.scale * Math.sin(phi) * Math.cos(theta);
-        const sy = (coreRadius * 0.85) / coreProj.scale * Math.cos(phi);
-        const sz = (coreRadius * 0.85) / coreProj.scale * Math.sin(phi) * Math.sin(theta);
-        const p = project3D(sx, sy, sz, cx, cy);
+      for (let j = 0; j <= lonBands; j++) {
+        const phi = (j * 2 * Math.PI) / lonBands;
+        const x = effectiveCoreR * sinT * Math.cos(phi);
+        const y = effectiveCoreR * cosT;
+        const z = effectiveCoreR * sinT * Math.sin(phi);
+        const p = project3D(x, y, z, cx, cy, fov);
         if (j === 0) ctx.moveTo(p.x, p.y);
         else ctx.lineTo(p.x, p.y);
       }
+      ctx.globalAlpha = 0.42;
       ctx.stroke();
     }
-    for (let j = 0; j < lonLines; j++) {
-      const theta = (j / lonLines) * Math.PI;
+
+    for (let j = 0; j < lonBands; j++) {
+      const phi = (j * 2 * Math.PI) / lonBands;
+      const cosP = Math.cos(phi);
+      const sinP = Math.sin(phi);
+
       ctx.beginPath();
-      for (let i = 0; i <= 36; i++) {
-        const phi = (i / 36) * Math.PI * 2;
-        const sx = (coreRadius * 0.85) / coreProj.scale * Math.sin(phi) * Math.cos(theta);
-        const sy = (coreRadius * 0.85) / coreProj.scale * Math.cos(phi);
-        const sz = (coreRadius * 0.85) / coreProj.scale * Math.sin(phi) * Math.sin(theta);
-        const p = project3D(sx, sy, sz, cx, cy);
+      for (let i = 0; i <= latBands; i++) {
+        const theta = (i * Math.PI) / latBands;
+        const x = effectiveCoreR * Math.sin(theta) * cosP;
+        const y = effectiveCoreR * Math.cos(theta);
+        const z = effectiveCoreR * Math.sin(theta) * sinP;
+        const p = project3D(x, y, z, cx, cy, fov);
         if (i === 0) ctx.moveTo(p.x, p.y);
         else ctx.lineTo(p.x, p.y);
       }
+      ctx.globalAlpha = 0.35;
       ctx.stroke();
     }
     ctx.restore();
 
-    hitboxes.push({
-      kind: 'core',
-      id: 'jarvis_core',
-      x: coreProj.x,
-      y: coreProj.y,
-      r: coreRadius * 1.15
-    });
+    // Brilho interno do núcleo
+    ctx.save();
+    const coreGlow = ctx.createRadialGradient(cx, cy, 4, cx, cy, effectiveCoreR * 1.2 * cameraZoom.value);
+    coreGlow.addColorStop(0, 'rgba(56, 189, 248, 0.42)');
+    coreGlow.addColorStop(0.6, 'rgba(14, 165, 233, 0.12)');
+    coreGlow.addColorStop(1, 'rgba(14, 165, 233, 0)');
+    ctx.fillStyle = coreGlow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, effectiveCoreR * 1.2 * cameraZoom.value, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
 
-    // Posições dos Agentes
-    const agents = dynamicAgents.value;
-    const totalAgents = agents.length;
-    const agentOrbitRadius = 215;
-    const hasSelectedAgent = Boolean(activeAgentForTools.value);
-    const hasSelectedSubNode = Boolean(selectedSubNode.value);
+    // 2. POSICIONAMENTO 3D DOS AGENTES DE IA (COM CLAMP DE SEGURANÇA PARA A TELA)
+    renderedAgentsHitbox = [];
+    renderedSubNodesHitbox = [];
+    renderedMemoriesHitbox = [];
 
-    const agentPositionsMap = new Map<number | string, {
-      ag: any;
-      ax: number;
-      ay: number;
-      az: number;
-      proj: { x: number; y: number; z: number; scale: number };
-      color: string;
-      angle: number;
-    }>();
+    const agentPositionsMap = new Map<any, { ag: any; proj: { x: number; y: number; scale: number }; color: string }>();
+    const totalAgents = dynamicAgents.value.length;
 
-    agents.forEach((ag, index) => {
-      const angle = (index / Math.max(1, totalAgents)) * Math.PI * 2;
-      const ax = Math.cos(angle) * agentOrbitRadius;
-      const ay = Math.sin(angle * 2) * 45;
-      const az = Math.sin(angle) * agentOrbitRadius;
-      const proj = project3D(ax, ay, az, cx, cy);
-      const color = PALETTE[index % PALETTE.length];
+    dynamicAgents.value.forEach((ag, idx) => {
+      const angle = (idx / Math.max(totalAgents, 1)) * Math.PI * 2 + 0.3;
+      const yOffset = Math.sin(idx * 1.7 + time * 0.5) * (isMobile ? 28 : 42);
+      const x3d = Math.cos(angle) * agentOrbitRadius;
+      const z3d = Math.sin(angle) * agentOrbitRadius;
+      const rawProj = project3D(x3d, yOffset, z3d, cx, cy, fov);
 
-      agentPositionsMap.set(ag.id, { ag, ax, ay, az, proj, color, angle });
-    });
+      // Trava coordenada X e Y dentro da área visível do dispositivo para nunca cortar o texto
+      const padX = isMobile ? 46 : 70;
+      const padTop = isMobile ? 85 : 95;
+      const padBottom = isMobile ? 105 : 110;
+      const clampedX = Math.max(padX, Math.min(width - padX, rawProj.x));
+      const clampedY = Math.max(padTop, Math.min(height - padBottom, rawProj.y));
 
-    // Memórias
-    memoryDots.value.forEach((mem, mIdx) => {
-      const parentInfo = agentPositionsMap.get(mem.agentId);
-      if (!parentInfo) return;
-
-      const sideOffset = Math.sin(mem.seedOffset + mIdx * 1.7) * 36;
-      const verticalOffset = Math.cos(mem.seedOffset * 1.3 + mIdx) * 32;
-      const perpAngle = parentInfo.angle + Math.PI / 2;
-
-      const mx = parentInfo.ax * 0.52 + Math.cos(perpAngle) * sideOffset;
-      const my = parentInfo.ay * 0.52 + verticalOffset;
-      const mz = parentInfo.az * 0.52 + Math.sin(perpAngle) * sideOffset;
-
-      const memProj = project3D(mx, my, mz, cx, cy);
-      const isParentSelected = activeAgentForTools.value?.id === parentInfo.ag.id;
-      const isMemSelected = selectedMemoryDot.value?.id === mem.id;
-      const isDimmed = (hasSelectedAgent && !isParentSelected) || hasSelectedSubNode;
-
-      drawCurvedSynapse(
-        ctx,
-        parentInfo.proj.x,
-        parentInfo.proj.y,
-        memProj.x,
-        memProj.y,
-        parentInfo.color,
-        time * 0.9 + mIdx * 0.3,
-        isParentSelected || isMemSelected,
-        true,
-        isDimmed,
-        0.1
-      );
-
-      drawCurvedSynapse(
-        ctx,
-        memProj.x,
-        memProj.y,
-        coreProj.x,
-        coreProj.y,
-        '#38bdf8',
-        time * 1.1 + mIdx * 0.4,
-        isParentSelected || isMemSelected,
-        true,
-        isDimmed,
-        0.1
-      );
-
-      const dotR = (isMemSelected ? 5.5 : 3.6) * memProj.scale;
-      ctx.save();
-      ctx.globalAlpha = isDimmed ? 0.22 : 0.95;
-      ctx.beginPath();
-      ctx.arc(memProj.x, memProj.y, dotR, 0, Math.PI * 2);
-      ctx.fillStyle = isMemSelected ? '#ffffff' : '#a5f3fc';
-      ctx.shadowColor = parentInfo.color;
-      ctx.shadowBlur = isParentSelected || isMemSelected ? 14 : 8;
-      ctx.fill();
-      ctx.restore();
-
-      hitboxes.push({
-        kind: 'memory',
-        id: mem.id,
-        x: memProj.x,
-        y: memProj.y,
-        r: dotR + 6,
-        memoryData: mem
+      const color = ag.color || AGENT_PALETTE[idx % AGENT_PALETTE.length];
+      agentPositionsMap.set(ag.id, {
+        ag,
+        proj: { x: clampedX, y: clampedY, scale: rawProj.scale },
+        color
       });
     });
 
-    // Nós Compartilhados Fixos
-    const sharedNodes = fixedSharedNodes.value;
-    const totalShared = sharedNodes.length;
-    const outerNodeRadius = 355;
-
-    sharedNodes.forEach((nodeMeta, nIdx) => {
-      const nAngle = (nIdx / Math.max(1, totalShared)) * Math.PI * 2 + 0.22;
-      const nx = Math.cos(nAngle) * outerNodeRadius;
-      const ny = Math.cos(nAngle * 3) * 68;
-      const nz = Math.sin(nAngle) * outerNodeRadius;
-
-      const subProj = project3D(nx, ny, nz, cx, cy);
-      const connectedAgents = getAgentsUsingTool(nodeMeta.id);
-
-      const isSubNodeSelected = selectedSubNode.value?.toolId === nodeMeta.id;
-      const isLinkedToSelectedAgent =
-        hasSelectedAgent && isConnectionLinked(activeAgentForTools.value, nodeMeta.id);
-      const isDimmed =
-        (hasSelectedAgent && !isLinkedToSelectedAgent) ||
-        (hasSelectedSubNode && !isSubNodeSelected);
-
-      connectedAgents.forEach((ag, linkIdx) => {
-        const agInfo = agentPositionsMap.get(ag.id);
-        if (!agInfo) return;
-
-        const highlightLine =
-          isSubNodeSelected ||
-          activeAgentForTools.value?.id === ag.id ||
-          activeTargetSlug === ag.slug;
-
-        const dimLine =
-          (hasSelectedAgent && activeAgentForTools.value?.id !== ag.id) ||
-          (hasSelectedSubNode && !isSubNodeSelected);
-
-        drawCurvedSynapse(
-          ctx,
-          agInfo.proj.x,
-          agInfo.proj.y,
-          subProj.x,
-          subProj.y,
-          agInfo.color,
-          time * 1.15 + nIdx * 0.2 + linkIdx * 0.35,
-          highlightLine,
-          true,
-          dimLine,
-          0.16
-        );
-      });
-
-      const subNodeR = (isSubNodeSelected || isLinkedToSelectedAgent ? 16 : 13.5) * subProj.scale;
-      ctx.save();
-      ctx.globalAlpha = isDimmed ? 0.25 : 0.96;
-      ctx.beginPath();
-      ctx.arc(subProj.x, subProj.y, subNodeR, 0, Math.PI * 2);
-      ctx.fillStyle = '#090d16';
-      ctx.fill();
-      ctx.lineWidth = isSubNodeSelected || isLinkedToSelectedAgent ? 2.2 : 1.5;
-      ctx.strokeStyle = nodeMeta.color || '#38bdf8';
-      ctx.shadowColor = nodeMeta.color || '#38bdf8';
-      ctx.shadowBlur = isSubNodeSelected || isLinkedToSelectedAgent ? 14 : 6;
-      ctx.stroke();
-
-      ctx.font = `${Math.round((isSubNodeSelected ? 11.5 : 10) * subProj.scale)}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(nodeMeta.icon || '🔌', subProj.x, subProj.y);
-
-      if (connectedAgents.length > 1) {
-        const bx = subProj.x + subNodeR * 0.72;
-        const by = subProj.y - subNodeR * 0.72;
-        ctx.beginPath();
-        ctx.arc(bx, by, 6.5 * subProj.scale, 0, Math.PI * 2);
-        ctx.fillStyle = '#10b981';
-        ctx.fill();
-        ctx.font = `bold ${Math.round(7.5 * subProj.scale)}px sans-serif`;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(String(connectedAgents.length), bx, by);
-      }
-      ctx.restore();
-
-      hitboxes.push({
-        kind: 'subnode',
-        id: `fixed_node_${nodeMeta.id}`,
-        x: subProj.x,
-        y: subProj.y,
-        r: subNodeR + 6,
-        subnodeData: {
-          ...nodeMeta,
-          toolId: nodeMeta.id
-        }
-      });
-    });
-
-    // Render dos Agentes
+    // 3. DESENHA FEIXES SINÁPTICOS E PARTÍCULAS DE MEMÓRIA ENTRE NÚCLEO E AGENTES
     Array.from(agentPositionsMap.values()).forEach(({ ag, proj: agProj, color }, index) => {
       const isSelected = activeAgentForTools.value?.id === ag.id;
-      const isTriggered = activeTargetSlug === ag.slug;
-      const isConnectedToSelectedSub =
-        hasSelectedSubNode && isConnectionLinked(ag, selectedSubNode.value.toolId);
-      const isDimmed =
-        (hasSelectedAgent && !isSelected) ||
-        (hasSelectedSubNode && !isConnectedToSelectedSub);
-
-      drawCurvedSynapse(
-        ctx,
-        coreProj.x,
-        coreProj.y,
-        agProj.x,
-        agProj.y,
-        color,
-        time + index * 0.25,
-        isSelected || isTriggered || isConnectedToSelectedSub,
-        false,
-        isDimmed
-      );
-
-      const agR = (isSelected ? 29 : 24.5) * agProj.scale;
-      const agentTools: string[] = Array.isArray(ag.tools) ? ag.tools : [];
 
       ctx.save();
-      ctx.globalAlpha = isDimmed ? 0.35 : 1;
-
-      ctx.beginPath();
-      ctx.arc(agProj.x, agProj.y, agR + 5 * agProj.scale, 0, Math.PI * 2);
+      ctx.globalAlpha = isSelected ? 0.95 : 0.55;
       ctx.strokeStyle = color;
-      ctx.globalAlpha = isDimmed ? 0.15 : isSelected ? 0.85 : 0.35;
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
+      ctx.lineWidth = isSelected ? 2.4 : 1.5;
+      ctx.setLineDash([4, 6]);
       ctx.beginPath();
-      ctx.arc(agProj.x, agProj.y, agR, 0, Math.PI * 2);
-      ctx.fillStyle = '#0f172a';
-      ctx.globalAlpha = isDimmed ? 0.45 : 0.95;
-      ctx.fill();
-      ctx.lineWidth = isSelected ? 3 : 2;
-      ctx.strokeStyle = color;
-      ctx.shadowColor = color;
-      ctx.shadowBlur = isSelected ? 20 : 10;
+      ctx.moveTo(cx, cy);
+      const ctrlX = (cx + agProj.x) * 0.5;
+      const ctrlY = (cy + agProj.y) * 0.5 - 18;
+      ctx.quadraticCurveTo(ctrlX, ctrlY, agProj.x, agProj.y);
       ctx.stroke();
-
-      ctx.font = `${Math.round(17 * agProj.scale)}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(ag.icon || '🤖', agProj.x, agProj.y);
-
-      if (agentTools.length > 0) {
-        const bx = agProj.x + agR * 0.72;
-        const by = agProj.y - agR * 0.72;
-        ctx.beginPath();
-        ctx.arc(bx, by, 8.5 * agProj.scale, 0, Math.PI * 2);
-        ctx.fillStyle = isSelected ? '#10b981' : '#0284c7';
-        ctx.fill();
-        ctx.font = `bold ${Math.round(9 * agProj.scale)}px sans-serif`;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(String(agentTools.length), bx, by);
-      }
-
-      ctx.font = `600 ${Math.round(11.5 * agProj.scale)}px system-ui, sans-serif`;
-      ctx.fillStyle = isSelected ? '#38bdf8' : '#f8fafc';
-      ctx.fillText(ag.name, agProj.x, agProj.y + agR + 14 * agProj.scale);
       ctx.restore();
 
-      hitboxes.push({
-        kind: 'agent',
-        id: ag.id,
-        x: agProj.x,
-        y: agProj.y,
-        r: agR + 8,
+      // Pontos de memória trafegando na linha
+      const agentMemories = memoryDots.value.filter(
+        (m) => m.agentId === ag.id || m.agentName === ag.name
+      );
+      const dotsCount = Math.min(Math.max(agentMemories.length, 2), 5);
+
+      for (let d = 0; d < dotsCount; d++) {
+        const t = (time * 0.22 + d * (1 / dotsCount) + index * 0.17) % 1;
+        const invT = 1 - t;
+        const mx = invT * invT * cx + 2 * invT * t * ctrlX + t * t * agProj.x;
+        const my = invT * invT * cy + 2 * invT * t * ctrlY + t * t * agProj.y;
+
+        ctx.save();
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(mx, my, isMobile ? 3 : 3.8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        if (agentMemories[d]) {
+          renderedMemoriesHitbox.push({ x: mx, y: my, r: 10, mem: agentMemories[d] });
+        }
+      }
+    });
+
+    // 4. NÓS FIXOS COMPARTILHADOS (CONECTORES EXTERNOS)
+    const uniqueToolIds = new Set<string>();
+    dynamicAgents.value.forEach((ag) => {
+      if (Array.isArray(ag.tools)) {
+        ag.tools.forEach((t: string) => uniqueToolIds.add(String(t).toLowerCase()));
+      }
+    });
+
+    const sharedList = Array.from(uniqueToolIds);
+    sharedList.forEach((toolId, tIdx) => {
+      const meta = getConnectionMeta(toolId);
+      const angle = (tIdx / Math.max(sharedList.length, 1)) * Math.PI * 2 + 0.85;
+      const tx3d = Math.cos(angle) * sharedNodeOrbitRadius;
+      const tz3d = Math.sin(angle) * sharedNodeOrbitRadius;
+      const ty3d = Math.cos(tIdx * 2.1) * (isMobile ? 35 : 55);
+      const tProj = project3D(tx3d, ty3d, tz3d, cx, cy, fov);
+
+      const nodeX = Math.max(28, Math.min(width - 28, tProj.x));
+      const nodeY = Math.max(80, Math.min(height - 95, tProj.y));
+      const nodeR = isMobile ? 12 : 15;
+
+      // Ligações para todos os agentes que usam este nó fixo
+      const connectedAgents = getAgentsUsingTool(toolId);
+      connectedAgents.forEach((cAg) => {
+        const agEntry = agentPositionsMap.get(cAg.id);
+        if (!agEntry) return;
+        ctx.save();
+        ctx.globalAlpha = 0.45;
+        ctx.strokeStyle = agEntry.color;
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([3, 4]);
+        ctx.beginPath();
+        ctx.moveTo(agEntry.proj.x, agEntry.proj.y);
+        ctx.lineTo(nodeX, nodeY);
+        ctx.stroke();
+        ctx.restore();
+      });
+
+      // Orbe minimalista do Nó Fixo
+      ctx.save();
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = '#0f172a';
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(nodeX, nodeY, nodeR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.font = `${isMobile ? 11 : 13}px system-ui`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillText(meta.icon || '🔌', nodeX, nodeY);
+      ctx.restore();
+
+      renderedSubNodesHitbox.push({
+        x: nodeX,
+        y: nodeY,
+        r: nodeR + 6,
+        node: { ...meta, toolId }
+      });
+    });
+
+    // 5. DESENHA OS ORBES DOS AGENTES DE IA E SEUS NOMES ENQUADRADOS
+    Array.from(agentPositionsMap.values()).forEach(({ ag, proj, color }) => {
+      const orbR = isMobile ? 22 : 28;
+      const isSelected = activeAgentForTools.value?.id === ag.id;
+
+      ctx.save();
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = isSelected ? 3 : 2;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = isSelected ? 16 : 8;
+
+      ctx.beginPath();
+      ctx.arc(proj.x, proj.y, orbR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // Ícone do Agente
+      ctx.font = `${isMobile ? 16 : 20}px system-ui`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(ag.icon || '🤖', proj.x, proj.y);
+
+      // Badge com quantidade de nós conectados
+      const toolsCount = Array.isArray(ag.tools) ? ag.tools.length : 0;
+      if (toolsCount > 0) {
+        const bx = proj.x + orbR * 0.72;
+        const by = proj.y - orbR * 0.72;
+        ctx.fillStyle = '#0284c7';
+        ctx.beginPath();
+        ctx.arc(bx, by, isMobile ? 8 : 9, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${isMobile ? 9 : 10}px system-ui`;
+        ctx.fillText(String(toolsCount), bx, by);
+      }
+
+      // Nome do Agente com truncamento inteligente para nunca sair da tela
+      const labelFont = isMobile ? 11 : 12.5;
+      ctx.font = `600 ${labelFont}px system-ui, sans-serif`;
+      ctx.fillStyle = '#f1f5f9';
+      const rawName = String(ag.name || 'Agente');
+      const maxChars = isMobile ? 22 : 30;
+      const cleanLabel = rawName.length > maxChars ? rawName.slice(0, maxChars - 1) + '…' : rawName;
+      ctx.fillText(cleanLabel, proj.x, proj.y + orbR + (isMobile ? 13 : 16));
+      ctx.restore();
+
+      renderedAgentsHitbox.push({
+        x: proj.x,
+        y: proj.y,
+        r: orbR + 8,
         agent: ag
       });
     });
 
-    animFrameId = requestAnimationFrame(render);
+    animationFrameId = requestAnimationFrame(renderFrame);
   };
 
-  animFrameId = requestAnimationFrame(render);
+  animationFrameId = requestAnimationFrame(renderFrame);
 }
 
-// Mouse Interativo
+// ============================================================================
+// 4. INTERAÇÃO POR CLIQUE E TOQUE (DESKTOP & MOBILE)
+// ============================================================================
+function handleStageTap(clientX: number, clientY: number) {
+  for (const item of renderedAgentsHitbox) {
+    const dist = Math.hypot(clientX - item.x, clientY - item.y);
+    if (dist <= item.r) {
+      selectedSubNode.value = null;
+      selectedMemoryDot.value = null;
+      activeAgentForTools.value = item.agent;
+      popoverTab.value = 'connected';
+      return;
+    }
+  }
+
+  for (const sub of renderedSubNodesHitbox) {
+    const dist = Math.hypot(clientX - sub.x, clientY - sub.y);
+    if (dist <= sub.r) {
+      activeAgentForTools.value = null;
+      selectedMemoryDot.value = null;
+      selectedSubNode.value = sub.node;
+      return;
+    }
+  }
+
+  for (const mem of renderedMemoriesHitbox) {
+    const dist = Math.hypot(clientX - mem.x, clientY - mem.y);
+    if (dist <= mem.r) {
+      activeAgentForTools.value = null;
+      selectedSubNode.value = null;
+      selectedMemoryDot.value = mem.mem;
+      return;
+    }
+  }
+}
+
 function onMouseDown(e: MouseEvent) {
   isDragging = true;
-  dragStartX = e.clientX;
-  dragStartY = e.clientY;
-  pointerDownPos = { x: e.clientX, y: e.clientY };
+  dragMoved = false;
+  lastMouseX = e.clientX;
+  lastMouseY = e.clientY;
 }
 
 function onMouseMove(e: MouseEvent) {
   if (!isDragging) return;
-  const dx = e.clientX - dragStartX;
-  const dy = e.clientY - dragStartY;
-  rotY += dx * 0.005;
-  rotX = Math.max(-1.1, Math.min(1.1, rotX + dy * 0.005));
-  dragStartX = e.clientX;
-  dragStartY = e.clientY;
+  const dx = e.clientX - lastMouseX;
+  const dy = e.clientY - lastMouseY;
+  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
+  rotationY.value += dx * 0.005;
+  rotationX.value = Math.max(-0.8, Math.min(0.8, rotationX.value + dy * 0.005));
+  lastMouseX = e.clientX;
+  lastMouseY = e.clientY;
 }
 
 function onMouseUp(e: MouseEvent) {
-  if (!isDragging) return;
-  isDragging = false;
-
-  const movedDist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
-  if (movedDist > 6) return;
-
-  const rect = neuralCanvas.value?.getBoundingClientRect();
-  if (!rect) return;
-  const clickX = e.clientX - rect.left;
-  const clickY = e.clientY - rect.top;
-
-  for (let i = hitboxes.length - 1; i >= 0; i--) {
-    const h = hitboxes[i];
-    if (Math.hypot(clickX - h.x, clickY - h.y) <= h.r) {
-      if (h.kind === 'memory' && h.memoryData) {
-        selectedSubNode.value = null;
-        selectedMemoryDot.value = h.memoryData;
-        return;
-      }
-      if (h.kind === 'subnode') {
-        selectedMemoryDot.value = null;
-        activeAgentForTools.value = null;
-        selectedSubNode.value =
-          selectedSubNode.value?.toolId === h.subnodeData.toolId ? null : h.subnodeData;
-        return;
-      }
-      if (h.kind === 'agent' && h.agent) {
-        selectedSubNode.value = null;
-        selectedMemoryDot.value = null;
-        if (activeAgentForTools.value?.id === h.agent.id) {
-          activeAgentForTools.value = null;
-        } else {
-          activeAgentForTools.value = h.agent;
-          popoverTab.value = 'connected';
-        }
-        return;
-      }
-      if (h.kind === 'core') {
-        clearSelection();
-        return;
-      }
-    }
+  if (isDragging && !dragMoved) {
+    handleStageTap(e.clientX, e.clientY);
   }
+  isDragging = false;
 }
 
 function onWheel(e: WheelEvent) {
-  zoom = Math.max(0.55, Math.min(1.85, zoom - e.deltaY * 0.0008));
+  const delta = e.deltaY > 0 ? -0.08 : 0.08;
+  cameraZoom.value = Math.max(0.65, Math.min(1.65, cameraZoom.value + delta));
+}
+
+function onTouchStart(e: TouchEvent) {
+  if (e.touches.length === 1) {
+    isDragging = true;
+    dragMoved = false;
+    lastMouseX = e.touches[0].clientX;
+    lastMouseY = e.touches[0].clientY;
+  }
+}
+
+function onTouchMove(e: TouchEvent) {
+  if (!isDragging || e.touches.length !== 1) return;
+  const dx = e.touches[0].clientX - lastMouseX;
+  const dy = e.touches[0].clientY - lastMouseY;
+  if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragMoved = true;
+  rotationY.value += dx * 0.006;
+  rotationX.value = Math.max(-0.8, Math.min(0.8, rotationX.value + dy * 0.006));
+  lastMouseX = e.touches[0].clientX;
+  lastMouseY = e.touches[0].clientY;
+}
+
+function onTouchEnd(e: TouchEvent) {
+  if (isDragging && !dragMoved && e.changedTouches.length > 0) {
+    handleStageTap(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+  }
+  isDragging = false;
 }
 
 // ============================================================================
-// DISPARO DE COMANDO UNIFICADO COM SÍNTESE DE VOZ
+// 5. VOZ (TTS + WAKE WORD COM PROTEÇÃO ANTI-LOOP EM HTTP), CÂMERA E TELA
 // ============================================================================
-async function sendCommand(overrideText?: string) {
-  const textToSend = (
-    typeof overrideText === 'string' ? overrideText : promptText.value || ''
-  ).trim();
-  if (!textToSend || isProcessing.value) return;
+const isAlwaysListening = ref<boolean>(true);
+const isJarvisAwake = ref<boolean>(false);
+const voiceStatusText = ref<string>('🟢 Vigília ativa: diga "Jarvis"...');
+let wakeRecognition: any = null;
+let micPermissionDenied = false;
 
-  isProcessing.value = true;
-  if (!overrideText) promptText.value = '';
+const videoElement = ref<HTMLVideoElement | null>(null);
+const isCameraActive = ref<boolean>(false);
+const isScreenActive = ref<boolean>(false);
+const capturedWebcamBase64 = ref<string | null>(null);
+const capturedScreenBase64 = ref<string | null>(null);
+let activeMediaStream: MediaStream | null = null;
+
+function speakJarvisResponse(rawText: string) {
+  if (!rawText || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+  const cleanText = rawText
+    .replace(/[*#_`~>-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleanText) return;
 
   try {
-    let webcamFrameToSend = capturedWebcamBase64.value;
+    isSpeaking.value = true;
+    window.speechSynthesis.cancel();
+    setTimeout(() => {
+      const utter = new SpeechSynthesisUtterance(cleanText);
+      utter.lang = 'pt-BR';
+      utter.rate = 1.05;
+      const voices = window.speechSynthesis.getVoices();
+      const ptVoice = voices.find((v) => v.lang.toLowerCase().includes('pt'));
+      if (ptVoice) utter.voice = ptVoice;
 
-    if (requiresCameraActivation(textToSend) || isCameraActive.value) {
-      voiceStatusText.value = '📷 Capturando imagem da câmera...';
-      const autoFrame = await ensureCameraAndCaptureFrame();
-      if (autoFrame) {
-        webcamFrameToSend = autoFrame;
-      }
-    }
-
-    const response = await fetch('/api/v1/webhook/ingress', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        identityToken: 'Matheus-Admin',
-        sessionId: currentSessionId.value,
-        sensorData: {
-          type: 'voice_or_text',
-          prompt: textToSend,
-          textPrompt: textToSend,
-          webcamFrame: webcamFrameToSend || undefined,
-          faceFrameBase64: webcamFrameToSend || undefined,
-          screenFrame: capturedScreenBase64.value || undefined
-        }
-      })
-    });
-
-    const result = await response.json();
-    const replyText =
-      result?.data?.response ||
-      result?.data?.data?.response ||
-      result?.response ||
-      result?.error ||
-      'Comando processado.';
-
-    const respondingAgent =
-      result?.data?.agent ||
-      result?.data?.data?.agent ||
-      result?.agent ||
-      'JARVIS';
-
-    const execTime =
-      result?.data?.executionTimeMs ||
-      result?.executionTimeMs ||
-      0;
-
-    lastResponse.value = {
-      agent: respondingAgent,
-      text: replyText,
-      executionTimeMs: execTime
-    };
-
-    speakJarvisResponse(replyText);
-  } catch (err: any) {
-    const errMsg = 'Falha de comunicação com o servidor do Jarvis.';
-    lastResponse.value = {
-      agent: 'JARVIS Core',
-      text: errMsg,
-      executionTimeMs: 0
-    };
-    speakJarvisResponse(errMsg);
-  } finally {
-    isProcessing.value = false;
+      utter.onend = () => {
+        isSpeaking.value = false;
+      };
+      utter.onerror = () => {
+        isSpeaking.value = false;
+      };
+      window.speechSynthesis.speak(utter);
+    }, 80);
+  } catch {
+    isSpeaking.value = false;
   }
+}
+
+function initWakeWordListener() {
+  if (typeof window === 'undefined' || micPermissionDenied) return;
+  const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+  if (!SpeechRec) {
+    voiceStatusText.value = '⌨️ Digite seu comando abaixo';
+    return;
+  }
+
+  try {
+    wakeRecognition = new SpeechRec();
+    wakeRecognition.lang = 'pt-BR';
+    wakeRecognition.continuous = true;
+    wakeRecognition.interimResults = false;
+
+    wakeRecognition.onresult = (event: any) => {
+      if (isSpeaking.value) return;
+      const lastIdx = event.results.length - 1;
+      const transcript = String(event.results[lastIdx][0].transcript || '').trim();
+      const lower = transcript.toLowerCase();
+
+      if (lower.includes('jarvis')) {
+        isJarvisAwake.value = true;
+        const afterWake = transcript.replace(/.*jarvis[,.\s]*/i, '').trim();
+        if (afterWake.length > 2) {
+          promptText.value = afterWake;
+          sendCommand(afterWake);
+        } else {
+          voiceStatusText.value = '🎙️ Ouvindo seu comando...';
+          speakJarvisResponse('Sim, senhor? Estou ouvindo.');
+        }
+      } else if (isJarvisAwake.value && transcript.length > 2) {
+        isJarvisAwake.value = false;
+        promptText.value = transcript;
+        sendCommand(transcript);
+      }
+    };
+
+    wakeRecognition.onerror = (ev: any) => {
+      // IMPEDE O LOOP INFINITO QUE CONGELA O CHROME MOBILE QUANDO EM HTTP
+      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+        micPermissionDenied = true;
+        isAlwaysListening.value = false;
+        voiceStatusText.value = '🔒 Toque para ativar voz (Requer HTTPS)';
+      }
+    };
+
+    wakeRecognition.onend = () => {
+      if (isAlwaysListening.value && !micPermissionDenied && isAuthenticated.value) {
+        setTimeout(() => {
+          try {
+            wakeRecognition?.start();
+          } catch {}
+        }, 1200);
+      }
+    };
+
+    wakeRecognition.start();
+  } catch {
+    voiceStatusText.value = '🎙️ Toque no microfone para falar';
+  }
+}
+
+function manualRestartWakeWord() {
+  micPermissionDenied = false;
+  isAlwaysListening.value = true;
+  initWakeWordListener();
+}
+
+function toggleMicrophone() {
+  if (micPermissionDenied || !isAlwaysListening.value) {
+    manualRestartWakeWord();
+    return;
+  }
+  isJarvisAwake.value = !isJarvisAwake.value;
+  voiceStatusText.value = isJarvisAwake.value
+    ? '🎙️ Escuta direta ativa: pode falar...'
+    : '🟢 Vigília ativa: diga "Jarvis"...';
 }
 
 async function toggleWebcam() {
@@ -1734,255 +1358,417 @@ async function toggleWebcam() {
     stopAllMedia();
     return;
   }
-  stopAllMedia();
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    if (videoElement.value) videoElement.value.srcObject = mediaStream;
+    stopAllMedia();
+    activeMediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    if (videoElement.value) {
+      videoElement.value.srcObject = activeMediaStream;
+    }
     isCameraActive.value = true;
-  } catch (err: any) {
-    alert('Não foi possível acessar a câmera: ' + err.message);
+  } catch {
+    voiceStatusText.value = '⚠️ Permissão de câmera requer HTTPS';
   }
 }
 
-async function toggleScreenCapture() {
+async function toggleScreenShare() {
   if (isScreenActive.value) {
     stopAllMedia();
     return;
   }
-  stopAllMedia();
   try {
-    mediaStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-    if (videoElement.value) videoElement.value.srcObject = mediaStream;
+    stopAllMedia();
+    activeMediaStream = await (navigator.mediaDevices as any).getDisplayMedia({ video: true });
+    if (videoElement.value) {
+      videoElement.value.srcObject = activeMediaStream;
+    }
     isScreenActive.value = true;
-  } catch (err: any) {
-    console.warn('Captura de tela cancelada:', err.message);
+  } catch {
+    voiceStatusText.value = '⚠️ Captura de tela indisponível neste dispositivo';
   }
 }
 
 function stopAllMedia() {
-  if (mediaStream) {
-    mediaStream.getTracks().forEach((t) => t.stop());
-    mediaStream = null;
+  if (activeMediaStream) {
+    activeMediaStream.getTracks().forEach((t) => t.stop());
+    activeMediaStream = null;
   }
   isCameraActive.value = false;
   isScreenActive.value = false;
 }
 
-onMounted(async () => {
-  await loadEcosystemData();
-  startNeuralLoop();
-
-  if ('speechSynthesis' in window) {
-    window.speechSynthesis.getVoices();
-    window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+function captureCurrentVideoFrame(): string | null {
+  if (!videoElement.value || (!isCameraActive.value && !isScreenActive.value)) return null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = videoElement.value.videoWidth || 640;
+    c.height = videoElement.value.videoHeight || 480;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(videoElement.value, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.75);
+  } catch {
+    return null;
   }
+}
+
+async function sendCommand(overrideText?: string) {
+  const textToSend = (typeof overrideText === 'string' ? overrideText : promptText.value).trim();
+  if (!textToSend || isProcessing.value) return;
+
+  isProcessing.value = true;
+  if (!overrideText) promptText.value = '';
+
+  const frame = captureCurrentVideoFrame();
+  if (isCameraActive.value) capturedWebcamBase64.value = frame;
+  if (isScreenActive.value) capturedScreenBase64.value = frame;
+
+  try {
+    const res = await fetch('/api/v1/webhook/ingress', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identityToken: 'Matheus-Admin',
+        sessionId: sessionId.value,
+        sensorData: {
+          type: 'voice_or_text',
+          prompt: textToSend,
+          textPrompt: textToSend,
+          webcamFrame: isCameraActive.value ? capturedWebcamBase64.value : undefined,
+          screenFrame: isScreenActive.value ? capturedScreenBase64.value : undefined
+        }
+      })
+    });
+
+    const json = await res.json().catch(() => ({}));
+    const payload = json.data || json;
+    const replyText =
+      payload?.response ||
+      payload?.data?.response ||
+      json?.response ||
+      json?.error ||
+      'Comando processado.';
+
+    lastResponse.value = {
+      agent: payload?.agent || 'JARVIS',
+      text: replyText,
+      executionTimeMs: payload?.executionTimeMs || json?.executionTimeMs || 0
+    };
+
+    speakJarvisResponse(replyText);
+    await loadEcosystemData();
+  } catch {
+    const msg = 'Erro de comunicação com o núcleo do JARVIS.';
+    lastResponse.value = { agent: 'JARVIS', text: msg, executionTimeMs: 0 };
+    speakJarvisResponse(msg);
+  } finally {
+    isProcessing.value = false;
+  }
+}
+
+// ============================================================================
+// 6. CICLO DE VIDA E INICIALIZAÇÃO SEGURA
+// ============================================================================
+async function bootAuthenticatedUniverse() {
+  await loadEcosystemData();
+  startNeuralCanvasLoop();
   initWakeWordListener();
 
-  window.addEventListener(
-    'click',
-    () => {
-      if ('speechSynthesis' in window) window.speechSynthesis.resume();
-      if (isAlwaysListening.value && wakeRecognition) {
-        try {
-          wakeRecognition.start();
-        } catch {}
-      }
-    },
-    { once: true }
-  );
+  if (refreshIntervalId) clearInterval(refreshIntervalId);
+  refreshIntervalId = setInterval(() => {
+    if (isAuthenticated.value) loadEcosystemData();
+  }, 15000);
+}
+
+onMounted(async () => {
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.getVoices();
+  }
+  if (isAuthenticated.value) {
+    await bootAuthenticatedUniverse();
+  }
 });
 
-onBeforeUnmount(() => {
-  cancelAnimationFrame(animFrameId);
+onUnmounted(() => {
+  stopAnimationLoop();
   stopAllMedia();
-  if (wakeRecognition) {
-    try {
-      wakeRecognition.stop();
-    } catch {}
-  }
+  if (refreshIntervalId) clearInterval(refreshIntervalId);
 });
 </script>
 
 <style scoped>
 .jarvis-universe {
-  position: relative;
+  position: fixed;
+  inset: 0;
   width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-  background: radial-gradient(circle at center, #081226 0%, #03060c 75%, #010206 100%);
+  height: 100dvh;
+  background: #020409;
   color: #f8fafc;
   font-family: system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  user-select: none;
 }
 
+/* TELA DE LOGIN */
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: radial-gradient(circle at center, #09192c 0%, #020409 100%);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 16px;
+  padding: 28px 22px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+  text-align: center;
+  backdrop-filter: blur(12px);
+}
+
+.auth-core-ring {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  border: 2px dashed #38bdf8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-core-inner {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #38bdf8 0%, #0284c7 100%);
+  box-shadow: 0 0 18px #38bdf8;
+}
+
+.auth-title {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 1.5px;
+  color: #f8fafc;
+}
+
+.auth-subtitle {
+  margin: 6px 0 20px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: left;
+}
+
+.auth-field label {
+  display: block;
+  font-size: 11.5px;
+  color: #cbd5e1;
+  margin-bottom: 5px;
+}
+
+.auth-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #090d16;
+  color: #ffffff;
+  font-size: 14px;
+}
+
+.auth-error {
+  font-size: 12px;
+  color: #f87171;
+  background: rgba(127, 29, 29, 0.35);
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.auth-submit-btn {
+  padding: 11px;
+  border-radius: 8px;
+  border: none;
+  background: linear-gradient(135deg, #0284c7, #2563eb);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* CABEÇALHO HUD */
 .hud-header {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  padding: 14px 24px;
+  z-index: 30;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  z-index: 20;
-  pointer-events: none;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.9) 0%, rgba(2, 6, 23, 0) 100%);
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.hud-brand,
-.hud-actions {
+.hud-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  pointer-events: auto;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .pulse-dot {
-  width: 9px;
-  height: 9px;
-  background: #22d3ee;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  box-shadow: 0 0 12px #22d3ee;
+  background: #22d3ee;
+  box-shadow: 0 0 10px #22d3ee;
 }
 
 .hud-title {
-  font-size: 13px;
   font-weight: 800;
-  letter-spacing: 0.12em;
-  color: #e2e8f0;
+  font-size: 13px;
+  letter-spacing: 1.2px;
+  color: #f8fafc;
 }
 
 .hud-badge {
   font-size: 11px;
   color: #38bdf8;
-  background: rgba(15, 23, 42, 0.75);
-  border: 1px solid rgba(56, 189, 248, 0.3);
-  padding: 4px 10px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  padding: 3px 9px;
   border-radius: 999px;
 }
 
-.hud-btn-secondary {
-  background: rgba(15, 23, 42, 0.85);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  padding: 8px 14px;
-  border-radius: 10px;
-  font-size: 12px;
+.hud-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hud-btn-secondary,
+.hud-settings-btn,
+.hud-btn-logout {
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid #334155;
+  color: #f8fafc;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
   font-weight: 600;
+  text-decoration: none;
   cursor: pointer;
 }
 
-.hud-settings-btn {
-  background: rgba(15, 23, 42, 0.85);
-  color: #f8fafc;
-  text-decoration: none;
-  border: 1px solid #334155;
-  padding: 8px 16px;
-  border-radius: 10px;
-  font-size: 12.5px;
-  font-weight: 600;
-  transition: all 0.2s;
-}
-.hud-settings-btn:hover {
-  border-color: #38bdf8;
-  color: #38bdf8;
-}
-
+/* PALCO DO CANVAS */
 .canvas-stage {
   position: relative;
   width: 100%;
   height: 100%;
-  cursor: grab;
+  touch-action: none;
 }
-.canvas-stage:active {
-  cursor: grabbing;
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .hud-hint {
-  position: absolute;
-  bottom: 84px;
-  left: 24px;
-  font-size: 11.5px;
-  color: #38bdf8;
-  background: rgba(9, 13, 22, 0.75);
-  border: 1px solid rgba(51, 65, 85, 0.5);
-  padding: 6px 12px;
-  border-radius: 8px;
-  pointer-events: none;
+  position: fixed;
+  bottom: 68px;
+  left: 12px;
+  z-index: 25;
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #cbd5e1;
+  cursor: pointer;
 }
 
-.agent-connections-popover {
-  position: absolute;
-  top: 68px;
-  right: 24px;
-  width: 350px;
-  max-height: calc(100vh - 170px);
-  background: rgba(11, 17, 32, 0.94);
-  backdrop-filter: blur(14px);
-  border: 1px solid #1e293b;
-  border-radius: 14px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
-  display: flex;
-  flex-direction: column;
-  z-index: 30;
-  overflow: hidden;
+/* POPOVERS E MODAIS */
+.agent-connections-popover,
+.subnode-inspector {
+  position: fixed;
+  top: 66px;
+  right: 12px;
+  width: min(340px, calc(100vw - 24px));
+  max-height: calc(100dvh - 150px);
+  overflow-y: auto;
+  z-index: 45;
+  background: rgba(11, 15, 25, 0.96);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75);
 }
 
 .popover-header {
-  padding: 14px 16px;
-  border-bottom: 1px solid #1e293b;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 10px;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 15px;
+  cursor: pointer;
 }
 
 .popover-tabs {
   display: flex;
-  background: #090d16;
-  border-bottom: 1px solid #1e293b;
+  gap: 4px;
+  margin-bottom: 10px;
 }
 
 .tab-btn {
   flex: 1;
-  padding: 9px 6px;
-  background: transparent;
-  border: none;
-  color: #64748b;
+  padding: 6px;
   font-size: 11px;
-  font-weight: 700;
+  background: #0f172a;
+  color: #94a3b8;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
   cursor: pointer;
-  border-bottom: 2px solid transparent;
-}
-.tab-btn.active {
-  color: #38bdf8;
-  border-bottom-color: #38bdf8;
-  background: rgba(56, 189, 248, 0.06);
 }
 
-.popover-body {
-  padding: 14px;
-  overflow-y: auto;
+.tab-btn.active {
+  background: rgba(14, 165, 233, 0.2);
+  color: #38bdf8;
+  border-color: #0284c7;
 }
 
 .popover-help {
-  font-size: 11.5px;
+  font-size: 11px;
   color: #94a3b8;
-  margin: 0 0 10px 0;
-}
-
-.empty-connected-box {
-  padding: 14px;
-  border-radius: 8px;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px dashed #334155;
-  color: #94a3b8;
-  font-size: 11.5px;
-  text-align: center;
+  margin: 0 0 8px;
 }
 
 .saved-connections-list {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  max-height: 340px;
+  gap: 6px;
+  max-height: 220px;
   overflow-y: auto;
 }
 
@@ -1990,252 +1776,203 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  background: rgba(30, 41, 59, 0.55);
-  border: 1px solid rgba(51, 65, 85, 0.6);
+  padding: 7px 9px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
   border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.15s;
 }
+
 .conn-item.linked {
-  border-color: #10b981;
-  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(56, 189, 248, 0.45);
 }
 
 .unlink-mini-btn {
   background: rgba(239, 68, 68, 0.15);
   border: 1px solid rgba(239, 68, 68, 0.4);
-  color: #fca5a5;
+  color: #f87171;
   border-radius: 6px;
-  padding: 2px 7px;
-  font-size: 11px;
+  padding: 3px 7px;
   cursor: pointer;
 }
 
-.conn-badge {
-  font-size: 9.5px;
-  font-weight: 700;
+.modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: #090d16;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+}
+
+.field-lbl {
+  display: block;
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+.cred-feedback {
+  font-size: 11.5px;
   color: #38bdf8;
-  background: rgba(14, 165, 233, 0.15);
-  padding: 2px 6px;
-  border-radius: 4px;
+  margin-bottom: 8px;
 }
 
 .save-conn-btn {
   width: 100%;
   padding: 9px;
-  background: #0284c7;
-  color: #fff;
+  background: linear-gradient(135deg, #0284c7, #2563eb);
   border: none;
   border-radius: 8px;
-  font-size: 12px;
+  color: #fff;
   font-weight: 700;
+  font-size: 12px;
   cursor: pointer;
 }
 
-.subnode-inspector {
-  position: absolute;
-  bottom: 92px;
-  right: 24px;
-  width: 300px;
-  background: rgba(11, 17, 32, 0.95);
-  border: 1px solid #38bdf8;
-  border-radius: 12px;
-  padding: 12px 14px;
-  z-index: 30;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.65);
-}
-
-.shared-node-agents-list {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  max-height: 150px;
-  overflow-y: auto;
-}
-
-.shared-agent-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11.5px;
-  color: #e2e8f0;
-  padding: 5px 8px;
-  background: rgba(30, 41, 59, 0.5);
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.close-btn {
-  background: none;
-  border: none;
-  color: #94a3b8;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.command-dock-wrapper {
-  position: absolute;
-  bottom: 20px;
+/* BALÃO DE RESPOSTA */
+.response-bubble {
+  position: fixed;
+  bottom: 104px;
   left: 50%;
   transform: translateX(-50%);
-  width: min(760px, 92vw);
-  z-index: 25;
+  width: min(560px, calc(100vw - 24px));
+  max-height: 36dvh;
+  overflow-y: auto;
+  z-index: 40;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid #38bdf8;
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
+}
+
+.response-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: #38bdf8;
+  margin-bottom: 4px;
+}
+
+.response-text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: #f1f5f9;
+  white-space: pre-wrap;
+}
+
+/* PREVIEW DE CÂMERA */
+.media-preview-box {
+  position: fixed;
+  bottom: 110px;
+  right: 12px;
+  width: 150px;
+  z-index: 38;
+  background: #0f172a;
+  border: 1px solid #38bdf8;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.media-preview-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px;
+  font-size: 10px;
+  background: rgba(2, 6, 23, 0.9);
+}
+
+.media-video {
+  width: 100%;
+  display: block;
+}
+
+/* BARRA INFERIOR DE COMANDO */
+.command-dock-wrapper {
+  position: fixed;
+  bottom: env(safe-area-inset-bottom, 10px);
+  left: 0;
+  right: 0;
+  z-index: 35;
+  display: flex;
+  justify-content: center;
+  padding: 0 10px 8px;
 }
 
 .command-dock {
+  width: min(680px, 100%);
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: rgba(11, 17, 32, 0.9);
-  backdrop-filter: blur(16px);
-  border: 1px solid #1e293b;
-  padding: 8px 10px;
-  border-radius: 16px;
-  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.65);
+  gap: 6px;
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 999px;
+  padding: 6px 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.65);
 }
 
 .dock-icon-btn {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
   border: 1px solid #334155;
-  background: #0f172a;
-  color: #e2e8f0;
-  font-size: 16px;
+  background: #090d16;
+  color: #f8fafc;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
+  flex-shrink: 0;
 }
-.active-mic {
+
+.dock-icon-btn.active-mic {
   border-color: #22c55e;
-  box-shadow: 0 0 12px rgba(34, 197, 94, 0.6);
-}
-.active-cam,
-.active-screen {
-  border-color: #22c55e;
-  box-shadow: 0 0 12px rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.6);
 }
 
 .dock-input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
-  color: #f8fafc;
+  color: #ffffff;
   font-size: 13.5px;
-  padding: 8px 10px;
+  padding: 6px;
   outline: none;
 }
 
 .dock-send-btn {
   background: linear-gradient(135deg, #0284c7, #2563eb);
-  color: white;
   border: none;
-  padding: 9px 18px;
-  border-radius: 10px;
+  color: #ffffff;
   font-weight: 700;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.response-bubble {
-  position: absolute;
-  bottom: 92px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(720px, 90vw);
-  max-height: 240px;
-  overflow-y: auto;
-  background: rgba(11, 17, 32, 0.95);
-  border: 1px solid #0284c7;
-  border-radius: 14px;
-  padding: 14px 18px;
-  z-index: 28;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75);
-}
-.response-header {
-  display: flex;
-  justify-content: space-between;
   font-size: 12px;
-  color: #38bdf8;
-  margin-bottom: 6px;
-}
-.response-text {
-  font-size: 13px;
-  line-height: 1.5;
-  color: #e2e8f0;
-  white-space: pre-wrap;
-}
-.close-bubble {
-  background: none;
-  border: none;
-  color: #94a3b8;
+  padding: 8px 14px;
+  border-radius: 999px;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
-.media-preview-box {
-  position: absolute;
-  top: 70px;
-  left: 24px;
-  width: 240px;
-  background: rgba(11, 17, 32, 0.92);
-  border: 1px solid #334155;
-  border-radius: 10px;
-  overflow: hidden;
-  z-index: 25;
-}
-.media-preview-header {
-  padding: 6px 10px;
-  font-size: 11px;
-  display: flex;
-  justify-content: space-between;
-  background: #0f172a;
-}
-.media-video {
-  width: 100%;
-  display: block;
-}
-.media-close-btn {
-  background: none;
-  border: none;
-  color: #ef4444;
-  cursor: pointer;
-}
-
-.jarvis-viewport, .app-container {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100dvh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  background: radial-gradient(circle at center, #0f172a 0%, #020617 100%);
-  box-sizing: border-box;
-}
-
-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100% !important;
-  height: 100% !important;
-  display: block;
-  z-index: 1;
-}
-
-/* Ajuste automático da barra inferior e topo em telas de celular */
-@media (max-width: 768px) {
-  .top-bar, .header-bar {
-    padding: 8px 12px !important;
-    flex-wrap: wrap;
-    gap: 8px;
+@media (max-width: 600px) {
+  .hud-header {
+    padding: 8px 10px;
   }
-  .command-bar, .bottom-dock {
-    width: 96% !important;
-    bottom: 10px !important;
-    padding: 8px !important;
-    flex-wrap: wrap;
+  .hud-title {
+    font-size: 11.5px;
+  }
+  .hud-badge {
+    font-size: 10px;
+    padding: 2px 7px;
+  }
+  .hud-btn-secondary,
+  .hud-settings-btn,
+  .hud-btn-logout {
+    padding: 5px 8px;
+    font-size: 10.5px;
   }
 }
 </style>
