@@ -326,6 +326,22 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 
+const STORAGE_AUTH_KEY = 'jarvis_authenticated_session';
+const STORAGE_EMAIL_KEY = 'jarvis_authenticated_email';
+const STORAGE_CHAT_KEY = 'jarvis_active_session_id';
+
+// Mantém logado mesmo se o navegador der F5 ou trocar de tela no celular/PC
+const isAuthenticated = ref<boolean>(localStorage.getItem(STORAGE_AUTH_KEY) === 'true');
+const email = ref<string>(localStorage.getItem(STORAGE_EMAIL_KEY) || 'matheus_dullius@hotmail.com');
+const password = ref<string>('');
+const loginError = ref<string>('');
+
+// Modal rápido para editar login/senha
+const showEditCredentials = ref<boolean>(false);
+const newEmailInput = ref<string>(email.value);
+const newPasswordInput = ref<string>('');
+const credFeedback = ref<string>('');
+
 const currentSessionId = ref<string>('main_neural_session');
 
 // Catálogo base de conexões salvas no PostgreSQL (/api/v1/connectors)
@@ -439,6 +455,61 @@ const voiceStatusText = ref<string>('🟢 Vigília ativa: diga "Jarvis"...');
 let wakeRecognition: any = null;
 let wakeTimeoutId: any = null;
 let currentTtsAudio: HTMLAudioElement | null = null;
+
+async function handleLogin() {
+  loginError.value = '';
+  try {
+    const response = await fetch('/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.value, password: password.value })
+    });
+    const data = await response.json();
+
+    if (data.success) {
+      isAuthenticated.value = true;
+      localStorage.setItem(STORAGE_AUTH_KEY, 'true');
+      localStorage.setItem(STORAGE_EMAIL_KEY, email.value);
+      await nextTick();
+      initNeuralCanvas();
+    } else {
+      loginError.value = data.error || 'E-mail ou senha incorretos.';
+    }
+  } catch {
+    loginError.value = 'Erro de conexão com o servidor.';
+  }
+}
+
+async function updateCredentials() {
+  credFeedback.value = '';
+  try {
+    const res = await fetch('/api/v1/auth/update-credentials', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        currentEmail: email.value,
+        newEmail: newEmailInput.value,
+        newPassword: newPasswordInput.value
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      email.value = data.newEmail;
+      localStorage.setItem(STORAGE_EMAIL_KEY, data.newEmail);
+      newPasswordInput.value = '';
+      credFeedback.value = '✅ Login e senha atualizados no banco e no .env!';
+    } else {
+      credFeedback.value = '❌ ' + (data.error || 'Erro ao atualizar.');
+    }
+  } catch {
+    credFeedback.value = '❌ Falha ao comunicar com o servidor.';
+  }
+}
+
+function handleLogout() {
+  isAuthenticated.value = false;
+  localStorage.removeItem(STORAGE_AUTH_KEY);
+}
 
 function playJarvisChime(type: 'wake' | 'send' = 'wake') {
   try {
@@ -2128,5 +2199,43 @@ onBeforeUnmount(() => {
   border: none;
   color: #ef4444;
   cursor: pointer;
+}
+
+.jarvis-viewport, .app-container {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: radial-gradient(circle at center, #0f172a 0%, #020617 100%);
+  box-sizing: border-box;
+}
+
+canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+  z-index: 1;
+}
+
+/* Ajuste automático da barra inferior e topo em telas de celular */
+@media (max-width: 768px) {
+  .top-bar, .header-bar {
+    padding: 8px 12px !important;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .command-bar, .bottom-dock {
+    width: 96% !important;
+    bottom: 10px !important;
+    padding: 8px !important;
+    flex-wrap: wrap;
+  }
 }
 </style>
