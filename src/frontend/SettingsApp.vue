@@ -824,40 +824,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
 
-interface AgentItem {
-  id?: number;
-  name: string;
-  slug: string;
-  role?: string;
-  description: string;
-  execution_mode: 'llm' | 'api' | 'mcp' | 'code';
-  provider: string;
-  model: string;
-  api_key?: string;
-  base_url?: string;
-  auth_type?: string;
-  auth_token?: string;
-  payload_template?: string;
-  code_snippet?: string;
-  system_prompt: string;
-  tools: string[];
-  next_agent_slug?: string;
-  schedule_cron?: string;
-  schedule_enabled?: boolean;
-  is_error_trigger?: boolean;
-}
-
-const currentTab = ref<'brain' | 'agents' | 'connectors' | 'memory' | 'manual'>('brain');
-
-const DEFAULT_ENDPOINTS: Record<string, string> = {
-  groq: 'https://api.groq.com/openai/v1',
-  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-  openai: 'https://api.openai.com/v1',
-  deepseek: 'https://api.deepseek.com',
-  ollama: 'http://localhost:11434/v1',
-  openrouter: 'https://openrouter.ai/api/v1'
-};
-
 if (localStorage.getItem('jarvis_authenticated_session') !== 'true') {
   window.location.href = '/';
 }
@@ -899,6 +865,17 @@ async function saveAdminCredentials() {
     authFeedback.value = { type: 'error', message: '❌ Erro: ' + err.message };
   }
 }
+
+const currentTab = ref<'brain' | 'agents' | 'connectors' | 'memory' | 'manual'>('brain');
+
+const DEFAULT_ENDPOINTS: Record<string, string> = {
+  groq: 'https://api.groq.com/openai/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+  openai: 'https://api.openai.com/v1',
+  deepseek: 'https://api.deepseek.com/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
+  ollama: 'http://localhost:11434/v1'
+};
 
 const supportedModels = ref<Record<string, Array<{ label: string; value: string }>>>({
   groq: [
