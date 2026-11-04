@@ -23,7 +23,7 @@
           @click="currentTab = 'security'"
           :class="['nav-btn', { active: currentTab === 'security' }]"
         >
-          🔐 4. Login & Senha
+          🔐 4. Login &amp; Senha
         </button>
 
         <button
@@ -208,11 +208,11 @@
         </div>
       </section>
 
-            <!-- ABA 4: ALTERAR LOGIN E SENHA -->
+      <!-- ABA 4: ALTERAR LOGIN E SENHA -->
       <section v-if="currentTab === 'security'" class="tab-section">
         <header class="section-header">
           <div>
-            <h1>🔐 Segurança & Credenciais de Acesso</h1>
+            <h1>🔐 Segurança &amp; Credenciais de Acesso</h1>
             <p>Altere seu e-mail de login e senha. A alteração é gravada automaticamente no PostgreSQL e no arquivo .env.</p>
           </div>
         </header>
@@ -822,15 +822,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, watch, onMounted } from 'vue';
 
 if (localStorage.getItem('jarvis_authenticated_session') !== 'true') {
   window.location.href = '/';
 }
 
-// Mantém a aba que você estava olhando salva mesmo se sair do navegador ou der F5
-const savedTab = (localStorage.getItem('jarvis_settings_tab') as any) || 'jarvis';
-const currentTab = ref<'jarvis' | 'specialists' | 'memory' | 'security'>(savedTab);
+// Mantém a aba ativa salva mesmo se atualizar a página (F5)
+type TabType = 'brain' | 'security' | 'agents' | 'connectors' | 'memory' | 'manual';
+const validTabs: TabType[] = ['brain', 'security', 'agents', 'connectors', 'memory', 'manual'];
+const rawSavedTab = localStorage.getItem('jarvis_settings_tab') as TabType;
+const initialTab: TabType = validTabs.includes(rawSavedTab) ? rawSavedTab : 'brain';
+
+const currentTab = ref<TabType>(initialTab);
 
 watch(currentTab, (newTab) => {
   localStorage.setItem('jarvis_settings_tab', newTab);
@@ -850,23 +854,25 @@ async function saveAdminCredentials() {
     const res = await fetch('/api/v1/auth/update-credentials', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(authForm.value)
+      body: JSON.stringify({
+        currentEmail: authForm.currentEmail,
+        newEmail: authForm.newEmail,
+        newPassword: authForm.newPassword
+      })
     });
     const data = await res.json();
     if (data.success) {
-      authForm.value.currentEmail = data.newEmail;
-      localStorage.setItem('jarvis_authenticated_email', data.newEmail);
-      authForm.value.newPassword = '';
+      authForm.currentEmail = data.newEmail || authForm.newEmail || authForm.currentEmail;
+      localStorage.setItem('jarvis_authenticated_email', authForm.currentEmail);
+      authForm.newPassword = '';
       authFeedback.value = { type: 'success', message: '✅ Login e senha salvos no Banco e no .env!' };
     } else {
-      authFeedback.value = { type: 'error', message: '❌ ' + data.error };
+      authFeedback.value = { type: 'error', message: '❌ ' + (data.error || 'Falha ao atualizar credenciais.') };
     }
   } catch (err: any) {
     authFeedback.value = { type: 'error', message: '❌ Erro: ' + err.message };
   }
 }
-
-const currentTab = ref<'brain' | 'agents' | 'connectors' | 'memory' | 'manual'>('brain');
 
 const DEFAULT_ENDPOINTS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
@@ -1601,7 +1607,6 @@ function formatTime(iso: string) {
   }
 }
 
-// Aliases de compatibilidade segura para ações de conectores
 async function deleteConnectorConfig(providerKey: string) {
   return deleteConnectorFromHub(providerKey);
 }
@@ -1610,7 +1615,6 @@ async function saveConnectorConfig(connector: any) {
   return saveConnector(connector);
 }
 
-// Herança automática de credenciais do conector no Agente caso necessário
 function onAgentToolToggle(toolSlug: string, isChecked: boolean) {
   if (!editingAgent.value) return;
   if (!Array.isArray(editingAgent.value.tools)) {
@@ -1807,7 +1811,7 @@ onMounted(async () => {
   gap: 24px;
 }
 
-.config-card {
+.config-card, .card {
   background: #0f172a;
   border: 1px solid #1e293b;
   border-radius: 12px;
@@ -1832,6 +1836,7 @@ onMounted(async () => {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+  flex: 1;
 }
 
 .form-row {
@@ -1867,11 +1872,28 @@ onMounted(async () => {
   word-break: break-word;
 }
 
+.actions-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
 .btn-primary {
   background: #0284c7;
   color: white;
   border: none;
   padding: 10px 18px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.btn-test {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid #10b981;
+  padding: 10px 16px;
   border-radius: 8px;
   cursor: pointer;
   font-weight: bold;
@@ -1906,7 +1928,7 @@ onMounted(async () => {
   gap: 18px;
 }
 
-.specialist-card {
+.specialist-card, .agent-card {
   background: #0f172a;
   border: 1px solid #1e293b;
   border-radius: 12px;
@@ -1917,53 +1939,52 @@ onMounted(async () => {
   min-width: 0;
 }
 
-.spec-top {
+.agent-card-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 8px;
-  flex-wrap: wrap;
 }
 
-.spec-title {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  min-width: 0;
+.agent-type-tag {
+  font-size: 0.68rem;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  font-weight: 700;
 }
 
-.spec-icon {
-  font-size: 1.6rem;
-}
-
-.spec-title h3 {
-  margin: 0;
-  font-size: 1rem;
-  word-break: break-word;
-}
-
-.spec-slug {
+.slug-code {
   font-size: 0.72rem;
   color: #64748b;
-  word-break: break-all;
 }
 
-.badge-type {
-  font-size: 0.7rem;
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: #1e293b;
-  color: #38bdf8;
-  white-space: nowrap;
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
 }
 
-.spec-desc {
+.status-dot.online {
+  background: #22c55e;
+  box-shadow: 0 0 8px #22c55e;
+}
+
+.status-dot.offline {
+  background: #64748b;
+}
+
+.agent-desc {
   font-size: 0.82rem;
   color: #94a3b8;
   margin: 0;
 }
 
-.spec-meta {
+.agent-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   font-size: 0.76rem;
   background: #020617;
   padding: 8px 10px;
@@ -1972,11 +1993,24 @@ onMounted(async () => {
   word-break: break-all;
 }
 
-.spec-actions {
+.tools-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-chip {
+  font-size: 0.7rem;
+  background: #1e293b;
+  color: #38bdf8;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.agent-card-actions {
   display: flex;
   gap: 8px;
   margin-top: auto;
-  flex-wrap: wrap;
 }
 
 .memory-workspace, .memory-layout {
@@ -1993,21 +2027,19 @@ onMounted(async () => {
   min-width: 0;
 }
 
-.session-ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .session-item {
+  width: 100%;
+  text-align: left;
   padding: 10px 12px;
+  margin-bottom: 8px;
   background: #020617;
   border: 1px solid #1e293b;
   border-radius: 8px;
+  color: #f8fafc;
   cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .session-item.active {
@@ -2015,17 +2047,18 @@ onMounted(async () => {
   background: rgba(56, 189, 248, 0.1);
 }
 
-.session-item div {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.82rem;
-  gap: 6px;
-  word-break: break-all;
-}
-
 .session-item small {
   color: #64748b;
   font-size: 0.7rem;
+}
+
+.session-details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
 .messages-list {
@@ -2034,49 +2067,24 @@ onMounted(async () => {
   gap: 12px;
 }
 
-.memory-msg-card {
+.message-card {
   background: #020617;
   border: 1px solid #1e293b;
   border-radius: 8px;
   padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.msg-header {
+.msg-meta {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 6px;
+  align-items: center;
 }
 
-.role-badge {
-  font-size: 0.7rem;
-  font-weight: bold;
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-
-.role-badge.user {
-  background: rgba(56, 189, 248, 0.2);
-  color: #38bdf8;
-}
-
-.role-badge.assistant {
-  background: rgba(34, 197, 94, 0.2);
-  color: #4ade80;
-}
-
-.msg-textarea {
-  width: 100%;
-  margin-bottom: 8px;
-}
-
-.msg-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-}
-
-.btn-small-save {
+.btn-secondary-sm {
+  align-self: flex-end;
   background: #0284c7;
   color: white;
   border: none;
@@ -2086,29 +2094,14 @@ onMounted(async () => {
   font-size: 0.75rem;
 }
 
-.btn-small-del {
+.btn-danger-sm {
   background: transparent;
   color: #f87171;
   border: 1px solid #ef4444;
-  padding: 5px 10px;
+  padding: 2px 7px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 0.75rem;
-}
-
-.ctx-card {
-  background: #020617;
-  border: 1px solid #1e293b;
-  border-radius: 8px;
-  padding: 10px;
-  margin-bottom: 10px;
-}
-
-.ctx-card pre {
-  margin: 6px 0 0 0;
-  font-size: 0.75rem;
-  color: #38bdf8;
-  overflow-x: auto;
 }
 
 .modal-backdrop {
@@ -2127,7 +2120,7 @@ onMounted(async () => {
   border: 1px solid #334155;
   border-radius: 12px;
   width: 100%;
-  max-width: 680px;
+  max-width: 760px;
   max-height: 92dvh;
   display: flex;
   flex-direction: column;
@@ -2152,35 +2145,108 @@ onMounted(async () => {
 .modal-body {
   padding: 18px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.sub-panel {
+.step-section {
   background: #020617;
   border: 1px solid #1e293b;
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 14px;
-  margin-top: 10px;
 }
 
-.sub-panel h4 {
-  margin: 0 0 12px 0;
+.step-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
   color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  padding: 4px 10px;
+  border-radius: 6px;
+  margin-bottom: 12px;
 }
 
-.feedback-box {
+.tools-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.inline-tool-creator-box {
+  background: #0f172a;
+  border: 1px dashed #38bdf8;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.tools-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.tool-checkbox-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+}
+
+.tool-checkbox-card.selected {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.tool-label-click {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  overflow: hidden;
+}
+
+.tool-actions-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-badge-mini {
+  font-size: 0.65rem;
+  color: #94a3b8;
+}
+
+.btn-trash-inline {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.feedback-box, .alert-box, .connector-feedback-box {
   padding: 10px;
   border-radius: 6px;
-  margin-bottom: 10px;
+  margin-top: 10px;
   font-size: 0.82rem;
 }
 
-.feedback-box.success {
+.feedback-box.success, .alert-success {
   background: rgba(34, 197, 94, 0.15);
   color: #4ade80;
   border: 1px solid #22c55e;
 }
 
-.feedback-box.error {
+.feedback-box.error, .alert-error {
   background: rgba(239, 68, 68, 0.15);
   color: #f87171;
   border: 1px solid #ef4444;
@@ -2192,12 +2258,30 @@ onMounted(async () => {
   padding: 15px 0;
 }
 
-.close-btn {
+.close-btn, .close-modal-btn {
   background: none;
   border: none;
   color: #94a3b8;
   font-size: 1.2rem;
   cursor: pointer;
+}
+
+.manual-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.manual-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.manual-card h3 {
+  margin-top: 0;
+  color: #38bdf8;
 }
 
 /* =========================================================
@@ -2253,7 +2337,7 @@ onMounted(async () => {
   }
 
   .env-badge {
-    display: none; /* Oculta badge de IP na barra do celular para ganhar espaço */
+    display: none;
   }
 
   .back-link {
