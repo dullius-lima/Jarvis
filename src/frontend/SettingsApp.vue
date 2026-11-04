@@ -837,12 +837,12 @@ watch(currentTab, (newTab) => {
 });
 
 // Estado para edição de Login e Senha na aba Segurança
-const authForm = ref({
+const authForm = reactive({
   currentEmail: localStorage.getItem('jarvis_authenticated_email') || 'matheus_dullius@hotmail.com',
-  newEmail: localStorage.getItem('jarvis_authenticated_email') || 'matheus_dullius@hotmail.com',
+  newEmail: '',
   newPassword: ''
 });
-const authFeedback = ref<{ type: 'success' | 'error'; message: string } | null>(null);
+const authFeedback = ref<{ type: string; message: string } | null>(null);
 
 async function saveAdminCredentials() {
   authFeedback.value = null;

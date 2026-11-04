@@ -1,7 +1,7 @@
 <template>
   <div class="jarvis-universe">
     <!-- ===================================================================== -->
-    <!-- 1. TELA DE BLOQUEIO E LOGIN (SENHA OBRIGATÓRIA)                       -->
+    <!-- 1. TELA DE BLOQUEIO E LOGIN (SESSÃO PERSISTENTE)                      -->
     <!-- ===================================================================== -->
     <div v-if="!isAuthenticated" class="auth-overlay">
       <div class="auth-card">
@@ -46,10 +46,9 @@
     </div>
 
     <!-- ===================================================================== -->
-    <!-- 2. INTERFACE PRINCIPAL DO ECOSSISTEMA 3D (QUANDO AUTENTICADO)         -->
+    <!-- 2. INTERFACE PRINCIPAL DO ECOSSISTEMA 3D                              -->
     <!-- ===================================================================== -->
     <template v-else>
-      <!-- TOPO MINIMALISTA RESPONSIVO -->
       <header class="hud-header">
         <div class="hud-brand">
           <span class="pulse-dot"></span>
@@ -88,7 +87,7 @@
         </div>
       </header>
 
-      <!-- CANVAS 3D INTERATIVO (MOUSE + TOUCH MOBILE) -->
+      <!-- PALCO CANVAS 3D INTERATIVO -->
       <div
         class="canvas-stage"
         @mousedown="onMouseDown"
@@ -103,11 +102,11 @@
         <canvas ref="neuralCanvas"></canvas>
 
         <!-- Status de Voz Flutuante -->
-        <div class="hud-hint" @click="manualRestartWakeWord">
+        <div class="hud-hint" @click="manualRestartWakeWord" title="Clique para alternar vigília contínua">
           <span>{{ voiceStatusText }}</span>
         </div>
 
-        <!-- MODAL DE EDIÇÃO DE LOGIN E SENHA -->
+        <!-- MODAL DE EDIÇÃO DE CREDENCIAIS -->
         <div v-if="showPasswordModal" class="agent-connections-popover password-modal">
           <div class="popover-header">
             <strong style="color: #38bdf8; font-size: 13.5px;">🔐 Alterar Credenciais de Acesso</strong>
@@ -137,7 +136,7 @@
           </div>
         </div>
 
-        <!-- PAINEL DO AGENTE SELECIONADO -->
+        <!-- POPOVER DO AGENTE SELECIONADO -->
         <div v-if="activeAgentForTools" class="agent-connections-popover">
           <div class="popover-header">
             <div style="display: flex; align-items: center; gap: 8px;">
@@ -178,11 +177,11 @@
           <!-- ABA 1: CONECTADOS -->
           <div v-if="popoverTab === 'connected'" class="popover-body">
             <p class="popover-help">
-              Nós fixos conectados ao agente <strong>{{ activeAgentForTools.name }}</strong>:
+              Nós fixos conectados a <strong>{{ activeAgentForTools.name }}</strong>:
             </p>
 
             <div v-if="(activeAgentForTools.tools || []).length === 0" class="empty-connected-box">
-              Nenhum nó conectado a este agente. Use a aba <strong>Todos os Nós</strong> para ligar.
+              Nenhum nó conectado. Use a aba <strong>Todos os Nós</strong> para ligar.
             </div>
 
             <div v-else class="saved-connections-list">
@@ -213,7 +212,7 @@
             </div>
           </div>
 
-          <!-- ABA 2: CATÁLOGO DE NÓS -->
+          <!-- ABA 2: TODOS OS NÓS -->
           <div v-else-if="popoverTab === 'saved'" class="popover-body">
             <p class="popover-help">Ligue ou desligue nós fixos neste agente:</p>
             <div class="saved-connections-list">
@@ -244,7 +243,7 @@
             </div>
           </div>
 
-          <!-- ABA 3: CRIAR NÓ -->
+          <!-- ABA 3: CRIAR NOVO NÓ -->
           <div v-else class="popover-body">
             <div style="display: flex; gap: 6px; margin-bottom: 8px;">
               <input
@@ -261,7 +260,7 @@
 
             <input
               v-model="newConnForm.description"
-              placeholder="Descrição para a IA (ex: Consulta cotação na B3)"
+              placeholder="Descrição para a IA (ex: Consulta cotações na B3)"
               class="modal-input"
             />
 
@@ -314,7 +313,7 @@
           </div>
 
           <div style="font-size: 11px; color: #94a3b8; margin-bottom: 6px;">
-            Agentes conectados a este nó ({{ getAgentsUsingTool(selectedSubNode.toolId).length }}):
+            Agentes conectados ({{ getAgentsUsingTool(selectedSubNode.toolId).length }}):
           </div>
 
           <div class="shared-node-agents-list">
@@ -336,14 +335,14 @@
             <button @click="selectedMemoryDot = null" class="close-btn">✕</button>
           </div>
           <div style="font-size: 11px; color: #cbd5e1; margin-bottom: 6px;">
-            Produzida por: <strong>{{ selectedMemoryDot.agentName }}</strong> ↔ <strong>Orquestrador</strong>
+            Produzida por: <strong>{{ selectedMemoryDot.agentName }}</strong> ↔ <strong>JARVIS</strong>
           </div>
           <div style="font-size: 11px; color: #94a3b8; background: rgba(15,23,42,0.9); padding: 8px; border-radius: 6px; max-height: 110px; overflow-y: auto;">
             {{ selectedMemoryDot.summary }}
           </div>
         </div>
 
-        <!-- PREVIEW DE CÂMERA / TELA -->
+        <!-- PREVIEW DE VÍDEO (CÂMERA OU TELA) -->
         <div v-show="isCameraActive || isScreenActive" class="media-preview-box">
           <div class="media-preview-header">
             <span>{{ isCameraActive ? '📷 Câmera Ativa' : '🖥️ Tela Ativa' }}</span>
@@ -352,7 +351,7 @@
           <video ref="videoElement" autoplay playsinline muted class="media-video"></video>
         </div>
 
-        <!-- BALÃO DE RESPOSTA DO ORQUESTRADOR -->
+        <!-- BALÃO DE RESPOSTA -->
         <transition name="fade">
           <div v-if="lastResponse" class="response-bubble">
             <div class="response-header">
@@ -364,13 +363,13 @@
         </transition>
       </div>
 
-      <!-- BARRA DE COMANDO MULTIMODAL NO RODAPÉ -->
+      <!-- BARRA DE COMANDO NO RODAPÉ -->
       <footer class="command-dock-wrapper">
         <div class="command-dock">
           <button
             @click="toggleMicrophone"
-            :class="['dock-icon-btn', { 'active-mic': isJarvisAwake }]"
-            :title="isAlwaysListening ? 'Microfone Ativo' : 'Ativar Microfone'"
+            :class="['dock-icon-btn', { 'active-mic': isJarvisAwake || isRecognitionActive }]"
+            :title="isAlwaysListening ? 'Microfone Ativo (Vigília)' : 'Ativar Microfone'"
           >
             🎙️
           </button>
@@ -415,7 +414,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 
 // ============================================================================
-// 1. AUTENTICAÇÃO E SESSÃO PERSISTENTE (NÃO DESLOGA NO F5 / TROCA DE TELA)
+// 1. AUTENTICAÇÃO E SESSÃO PERSISTENTE
 // ============================================================================
 const STORAGE_AUTH_KEY = 'jarvis_authenticated_session';
 const STORAGE_EMAIL_KEY = 'jarvis_authenticated_email';
@@ -500,9 +499,9 @@ async function updateAdminCredentials() {
       loginEmail.value = newEmailInput.value.trim();
       localStorage.setItem(STORAGE_EMAIL_KEY, loginEmail.value);
       newPasswordInput.value = '';
-      credFeedback.value = '✅ Senha atualizada no banco e no .env!';
+      credFeedback.value = '✅ Credenciais atualizadas com sucesso!';
     } else {
-      credFeedback.value = '❌ ' + (data.error || 'Erro ao atualizar senha.');
+      credFeedback.value = '❌ ' + (data.error || 'Erro ao atualizar.');
     }
   } catch {
     credFeedback.value = '❌ Erro de comunicação com o backend.';
@@ -516,7 +515,7 @@ function handleLogout() {
 }
 
 // ============================================================================
-// 2. ESTADO DO ECOSSISTEMA 3D, AGENTES, NÓS FIXOS E MEMÓRIAS
+// 2. ESTADO DO ECOSSISTEMA 3D, AGENTES E MEMÓRIAS
 // ============================================================================
 const neuralCanvas = ref<HTMLCanvasElement | null>(null);
 const dynamicAgents = ref<any[]>([]);
@@ -540,11 +539,10 @@ const newConnForm = ref({
 
 const promptText = ref<string>('');
 const isProcessing = ref<boolean>(false);
-const isSpeaking = ref<boolean>(false);
 const lastResponse = ref<{ agent: string; text: string; executionTimeMs?: number } | null>(null);
 const sessionId = ref<string>(localStorage.getItem('jarvis_active_session_id') || 'sess_main_admin');
 
-// Controles de câmera 3D e gestos Touch/Mouse
+// Controles de câmera 3D
 const rotationY = ref<number>(0);
 const rotationX = ref<number>(0.18);
 const cameraZoom = ref<number>(1.0);
@@ -555,7 +553,6 @@ let lastMouseY = 0;
 let animationFrameId: number | null = null;
 let refreshIntervalId: any = null;
 
-// Cache de posições na tela para clique/toque preciso
 let renderedAgentsHitbox: Array<{ x: number; y: number; r: number; agent: any }> = [];
 let renderedSubNodesHitbox: Array<{ x: number; y: number; r: number; node: any }> = [];
 let renderedMemoriesHitbox: Array<{ x: number; y: number; r: number; mem: any }> = [];
@@ -683,7 +680,7 @@ async function loadEcosystemData() {
       });
     }
   } catch (err) {
-    console.warn('⚠️ [Ecossistema 3D] Aviso ao sincronizar dados:', err);
+    console.warn('⚠️ [Ecossistema 3D] Erro ao sincronizar dados:', err);
   }
 }
 
@@ -755,16 +752,9 @@ async function createAndAttachConnection() {
 }
 
 // ============================================================================
-// 3. MOTOR GRÁFICO 3D RESPONSIVO (SEM DESBOTAMENTO E ENQUADRADO NO CELULAR)
+// 3. MOTOR GRÁFICO 3D DO CÉREBRO
 // ============================================================================
-function project3D(
-  x: number,
-  y: number,
-  z: number,
-  cx: number,
-  cy: number,
-  fov: number
-) {
+function project3D(x: number, y: number, z: number, cx: number, cy: number, fov: number) {
   const cosY = Math.cos(rotationY.value);
   const sinY = Math.sin(rotationY.value);
   const x1 = x * cosY - z * sinY;
@@ -778,12 +768,7 @@ function project3D(
   const depth = Math.max(fov + z2, 120);
   const scale = (fov / depth) * cameraZoom.value;
 
-  return {
-    x: cx + x1 * scale,
-    y: cy + y2 * scale,
-    z: z2,
-    scale
-  };
+  return { x: cx + x1 * scale, y: cy + y2 * scale, z: z2, scale };
 }
 
 function stopAnimationLoop() {
@@ -819,14 +804,12 @@ function startNeuralCanvasLoop() {
       canvas.height = Math.floor(height * dpr);
     }
 
-    // RESET TOTAL DO CONTEXTO A CADA FRAME (IMPEDE O DESBOTAMENTO / ESCURECIMENTO)
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.globalAlpha = 1.0;
     ctx.globalCompositeOperation = 'source-over';
     ctx.shadowBlur = 0;
     ctx.clearRect(0, 0, width, height);
 
-    // Fundo espacial profundo fixo e estável
     const bgGrad = ctx.createRadialGradient(
       width * 0.5,
       height * 0.48,
@@ -841,12 +824,11 @@ function startNeuralCanvasLoop() {
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, width, height);
 
-    time += isSpeaking.value || isProcessing.value ? 0.032 : 0.012;
+    time += isJarvisSpeaking.value || isProcessing.value ? 0.032 : 0.012;
     if (!isDragging) {
       rotationY.value += 0.0028;
     }
 
-    // ESCALA AUTOMÁTICA PARA CELULAR, TABLET E MONITOR (NUNCA CORTA NAS BORDAS)
     const isMobile = width < 768;
     const safeHalfWidth = width * 0.5 - (isMobile ? 48 : 80);
     const safeHalfHeight = height * 0.5 - (isMobile ? 115 : 130);
@@ -860,7 +842,7 @@ function startNeuralCanvasLoop() {
     const agentOrbitRadius = Math.min(maxSafeRadius * 0.88, isMobile ? 132 : 245);
     const sharedNodeOrbitRadius = Math.min(maxSafeRadius * 1.15, isMobile ? 162 : 330);
 
-    // 1. DESENHA ANÉIS ORBITAIS TRACEJADOS E GLOBO CENTRAL (JARVIS CORE)
+    // Anel orbital central
     ctx.save();
     ctx.globalAlpha = 0.55;
     ctx.strokeStyle = '#0ea5e9';
@@ -874,11 +856,11 @@ function startNeuralCanvasLoop() {
     // Esfera Wireframe 3D Central
     const latBands = 7;
     const lonBands = 12;
-    const pulseScale = 1 + (isSpeaking.value || isProcessing.value ? Math.sin(time * 5) * 0.07 : Math.sin(time * 2) * 0.02);
+    const pulseScale = 1 + (isJarvisSpeaking.value || isProcessing.value ? Math.sin(time * 5) * 0.07 : Math.sin(time * 2) * 0.02);
     const effectiveCoreR = coreRadius * pulseScale;
 
     ctx.save();
-    ctx.strokeStyle = isSpeaking.value ? '#38bdf8' : '#22d3ee';
+    ctx.strokeStyle = isJarvisSpeaking.value ? '#38bdf8' : '#22d3ee';
     ctx.lineWidth = 1.1;
 
     for (let i = 1; i < latBands; i++) {
@@ -920,7 +902,7 @@ function startNeuralCanvasLoop() {
     }
     ctx.restore();
 
-    // Brilho interno do núcleo
+    // Brilho interno
     ctx.save();
     const coreGlow = ctx.createRadialGradient(cx, cy, 4, cx, cy, effectiveCoreR * 1.2 * cameraZoom.value);
     coreGlow.addColorStop(0, 'rgba(56, 189, 248, 0.42)');
@@ -932,7 +914,6 @@ function startNeuralCanvasLoop() {
     ctx.fill();
     ctx.restore();
 
-    // 2. POSICIONAMENTO 3D DOS AGENTES DE IA (COM CLAMP DE SEGURANÇA PARA A TELA)
     renderedAgentsHitbox = [];
     renderedSubNodesHitbox = [];
     renderedMemoriesHitbox = [];
@@ -947,7 +928,6 @@ function startNeuralCanvasLoop() {
       const z3d = Math.sin(angle) * agentOrbitRadius;
       const rawProj = project3D(x3d, yOffset, z3d, cx, cy, fov);
 
-      // Trava coordenada X e Y dentro da área visível do dispositivo para nunca cortar o texto
       const padX = isMobile ? 46 : 70;
       const padTop = isMobile ? 85 : 95;
       const padBottom = isMobile ? 105 : 110;
@@ -962,7 +942,7 @@ function startNeuralCanvasLoop() {
       });
     });
 
-    // 3. DESENHA FEIXES SINÁPTICOS E PARTÍCULAS DE MEMÓRIA ENTRE NÚCLEO E AGENTES
+    // Feixes sinápticos e memórias
     Array.from(agentPositionsMap.values()).forEach(({ ag, proj: agProj, color }, index) => {
       const isSelected = activeAgentForTools.value?.id === ag.id;
 
@@ -979,7 +959,6 @@ function startNeuralCanvasLoop() {
       ctx.stroke();
       ctx.restore();
 
-      // Pontos de memória trafegando na linha
       const agentMemories = memoryDots.value.filter(
         (m) => m.agentId === ag.id || m.agentName === ag.name
       );
@@ -1005,7 +984,7 @@ function startNeuralCanvasLoop() {
       }
     });
 
-    // 4. NÓS FIXOS COMPARTILHADOS (CONECTORES EXTERNOS)
+    // Conectores externos (Nós Fixos)
     const uniqueToolIds = new Set<string>();
     dynamicAgents.value.forEach((ag) => {
       if (Array.isArray(ag.tools)) {
@@ -1026,7 +1005,6 @@ function startNeuralCanvasLoop() {
       const nodeY = Math.max(80, Math.min(height - 95, tProj.y));
       const nodeR = isMobile ? 12 : 15;
 
-      // Ligações para todos os agentes que usam este nó fixo
       const connectedAgents = getAgentsUsingTool(toolId);
       connectedAgents.forEach((cAg) => {
         const agEntry = agentPositionsMap.get(cAg.id);
@@ -1043,7 +1021,6 @@ function startNeuralCanvasLoop() {
         ctx.restore();
       });
 
-      // Orbe minimalista do Nó Fixo
       ctx.save();
       ctx.globalAlpha = 1.0;
       ctx.fillStyle = '#0f172a';
@@ -1069,7 +1046,7 @@ function startNeuralCanvasLoop() {
       });
     });
 
-    // 5. DESENHA OS ORBES DOS AGENTES DE IA E SEUS NOMES ENQUADRADOS
+    // Orbes dos Agentes
     Array.from(agentPositionsMap.values()).forEach(({ ag, proj, color }) => {
       const orbR = isMobile ? 22 : 28;
       const isSelected = activeAgentForTools.value?.id === ag.id;
@@ -1088,14 +1065,12 @@ function startNeuralCanvasLoop() {
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // Ícone do Agente
       ctx.font = `${isMobile ? 16 : 20}px system-ui`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#ffffff';
       ctx.fillText(ag.icon || '🤖', proj.x, proj.y);
 
-      // Badge com quantidade de nós conectados
       const toolsCount = Array.isArray(ag.tools) ? ag.tools.length : 0;
       if (toolsCount > 0) {
         const bx = proj.x + orbR * 0.72;
@@ -1109,7 +1084,6 @@ function startNeuralCanvasLoop() {
         ctx.fillText(String(toolsCount), bx, by);
       }
 
-      // Nome do Agente com truncamento inteligente para nunca sair da tela
       const labelFont = isMobile ? 11 : 12.5;
       ctx.font = `600 ${labelFont}px system-ui, sans-serif`;
       ctx.fillStyle = '#f1f5f9';
@@ -1134,7 +1108,7 @@ function startNeuralCanvasLoop() {
 }
 
 // ============================================================================
-// 4. INTERAÇÃO POR CLIQUE E TOQUE (DESKTOP & MOBILE)
+// 4. INTERAÇÕES DE TOQUE E CLIQUE
 // ============================================================================
 function handleStageTap(clientX: number, clientY: number) {
   for (const item of renderedAgentsHitbox) {
@@ -1227,130 +1201,423 @@ function onTouchEnd(e: TouchEvent) {
 }
 
 // ============================================================================
-// 5. VOZ (TTS + WAKE WORD COM PROTEÇÃO ANTI-LOOP EM HTTP), CÂMERA E TELA
+// 5. MOTOR DE VOZ (SEM LOOP INFINITO), TTS ZERO TOKENS E CÂMERA INTELIGENTE
 // ============================================================================
-const isAlwaysListening = ref<boolean>(true);
+const isAlwaysListening = ref<boolean>(false); // Inicia desligado para evitar metralhadora de bipes
 const isJarvisAwake = ref<boolean>(false);
-const voiceStatusText = ref<string>('🟢 Vigília ativa: diga "Jarvis"...');
+const isJarvisSpeaking = ref<boolean>(false);
+const isVoiceMuted = ref<boolean>(false);
+const isRecognitionActive = ref<boolean>(false);
+const voiceStatusText = ref<string>('🎙️ Clique no microfone para falar');
+
 let wakeRecognition: any = null;
-let micPermissionDenied = false;
+let wakeTimeoutId: any = null;
+let lastChimeTime = 0;
+let consecutiveNoSpeechCount = 0;
+let currentAudioElement: HTMLAudioElement | null = null;
 
 const videoElement = ref<HTMLVideoElement | null>(null);
 const isCameraActive = ref<boolean>(false);
 const isScreenActive = ref<boolean>(false);
-const capturedWebcamBase64 = ref<string | null>(null);
-const capturedScreenBase64 = ref<string | null>(null);
 let activeMediaStream: MediaStream | null = null;
 
-function speakJarvisResponse(rawText: string) {
-  if (!rawText || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-  const cleanText = rawText
-    .replace(/[*#_`~>-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!cleanText) return;
+// Bipe sonoro com cooldown de 3 segundos contra loop
+function playJarvisChime(type: 'wake' | 'send' = 'wake') {
+  const now = Date.now();
+  if (type === 'wake' && now - lastChimeTime < 3000) return;
+  lastChimeTime = now;
 
   try {
-    isSpeaking.value = true;
-    window.speechSynthesis.cancel();
-    setTimeout(() => {
-      const utter = new SpeechSynthesisUtterance(cleanText);
-      utter.lang = 'pt-BR';
-      utter.rate = 1.05;
-      const voices = window.speechSynthesis.getVoices();
-      const ptVoice = voices.find((v) => v.lang.toLowerCase().includes('pt'));
-      if (ptVoice) utter.voice = ptVoice;
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
 
-      utter.onend = () => {
-        isSpeaking.value = false;
-      };
-      utter.onerror = () => {
-        isSpeaking.value = false;
-      };
-      window.speechSynthesis.speak(utter);
-    }, 80);
-  } catch {
-    isSpeaking.value = false;
-  }
+    osc.type = 'sine';
+    if (type === 'wake') {
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.08);
+    } else {
+      osc.frequency.setValueAtTime(659.25, ctx.currentTime);
+      osc.frequency.setValueAtTime(523.25, ctx.currentTime + 0.08);
+    }
+
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.2);
+    setTimeout(() => ctx.close().catch(() => {}), 300);
+  } catch {}
 }
 
-function initWakeWordListener() {
-  if (typeof window === 'undefined' || micPermissionDenied) return;
+// Reconhecimento de Voz sem loop infinito
+function initWakeWordListener(singleShotCommand = false) {
   const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
   if (!SpeechRec) {
-    voiceStatusText.value = '⌨️ Digite seu comando abaixo';
+    voiceStatusText.value = '⚠️ Reconhecimento de voz requer Chrome ou Edge.';
     return;
   }
 
-  try {
+  if (isRecognitionActive.value && wakeRecognition) {
+    return;
+  }
+
+  if (!wakeRecognition) {
     wakeRecognition = new SpeechRec();
     wakeRecognition.lang = 'pt-BR';
-    wakeRecognition.continuous = true;
     wakeRecognition.interimResults = false;
-
-    wakeRecognition.onresult = (event: any) => {
-      if (isSpeaking.value) return;
-      const lastIdx = event.results.length - 1;
-      const transcript = String(event.results[lastIdx][0].transcript || '').trim();
-      const lower = transcript.toLowerCase();
-
-      if (lower.includes('jarvis')) {
-        isJarvisAwake.value = true;
-        const afterWake = transcript.replace(/.*jarvis[,.\s]*/i, '').trim();
-        if (afterWake.length > 2) {
-          promptText.value = afterWake;
-          sendCommand(afterWake);
-        } else {
-          voiceStatusText.value = '🎙️ Ouvindo seu comando...';
-          speakJarvisResponse('Sim, senhor? Estou ouvindo.');
-        }
-      } else if (isJarvisAwake.value && transcript.length > 2) {
-        isJarvisAwake.value = false;
-        promptText.value = transcript;
-        sendCommand(transcript);
-      }
-    };
-
-    wakeRecognition.onerror = (ev: any) => {
-      // IMPEDE O LOOP INFINITO QUE CONGELA O CHROME MOBILE QUANDO EM HTTP
-      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
-        micPermissionDenied = true;
-        isAlwaysListening.value = false;
-        voiceStatusText.value = '🔒 Toque para ativar voz (Requer HTTPS)';
-      }
-    };
-
-    wakeRecognition.onend = () => {
-      if (isAlwaysListening.value && !micPermissionDenied && isAuthenticated.value) {
-        setTimeout(() => {
-          try {
-            wakeRecognition?.start();
-          } catch {}
-        }, 1200);
-      }
-    };
-
-    wakeRecognition.start();
-  } catch {
-    voiceStatusText.value = '🎙️ Toque no microfone para falar';
   }
+
+  wakeRecognition.continuous = !singleShotCommand && isAlwaysListening.value;
+
+  wakeRecognition.onstart = () => {
+    isRecognitionActive.value = true;
+    voiceStatusText.value = isJarvisAwake.value
+      ? '🎙️ Ouvindo seu comando...'
+      : isAlwaysListening.value
+      ? '🟢 Vigília ativa: diga "Jarvis"...'
+      : '🎙️ Pronto para ouvir comando';
+  };
+
+  wakeRecognition.onresult = (event: any) => {
+    if (isJarvisSpeaking.value) return;
+    consecutiveNoSpeechCount = 0;
+
+    const lastIdx = event.results.length - 1;
+    const result = event.results[lastIdx];
+    if (!result || !result[0]) return;
+
+    const transcript = String(result[0].transcript || '').trim();
+    const lower = transcript.toLowerCase();
+
+    // Se o usuário clicou no microfone (já está acordado esperando o comando)
+    if (isJarvisAwake.value && transcript.length > 1) {
+      const cleanCmd = transcript.replace(/^(jarvis|jávis|jarves)[,.\s!?-]*/i, '').trim();
+      if (cleanCmd.length > 1) {
+        isJarvisAwake.value = false;
+        if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
+        playJarvisChime('send');
+        voiceStatusText.value = `⚡ Processando: "${cleanCmd}"`;
+        dispatchVoiceCommandToJarvis(cleanCmd);
+        return;
+      }
+    }
+
+    // Modo Vigília procurando a palavra-chave "Jarvis"
+    if (lower.includes('jarvis') || lower.includes('jávis') || lower.includes('jarves')) {
+      const afterWake = transcript
+        .split(/jarvis|jávis|jarves/i)
+        .pop()
+        ?.replace(/^[,.\s!?-]+/, '')
+        .trim() || '';
+
+      if (afterWake.length > 3) {
+        playJarvisChime('wake');
+        voiceStatusText.value = `⚡ Comando: "${afterWake}"`;
+        dispatchVoiceCommandToJarvis(afterWake);
+      } else {
+        isJarvisAwake.value = true;
+        playJarvisChime('wake');
+        voiceStatusText.value = '🎙️ Sim, senhor? Diga seu comando...';
+        speakJarvisResponse('Sim, senhor? Estou ouvindo.', () => {
+          if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
+          wakeTimeoutId = setTimeout(() => {
+            if (isJarvisAwake.value) {
+              isJarvisAwake.value = false;
+              voiceStatusText.value = isAlwaysListening.value
+                ? '🟢 Vigília ativa: diga "Jarvis"...'
+                : '🎙️ Clique no microfone para falar';
+            }
+          }, 8000);
+        });
+      }
+    }
+  };
+
+  wakeRecognition.onerror = (ev: any) => {
+    isRecognitionActive.value = false;
+    const err = ev.error;
+
+    if (err === 'no-speech') {
+      consecutiveNoSpeechCount++;
+      if (consecutiveNoSpeechCount >= 3) {
+        isAlwaysListening.value = false;
+        isJarvisAwake.value = false;
+        voiceStatusText.value = '🎙️ Microfone em pausa (clique para falar)';
+      }
+      return;
+    }
+
+    if (['not-allowed', 'service-not-allowed', 'audio-capture', 'aborted', 'network'].includes(err)) {
+      isAlwaysListening.value = false;
+      isJarvisAwake.value = false;
+      voiceStatusText.value = '🔴 Microfone pausado (clique no 🎙️ para falar)';
+    }
+  };
+
+  wakeRecognition.onend = () => {
+    isRecognitionActive.value = false;
+
+    if (isAlwaysListening.value && !isJarvisSpeaking.value && consecutiveNoSpeechCount < 3) {
+      setTimeout(() => {
+        if (isAlwaysListening.value && !isJarvisSpeaking.value && !isRecognitionActive.value) {
+          try {
+            wakeRecognition.start();
+          } catch {}
+        }
+      }, 1500); // 1.5s evita repetição desenfreada
+    } else {
+      isJarvisAwake.value = false;
+      if (!isJarvisSpeaking.value) {
+        voiceStatusText.value = isAlwaysListening.value
+          ? '🟢 Vigília ativa: diga "Jarvis"...'
+          : '🎙️ Clique no microfone para falar';
+      }
+    }
+  };
+
+  try {
+    wakeRecognition.start();
+  } catch {}
 }
 
 function manualRestartWakeWord() {
-  micPermissionDenied = false;
-  isAlwaysListening.value = true;
-  initWakeWordListener();
+  consecutiveNoSpeechCount = 0;
+  isAlwaysListening.value = !isAlwaysListening.value;
+  if (isAlwaysListening.value) {
+    initWakeWordListener(false);
+  } else {
+    if (wakeRecognition) {
+      try {
+        wakeRecognition.stop();
+      } catch {}
+    }
+    voiceStatusText.value = '🎙️ Vigília desativada (clique para falar)';
+  }
 }
 
 function toggleMicrophone() {
-  if (micPermissionDenied || !isAlwaysListening.value) {
-    manualRestartWakeWord();
+  consecutiveNoSpeechCount = 0;
+
+  if (isRecognitionActive.value || isJarvisAwake.value) {
+    isAlwaysListening.value = false;
+    isJarvisAwake.value = false;
+    isRecognitionActive.value = false;
+    if (wakeRecognition) {
+      try {
+        wakeRecognition.stop();
+      } catch {}
+    }
+    voiceStatusText.value = '🎙️ Microfone desligado.';
     return;
   }
-  isJarvisAwake.value = !isJarvisAwake.value;
-  voiceStatusText.value = isJarvisAwake.value
-    ? '🎙️ Escuta direta ativa: pode falar...'
-    : '🟢 Vigília ativa: diga "Jarvis"...';
+
+  isJarvisAwake.value = true;
+  playJarvisChime('wake');
+  initWakeWordListener(true);
+}
+
+async function dispatchVoiceCommandToJarvis(spokenText: string) {
+  promptText.value = spokenText;
+  await sendCommand(spokenText);
+}
+
+// Síntese de Voz (TTS) com /api/v1/audio/speak (Zero Tokens) + Fallback local
+async function speakJarvisResponse(rawText: string, onDoneCallback?: () => void) {
+  if (isVoiceMuted.value || !rawText) {
+    if (onDoneCallback) onDoneCallback();
+    return;
+  }
+
+  if (currentAudioElement) {
+    try {
+      currentAudioElement.pause();
+      currentAudioElement = null;
+    } catch {}
+  }
+  if ('speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {}
+  }
+
+  isJarvisSpeaking.value = true;
+  if (wakeRecognition && isRecognitionActive.value) {
+    try {
+      wakeRecognition.stop();
+    } catch {}
+  }
+
+  const finishSpeaking = () => {
+    isJarvisSpeaking.value = false;
+    if (onDoneCallback) onDoneCallback();
+    if (isAlwaysListening.value) {
+      setTimeout(() => {
+        if (!isJarvisSpeaking.value && !isRecognitionActive.value) {
+          try {
+            initWakeWordListener(false);
+          } catch {}
+        }
+      }, 800);
+    }
+  };
+
+  const cleanText = rawText
+    .replace(/```[\s\S]*?```/g, 'bloco de código exibido na tela.')
+    .replace(/[*#_`~>|]/g, '')
+    .replace(/https?:\/\/\S+/g, 'link na tela')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleanText) {
+    finishSpeaking();
+    return;
+  }
+
+  // 1. Tenta áudio neural da rota local (Zero Tokens)
+  try {
+    const response = await fetch('/api/v1/audio/speak', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: cleanText, mode: 'auto' })
+    });
+
+    if (response.ok) {
+      const audioData = await response.json().catch(() => null);
+      if (audioData?.success && audioData?.audioBase64) {
+        const audio = new Audio(`data:${audioData.mimeType || 'audio/mpeg'};base64,${audioData.audioBase64}`);
+        currentAudioElement = audio;
+        audio.onended = () => {
+          currentAudioElement = null;
+          finishSpeaking();
+        };
+        audio.onerror = () => {
+          currentAudioElement = null;
+          fallbackSpeechSynthesis(cleanText, finishSpeaking);
+        };
+        await audio.play();
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('Usando fallback speechSynthesis local:', err);
+  }
+
+  // 2. Fallback SpeechSynthesis nativo do navegador
+  fallbackSpeechSynthesis(cleanText, finishSpeaking);
+}
+
+function fallbackSpeechSynthesis(text: string, onComplete: () => void) {
+  if (!('speechSynthesis' in window)) {
+    onComplete();
+    return;
+  }
+
+  try {
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.resume();
+
+    setTimeout(() => {
+      const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
+      const voices = window.speechSynthesis.getVoices();
+      const ptVoice =
+        voices.find(
+          (v) =>
+            v.lang.toLowerCase().includes('pt') &&
+            (v.name.includes('Antonio') ||
+              v.name.includes('Francisca') ||
+              v.name.includes('Google') ||
+              v.name.includes('Natural'))
+        ) ||
+        voices.find((v) => v.lang.toLowerCase().includes('pt-br')) ||
+        voices.find((v) => v.lang.toLowerCase().startsWith('pt'));
+
+      sentences.forEach((sentence, idx) => {
+        const trimmed = sentence.trim();
+        if (!trimmed) return;
+
+        const utterance = new SpeechSynthesisUtterance(trimmed);
+        utterance.lang = 'pt-BR';
+        utterance.rate = 1.08;
+        utterance.pitch = 0.95;
+        if (ptVoice) utterance.voice = ptVoice;
+
+        if (idx === sentences.length - 1) {
+          utterance.onend = () => onComplete();
+          utterance.onerror = () => onComplete();
+        }
+
+        window.speechSynthesis.speak(utterance);
+      });
+    }, 80);
+  } catch {
+    onComplete();
+  }
+}
+
+// Detecção de intenção visual no comando
+function requiresCameraActivation(text: string): boolean {
+  const lower = (text || '').toLowerCase();
+  return (
+    lower.includes('ative a câmera') ||
+    lower.includes('ativar a câmera') ||
+    lower.includes('ativa a câmera') ||
+    lower.includes('ligue a câmera') ||
+    lower.includes('ligar a câmera') ||
+    lower.includes('abra a câmera') ||
+    lower.includes('está me vendo') ||
+    lower.includes('esta me vendo') ||
+    lower.includes('tá me vendo') ||
+    lower.includes('ta me vendo') ||
+    lower.includes('consegue me ver') ||
+    lower.includes('você me vê') ||
+    lower.includes('voce me ve') ||
+    lower.includes('olhe para mim') ||
+    lower.includes('olha pra mim') ||
+    lower.includes('como eu estou') ||
+    lower.includes('quem sou eu')
+  );
+}
+
+async function ensureCameraAndCaptureFrame(): Promise<string | null> {
+  try {
+    if (!activeMediaStream || !activeMediaStream.active || !isCameraActive.value) {
+      activeMediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' },
+        audio: false
+      });
+      if (videoElement.value) {
+        videoElement.value.srcObject = activeMediaStream;
+        await videoElement.value.play().catch(() => {});
+      }
+      isCameraActive.value = true;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    return captureCurrentVideoFrame();
+  } catch (err) {
+    console.warn('⚠️ Acesso à câmera falhou:', err);
+    return null;
+  }
+}
+
+function captureCurrentVideoFrame(): string | null {
+  if (!videoElement.value || (!isCameraActive.value && !isScreenActive.value)) return null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = videoElement.value.videoWidth || 640;
+    c.height = videoElement.value.videoHeight || 480;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(videoElement.value, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.8);
+  } catch {
+    return null;
+  }
 }
 
 async function toggleWebcam() {
@@ -1363,6 +1630,7 @@ async function toggleWebcam() {
     activeMediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     if (videoElement.value) {
       videoElement.value.srcObject = activeMediaStream;
+      videoElement.value.play().catch(() => {});
     }
     isCameraActive.value = true;
   } catch {
@@ -1380,10 +1648,11 @@ async function toggleScreenShare() {
     activeMediaStream = await (navigator.mediaDevices as any).getDisplayMedia({ video: true });
     if (videoElement.value) {
       videoElement.value.srcObject = activeMediaStream;
+      videoElement.value.play().catch(() => {});
     }
     isScreenActive.value = true;
   } catch {
-    voiceStatusText.value = '⚠️ Captura de tela indisponível neste dispositivo';
+    voiceStatusText.value = '⚠️ Captura de tela cancelada ou indisponível';
   }
 }
 
@@ -1396,21 +1665,6 @@ function stopAllMedia() {
   isScreenActive.value = false;
 }
 
-function captureCurrentVideoFrame(): string | null {
-  if (!videoElement.value || (!isCameraActive.value && !isScreenActive.value)) return null;
-  try {
-    const c = document.createElement('canvas');
-    c.width = videoElement.value.videoWidth || 640;
-    c.height = videoElement.value.videoHeight || 480;
-    const ctx = c.getContext('2d');
-    if (!ctx) return null;
-    ctx.drawImage(videoElement.value, 0, 0, c.width, c.height);
-    return c.toDataURL('image/jpeg', 0.75);
-  } catch {
-    return null;
-  }
-}
-
 async function sendCommand(overrideText?: string) {
   const textToSend = (typeof overrideText === 'string' ? overrideText : promptText.value).trim();
   if (!textToSend || isProcessing.value) return;
@@ -1418,9 +1672,18 @@ async function sendCommand(overrideText?: string) {
   isProcessing.value = true;
   if (!overrideText) promptText.value = '';
 
-  const frame = captureCurrentVideoFrame();
-  if (isCameraActive.value) capturedWebcamBase64.value = frame;
-  if (isScreenActive.value) capturedScreenBase64.value = frame;
+  let currentWebcamFrame = isCameraActive.value ? captureCurrentVideoFrame() : null;
+
+  // Ativa a câmera automaticamente ao detectar perguntas visuais
+  if (requiresCameraActivation(textToSend)) {
+    voiceStatusText.value = '📷 Ativando visão da câmera...';
+    const autoFrame = await ensureCameraAndCaptureFrame();
+    if (autoFrame) {
+      currentWebcamFrame = autoFrame;
+    }
+  }
+
+  const screenFrame = isScreenActive.value ? captureCurrentVideoFrame() : null;
 
   try {
     const res = await fetch('/api/v1/webhook/ingress', {
@@ -1433,8 +1696,9 @@ async function sendCommand(overrideText?: string) {
           type: 'voice_or_text',
           prompt: textToSend,
           textPrompt: textToSend,
-          webcamFrame: isCameraActive.value ? capturedWebcamBase64.value : undefined,
-          screenFrame: isScreenActive.value ? capturedScreenBase64.value : undefined
+          webcamFrame: currentWebcamFrame || undefined,
+          faceFrameBase64: currentWebcamFrame || undefined,
+          screenFrame: screenFrame || undefined
         }
       })
     });
@@ -1466,12 +1730,11 @@ async function sendCommand(overrideText?: string) {
 }
 
 // ============================================================================
-// 6. CICLO DE VIDA E INICIALIZAÇÃO SEGURA
+// 6. CICLO DE VIDA
 // ============================================================================
 async function bootAuthenticatedUniverse() {
   await loadEcosystemData();
   startNeuralCanvasLoop();
-  initWakeWordListener();
 
   if (refreshIntervalId) clearInterval(refreshIntervalId);
   refreshIntervalId = setInterval(() => {
@@ -1491,6 +1754,11 @@ onMounted(async () => {
 onUnmounted(() => {
   stopAnimationLoop();
   stopAllMedia();
+  if (wakeRecognition) {
+    try {
+      wakeRecognition.stop();
+    } catch {}
+  }
   if (refreshIntervalId) clearInterval(refreshIntervalId);
 });
 </script>
@@ -1508,7 +1776,6 @@ onUnmounted(() => {
   user-select: none;
 }
 
-/* TELA DE LOGIN */
 .auth-overlay {
   position: fixed;
   inset: 0;
@@ -1608,7 +1875,6 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-/* CABEÇALHO HUD */
 .hud-header {
   position: fixed;
   top: 0;
@@ -1675,7 +1941,6 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-/* PALCO DO CANVAS */
 .canvas-stage {
   position: relative;
   width: 100%;
@@ -1703,7 +1968,6 @@ canvas {
   cursor: pointer;
 }
 
-/* POPOVERS E MODAIS */
 .agent-connections-popover,
 .subnode-inspector {
   position: fixed;
@@ -1832,7 +2096,6 @@ canvas {
   cursor: pointer;
 }
 
-/* BALÃO DE RESPOSTA */
 .response-bubble {
   position: fixed;
   bottom: 104px;
@@ -1864,7 +2127,6 @@ canvas {
   white-space: pre-wrap;
 }
 
-/* PREVIEW DE CÂMERA */
 .media-preview-box {
   position: fixed;
   bottom: 110px;
@@ -1885,12 +2147,19 @@ canvas {
   background: rgba(2, 6, 23, 0.9);
 }
 
+.media-close-btn {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 12px;
+}
+
 .media-video {
   width: 100%;
   display: block;
 }
 
-/* BARRA INFERIOR DE COMANDO */
 .command-dock-wrapper {
   position: fixed;
   bottom: env(safe-area-inset-bottom, 10px);
@@ -1932,6 +2201,16 @@ canvas {
 .dock-icon-btn.active-mic {
   border-color: #22c55e;
   box-shadow: 0 0 10px rgba(34, 197, 94, 0.6);
+}
+
+.dock-icon-btn.active-cam {
+  border-color: #38bdf8;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+}
+
+.dock-icon-btn.active-screen {
+  border-color: #a855f7;
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.6);
 }
 
 .dock-input {

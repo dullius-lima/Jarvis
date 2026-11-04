@@ -53,6 +53,7 @@ import {
   manageServerPortAndEnv
 } from './controllers/brainConfigController.js';
 import * as connectorController from './controllers/connectorController.js';
+import { spawn } from 'child_process';
 
 const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 
@@ -148,6 +149,58 @@ app.get('/api/v1/dynamic-db/collections', async (_req: Request, res: Response) =
     return res.status(200).json({ success: true, data: result.rows });
   } catch {
     return res.status(200).json({ success: true, data: [] });
+  }
+});
+
+// 1. Salvar gravação de áudio para clonar a voz do JARVIS
+app.post('/api/v1/audio/voice-sample', async (req, res) => {
+  try {
+    const { audioBase64 } = req.body || {};
+    if (!audioBase64) return res.status(400).json({ success: false, error: 'Áudio vazio.' });
+
+    const voicesDir = path.join(process.cwd(), 'assets', 'voices');
+    await fs.promises.mkdir(voicesDir, { recursive: true });
+    const samplePath = path.join(voicesDir, 'jarvis_reference.wav');
+
+    const cleanB64 = audioBase64.replace(/^data:audio\/[a-zA-Z0-9+-]+;base64,/, '');
+    await fs.promises.writeFile(samplePath, Buffer.from(cleanB64, 'base64'));
+
+    return res.status(200).json({
+      success: true,
+      message: 'Amostra de voz do JARVIS gravada com sucesso em assets/voices/jarvis_reference.wav!'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. Gerar fala neural/clonada do JARVIS sem gastar tokens
+app.post('/api/v1/audio/speak', async (req, res) => {
+  try {
+    const { text, mode = 'auto' } = req.body || {};
+    if (!text) return res.status(400).json({ success: false, error: 'Texto obrigatório.' });
+
+    const cleanText = String(text)
+      .replace(/```[\s\S]*?```/g, 'bloco de código na tela.')
+      .replace(/[*#_`~>|]/g, '')
+      .slice(0, 1200);
+
+    const venvPython = path.join(process.cwd(), 'whisper-env', 'bin', 'python3');
+    const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
+    const scriptPath = path.join(process.cwd(), 'scripts', 'jarvis_tts.py');
+
+    const py = spawn(pythonCmd, [scriptPath, cleanText, mode]);
+    let out = '';
+    py.stdout.on('data', (d) => (out += d.toString()));
+    py.on('close', () => {
+      try {
+        return res.status(200).json(JSON.parse(out.trim()));
+      } catch {
+        return res.status(500).json({ success: false, error: 'Falha ao sintetizar áudio.' });
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
