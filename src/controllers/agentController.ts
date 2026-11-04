@@ -1,13 +1,11 @@
 // src/controllers/agentController.ts
-import {
-  listAvailableCredentialsMetadata,
-  resolveSecretByCredentialId,
-  validateAutonomousAgentBlueprint
-} from '../services/credentialMapperService.js';
-import { listAvailableCredentials } from '../controllers/agentController.js';
 import { Request, Response } from 'express';
 import { pool } from '../config/database.js';
 import { emitBrainLinkEvent } from '../services/brainSocketService.js';
+import {
+  listAvailableCredentialsMetadata,
+  resolveSecretByCredentialId
+} from '../services/credentialMapperService.js';
 import {
   createWorkflowWaitState,
   listWaitStates,
@@ -132,7 +130,7 @@ export async function executeSingleAgentLogic(
       outputResult = { status: resp.status, raw: textData };
     }
   } else {
-    // Herda a chave do cofre global (system_configs) caso o agente não tenha api_key própria
+    // Herda a chave do cofre global caso o agente não tenha api_key própria
     const inheritedKey =
       (agent.api_key && String(agent.api_key).trim()) || brainConfig.api_key || '';
     const creds = resolveProviderCredentials(
@@ -347,14 +345,43 @@ export async function createAgent(req: Request, res: Response) {
       : `${slugify(name)}_${Date.now().toString(36).slice(-4)}`;
     const defaultIcon = agent_type === 'mcp' ? '🔌' : agent_type === 'api' ? '🌐' : '🤖';
 
-    // Se foi enviado um credential_id (ex: "llm_cred:groq" ou "ext_cred:brapi"), resolve no cofre interno
+    // Se enviado um identificador de credencial, resolve no cofre de credenciais
     const resolvedCred = await resolveSecretByCredentialId(
       req.body?.credential_id || req.body?.credentials?.id
     );
     const finalProvider = resolvedCred.provider || provider;
-    const finalApiKey = api_key || resolvedCred.api_key || '';
-    const finalAuthToken = auth_token || resolvedCred.auth_token || '';
-    const finalEndpointUrl = endpoint_url || resolvedCred.endpoint_url || '';
+    const finalApiKey = (api_key || auth_token || resolvedCred.api_key || '').trim();
+    const finalAuthToken = (auth_token || api_key || resolvedCred.auth_token || '').trim();
+    const finalEndpointUrl = (endpoint_url || resolvedCred.endpoint_url || '').trim();
+
+    const values = [
+      name,
+      finalSlug,
+      agent_type,
+      description,
+      system_prompt,
+      finalProvider,
+      model,
+      finalApiKey,
+      base_url,
+      Number(temperature) || 0.3,
+      icon || defaultIcon,
+      script_handler,
+      code_snippet ?? script_code,
+      http_method,
+      finalEndpointUrl,
+      finalAuthToken,
+      payload_template,
+      response_instruction,
+      JSON.stringify(Array.isArray(tools) ? tools : []),
+      next_agent_slug || null,
+      Boolean(schedule_enabled),
+      cron_expression,
+      schedule_prompt,
+      Boolean(is_error_trigger),
+      error_notify_channel,
+      Boolean(is_active)
+    ];
 
     const result = await pool.query(
       `INSERT INTO ai_agents (
@@ -398,34 +425,7 @@ export async function createAgent(req: Request, res: Response) {
         is_active = EXCLUDED.is_active,
         updated_at = CURRENT_TIMESTAMP
       RETURNING *;`,
-      [
-        name,
-        finalSlug,
-        agent_type,
-        description,
-        system_prompt,
-        provider,
-        model,
-        api_key,
-        base_url,
-        Number(temperature) || 0.3,
-        icon || defaultIcon,
-        script_handler,
-        code_snippet ?? script_code,
-        http_method,
-        endpoint_url,
-        auth_token,
-        payload_template,
-        response_instruction,
-        JSON.stringify(Array.isArray(tools) ? tools : []),
-        next_agent_slug || null,
-        Boolean(schedule_enabled),
-        cron_expression,
-        schedule_prompt,
-        Boolean(is_error_trigger),
-        error_notify_channel,
-        Boolean(is_active)
-      ]
+      values
     );
 
     const saved = result.rows[0];
@@ -555,6 +555,15 @@ export async function deleteAgent(req: Request, res: Response) {
       [String(identifier)]
     );
     return res.status(200).json({ success: true, message: 'Agente removido com sucesso.' });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+export async function deleteAllAgents(_req: Request, res: Response) {
+  try {
+    await pool.query('DELETE FROM ai_agents;');
+    return res.status(200).json({ success: true, message: 'Todos os agentes foram removidos com sucesso.' });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
@@ -730,9 +739,10 @@ export async function resolveWaitStateDecision(req: Request, res: Response) {
     return res.status(500).json({ success: false, error: error.message });
   }
 }
+
 /**
  * Endpoint GET /api/v1/agents/credentials
- * Lista todas as credenciais salvas no servidor retornando APENAS IDs e metadados
+ * Lista todas as credenciais salvas no servidor retornando apenas metadados seguros
  */
 export async function listAvailableCredentials(_req: Request, res: Response) {
   try {

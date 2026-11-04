@@ -326,6 +326,8 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 
+const currentSessionId = ref<string>('main_neural_session');
+
 // Catálogo base de conexões salvas no PostgreSQL (/api/v1/connectors)
 const DEFAULT_CONNECTIONS = [
   { id: 'brapi_b3', icon: '📈', label: 'Brapi B3 (Ações)', color: '#10b981', http_method: 'GET', endpoint_url: 'https://brapi.dev/api/quote/{{query}}', description: 'Cotação de ações na B3' },
@@ -380,6 +382,10 @@ const isScreenActive = ref(false);
 const videoElement = ref<HTMLVideoElement | null>(null);
 let mediaStream: MediaStream | null = null;
 
+// Armazenamento em memória para frames multimodais
+const capturedWebcamBase64 = ref<string | null>(null);
+const capturedScreenBase64 = ref<string | null>(null);
+
 // Estados do Canvas 3D
 const neuralCanvas = ref<HTMLCanvasElement | null>(null);
 let animFrameId = 0;
@@ -422,16 +428,17 @@ function getConnectionMeta(toolId: string) {
 }
 
 // ============================================================================
-// MOTOR DE VOZ COMPLETO: WAKE WORD ("JARVIS") + STT + SÍNTESE DE VOZ (TTS)
+// MOTOR DE VOZ: WAKE WORD ("JARVIS") + STT + SÍNTESE DE VOZ (TTS)
 // ============================================================================
 const isAlwaysListening = ref<boolean>(true);
 const isJarvisAwake = ref<boolean>(false);
 const isJarvisSpeaking = ref<boolean>(false);
 const isVoiceMuted = ref<boolean>(false);
-const voiceStatusText = ref<string>('Vigília ativa: diga "Jarvis"...');
+const voiceStatusText = ref<string>('🟢 Vigília ativa: diga "Jarvis"...');
 
 let wakeRecognition: any = null;
 let wakeTimeoutId: any = null;
+let currentTtsAudio: HTMLAudioElement | null = null;
 
 function playJarvisChime(type: 'wake' | 'send' = 'wake') {
   try {
@@ -444,86 +451,221 @@ function playJarvisChime(type: 'wake' | 'send' = 'wake') {
     osc.type = 'sine';
     if (type === 'wake') {
       osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.09);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.08);
     } else {
       osc.frequency.setValueAtTime(659.25, ctx.currentTime);
-      osc.frequency.setValueAtTime(523.25, ctx.currentTime + 0.09);
+      osc.frequency.setValueAtTime(523.25, ctx.currentTime + 0.08);
     }
 
     gain.gain.setValueAtTime(0.12, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
 
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
-    osc.stop(ctx.currentTime + 0.25);
+    osc.stop(ctx.currentTime + 0.22);
   } catch {}
 }
 
-function speakJarvisResponse(rawText: string) {
-  if (isVoiceMuted.value || !('speechSynthesis' in window) || !rawText) return;
+function speakJarvisResponse(rawText: string, onDoneCallback?: () => void) {
+  if (isVoiceMuted.value || !rawText) {
+    if (onDoneCallback) onDoneCallback();
+    return;
+  }
 
   const cleanText = rawText
     .replace(/```[\s\S]*?```/g, 'bloco de código exibido na tela.')
     .replace(/[*#_`~>|]/g, '')
-    .replace(/https?:\/\/\S+/g, 'link disponível na tela')
+    .replace(/https?:\/\/\S+/g, 'link na tela')
+    .replace(/\s+/g, ' ')
     .trim();
 
-  if (!cleanText) return;
+  if (!cleanText) {
+    if (onDoneCallback) onDoneCallback();
+    return;
+  }
 
-  try {
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.resume();
+  isJarvisSpeaking.value = true;
+  if (wakeRecognition) {
+    try {
+      wakeRecognition.stop();
+    } catch {}
+  }
 
-    isJarvisSpeaking.value = true;
-    if (wakeRecognition) {
-      try {
-        wakeRecognition.stop();
-      } catch {}
-    }
+  const finishSpeaking = () => {
+    isJarvisSpeaking.value = false;
+    if (onDoneCallback) onDoneCallback();
+    restartWakeWordAfterSpeech();
+  };
 
-    const sentences = cleanText.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleanText];
-    const voices = window.speechSynthesis.getVoices();
-    const ptVoice =
-      voices.find((v) => v.lang.includes('pt-BR') && (v.name.includes('Google') || v.name.includes('Antonio') || v.name.includes('Francisca') || v.name.includes('Natural'))) ||
-      voices.find((v) => v.lang.includes('pt-BR')) ||
-      voices.find((v) => v.lang.startsWith('pt'));
-
-    sentences.forEach((sentence, idx) => {
-      const utterance = new SpeechSynthesisUtterance(sentence.trim());
-      utterance.lang = 'pt-BR';
-      utterance.rate = 1.08;
-      utterance.pitch = 1.0;
-      if (ptVoice) utterance.voice = ptVoice;
-
-      if (idx === sentences.length - 1) {
-        utterance.onend = () => {
-          isJarvisSpeaking.value = false;
-          restartWakeWordAfterSpeech();
-        };
-        utterance.onerror = () => {
-          isJarvisSpeaking.value = false;
-          restartWakeWordAfterSpeech();
-        };
+  if ('speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+      if (currentTtsAudio) {
+        currentTtsAudio.pause();
+        currentTtsAudio = null;
       }
 
-      window.speechSynthesis.speak(utterance);
-    });
-  } catch (err) {
-    console.warn('Falha ao sintetizar voz:', err);
-    isJarvisSpeaking.value = false;
-    restartWakeWordAfterSpeech();
+      setTimeout(() => {
+        window.speechSynthesis.resume();
+        const voices = window.speechSynthesis.getVoices();
+        const ptVoice =
+          voices.find(
+            (v) =>
+              v.lang.toLowerCase().includes('pt') &&
+              (v.name.includes('Antonio') ||
+                v.name.includes('Francisca') ||
+                v.name.includes('Google') ||
+                v.name.includes('Natural'))
+          ) ||
+          voices.find((v) => v.lang.toLowerCase().includes('pt-br')) ||
+          voices.find((v) => v.lang.toLowerCase().startsWith('pt'));
+
+        if (voices.length > 0 && !ptVoice && /Linux|Android/i.test(navigator.userAgent)) {
+          playFallbackAudioStream(cleanText, finishSpeaking);
+          return;
+        }
+
+        const sentences = cleanText.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleanText];
+        let startedAny = false;
+
+        sentences.forEach((sentence, idx) => {
+          const trimmed = sentence.trim();
+          if (!trimmed) return;
+
+          const utterance = new SpeechSynthesisUtterance(trimmed);
+          utterance.lang = 'pt-BR';
+          utterance.rate = 1.08;
+          utterance.pitch = 1.0;
+          if (ptVoice) utterance.voice = ptVoice;
+
+          utterance.onstart = () => {
+            startedAny = true;
+          };
+
+          if (idx === sentences.length - 1) {
+            utterance.onend = () => finishSpeaking();
+            utterance.onerror = () => {
+              if (!startedAny) {
+                playFallbackAudioStream(cleanText, finishSpeaking);
+              } else {
+                finishSpeaking();
+              }
+            };
+          }
+
+          window.speechSynthesis.speak(utterance);
+        });
+
+        setTimeout(() => {
+          if (isJarvisSpeaking.value && !window.speechSynthesis.speaking && !startedAny) {
+            playFallbackAudioStream(cleanText, finishSpeaking);
+          }
+        }, 1200);
+      }, 80);
+      return;
+    } catch (err) {
+      console.warn('Fallback TTS acionado:', err);
+    }
+  }
+
+  playFallbackAudioStream(cleanText, finishSpeaking);
+}
+
+function playFallbackAudioStream(text: string, onComplete: () => void) {
+  try {
+    const shortText = text.slice(0, 200);
+    const url = `https://translate.googleapis.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(
+      shortText
+    )}&tl=pt-BR&client=tw-ob`;
+    currentTtsAudio = new Audio(url);
+    currentTtsAudio.onended = () => onComplete();
+    currentTtsAudio.onerror = () => onComplete();
+    currentTtsAudio.play().catch(() => onComplete());
+  } catch {
+    onComplete();
   }
 }
 
 function restartWakeWordAfterSpeech() {
-  if (isAlwaysListening.value && wakeRecognition) {
+  if (isAlwaysListening.value && wakeRecognition && !isJarvisSpeaking.value) {
     setTimeout(() => {
       try {
         wakeRecognition.start();
-        voiceStatusText.value = 'Vigília ativa: diga "Jarvis"...';
+        voiceStatusText.value = isJarvisAwake.value
+          ? '🎙️ Estou ouvindo! Diga seu comando...'
+          : '🟢 Vigília ativa: diga "Jarvis"...';
       } catch {}
     }, 300);
+  }
+}
+
+function requiresCameraActivation(text: string): boolean {
+  const lower = (text || '').toLowerCase();
+  return (
+    lower.includes('ative a câmera') ||
+    lower.includes('ativar a câmera') ||
+    lower.includes('ativa a câmera') ||
+    lower.includes('ligue a câmera') ||
+    lower.includes('ligar a câmera') ||
+    lower.includes('abra a câmera') ||
+    lower.includes(' está me vendo') ||
+    lower.includes('está me vendo') ||
+    lower.includes('ta me vendo') ||
+    lower.includes('tá me vendo') ||
+    lower.includes('consegue me ver') ||
+    lower.includes('você me vê') ||
+    lower.includes('olhe para mim') ||
+    lower.includes('olha pra mim') ||
+    lower.includes('como eu estou') ||
+    lower.includes('quem sou eu')
+  );
+}
+
+async function ensureCameraAndCaptureFrame(): Promise<string | null> {
+  try {
+    let stream: MediaStream | null = mediaStream || (window as any).__jarvisCameraStream || null;
+
+    if (!stream || !stream.active) {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' },
+        audio: false
+      });
+      mediaStream = stream;
+      (window as any).__jarvisCameraStream = stream;
+
+      if (videoElement.value) {
+        videoElement.value.srcObject = stream;
+        videoElement.value.play().catch(() => {});
+      }
+      isCameraActive.value = true;
+    }
+
+    const tempVideo = document.createElement('video');
+    tempVideo.srcObject = stream;
+    tempVideo.muted = true;
+    tempVideo.playsInline = true;
+    await tempVideo.play();
+
+    await new Promise((r) => setTimeout(r, 350));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = tempVideo.videoWidth || 640;
+    canvas.height = tempVideo.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.drawImage(tempVideo, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+    tempVideo.pause();
+    tempVideo.srcObject = null;
+
+    const base64Clean = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    capturedWebcamBase64.value = base64Clean;
+    return base64Clean;
+  } catch (err) {
+    console.warn('⚠️ Não foi possível acessar a webcam automaticamente:', err);
+    return null;
   }
 }
 
@@ -532,7 +674,7 @@ function initWakeWordListener() {
     (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
   if (!SpeechRecognition) {
-    voiceStatusText.value = 'Navegador sem suporte a Web Speech API (use Chrome/Edge).';
+    voiceStatusText.value = '⚠️ Use Google Chrome ou Edge para comando de voz.';
     return;
   }
 
@@ -547,12 +689,6 @@ function initWakeWordListener() {
   wakeRecognition.interimResults = true;
   wakeRecognition.lang = 'pt-BR';
 
-  wakeRecognition.onstart = () => {
-    if (!isJarvisAwake.value) {
-      voiceStatusText.value = '🟢 Ouvindo gatilho "Jarvis"...';
-    }
-  };
-
   wakeRecognition.onresult = (event: any) => {
     if (isJarvisSpeaking.value) return;
 
@@ -561,52 +697,53 @@ function initWakeWordListener() {
       const transcript = result[0].transcript.trim();
       const lower = transcript.toLowerCase();
 
-      // Caso 1: Chamou "Jarvis" na frase
-      if (lower.includes('jarvis') && !isJarvisAwake.value) {
-        const afterWakeWord = transcript.split(/jarvis/i).pop()?.replace(/^[,.\s]+/, '').trim() || '';
+      if (
+        (lower.includes('jarvis') || lower.includes('jávis') || lower.includes('jarves')) &&
+        !isJarvisAwake.value
+      ) {
+        const afterWake =
+          transcript
+            .split(/jarvis|jávis|jarves/i)
+            .pop()
+            ?.replace(/^[,.\s!?-]+/, '')
+            .trim() || '';
 
-        if (result.isFinal && afterWakeWord.length > 2) {
+        if (result.isFinal && afterWake.length > 3) {
           playJarvisChime('wake');
-          voiceStatusText.value = `⚡ Comando: "${afterWakeWord}"`;
-          sendCommand(afterWakeWord);
+          voiceStatusText.value = `⚡ Comando: "${afterWake}"`;
+          dispatchVoiceCommandToJarvis(afterWake);
           return;
         }
 
-        if (result.isFinal && afterWakeWord.length <= 2) {
+        if (result.isFinal && afterWake.length <= 3) {
           isJarvisAwake.value = true;
           playJarvisChime('wake');
           voiceStatusText.value = '🎙️ Estou ouvindo! Diga seu comando...';
 
-          if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
-          wakeTimeoutId = setTimeout(() => {
-            if (isJarvisAwake.value) {
-              isJarvisAwake.value = false;
-              voiceStatusText.value = '🟢 Ouvindo gatilho "Jarvis"...';
-            }
-          }, 8000);
+          speakJarvisResponse('Sim, senhor? Estou ouvindo.', () => {
+            if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
+            wakeTimeoutId = setTimeout(() => {
+              if (isJarvisAwake.value) {
+                isJarvisAwake.value = false;
+                voiceStatusText.value = '🟢 Vigília ativa: diga "Jarvis"...';
+              }
+            }, 9000);
+          });
           return;
         }
       }
 
-      // Caso 2: Já estava acordado aguardando o comando
-      if (isJarvisAwake.value && result.isFinal && transcript.length > 1) {
-        const cleanCmd = transcript.replace(/^jarvis[,.\s]*/i, '').trim();
-        if (cleanCmd.length > 1) {
+      if (isJarvisAwake.value && result.isFinal && transcript.length > 2) {
+        const cleanCmd = transcript.replace(/^(jarvis|jávis|jarves)[,.\s!?-]*/i, '').trim();
+        if (cleanCmd.length > 2) {
           isJarvisAwake.value = false;
           if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
           playJarvisChime('send');
           voiceStatusText.value = `⚡ Processando: "${cleanCmd}"`;
-          sendCommand(cleanCmd);
+          dispatchVoiceCommandToJarvis(cleanCmd);
           return;
         }
       }
-    }
-  };
-
-  wakeRecognition.onerror = (event: any) => {
-    if (event.error === 'not-allowed') {
-      voiceStatusText.value = '🔴 Microfone bloqueado! Acesse via HTTPS e permita o microfone.';
-      isAlwaysListening.value = false;
     }
   };
 
@@ -623,6 +760,11 @@ function initWakeWordListener() {
   try {
     wakeRecognition.start();
   } catch {}
+}
+
+async function dispatchVoiceCommandToJarvis(spokenText: string) {
+  promptText.value = spokenText;
+  await sendCommand(spokenText);
 }
 
 function toggleMicrophone() {
@@ -666,7 +808,6 @@ function getAgentMemoryCount(agent: any) {
   ).length;
 }
 
-// 1. Carrega dados do ecossistema
 async function loadEcosystemData() {
   try {
     const localCustom = JSON.parse(localStorage.getItem('custom_agent_tools_catalog') || '[]');
@@ -1442,86 +1583,76 @@ function onWheel(e: WheelEvent) {
 // DISPARO DE COMANDO UNIFICADO COM SÍNTESE DE VOZ
 // ============================================================================
 async function sendCommand(overrideText?: string) {
-  const textToSend = (overrideText || promptText.value || '').trim();
+  const textToSend = (
+    typeof overrideText === 'string' ? overrideText : promptText.value || ''
+  ).trim();
   if (!textToSend || isProcessing.value) return;
 
-  promptText.value = '';
   isProcessing.value = true;
-  corePulseBoost = 1.5;
+  if (!overrideText) promptText.value = '';
 
   try {
-    const res = await fetch('/api/v1/webhook/ingress', {
+    let webcamFrameToSend = capturedWebcamBase64.value;
+
+    if (requiresCameraActivation(textToSend) || isCameraActive.value) {
+      voiceStatusText.value = '📷 Capturando imagem da câmera...';
+      const autoFrame = await ensureCameraAndCaptureFrame();
+      if (autoFrame) {
+        webcamFrameToSend = autoFrame;
+      }
+    }
+
+    const response = await fetch('/api/v1/webhook/ingress', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         identityToken: 'Matheus-Admin',
-        sessionId: 'main_neural_session',
-        prompt: textToSend,
+        sessionId: currentSessionId.value,
         sensorData: {
+          type: 'voice_or_text',
           prompt: textToSend,
-          textPrompt: textToSend
+          textPrompt: textToSend,
+          webcamFrame: webcamFrameToSend || undefined,
+          faceFrameBase64: webcamFrameToSend || undefined,
+          screenFrame: capturedScreenBase64.value || undefined
         }
       })
     });
 
-    const json = await res.json();
-    const payload = json.data || json;
+    const result = await response.json();
+    const replyText =
+      result?.data?.response ||
+      result?.data?.data?.response ||
+      result?.response ||
+      result?.error ||
+      'Comando processado.';
 
-    if (!res.ok || json.success === false || payload.success === false) {
-      const errMsg = payload.response || json.error || payload.error || 'Falha ao processar comando.';
-      lastResponse.value = {
-        agent: payload.agent || 'JARVIS (Aviso)',
-        text: errMsg,
-        executionTimeMs: json.executionTimeMs || payload.executionTimeMs || 0
-      };
-      speakJarvisResponse(errMsg);
-      return;
-    }
+    const respondingAgent =
+      result?.data?.agent ||
+      result?.data?.data?.agent ||
+      result?.agent ||
+      'JARVIS';
 
-    let producerAgent = dynamicAgents.value[0];
-    if (payload.agentId) {
-      activeTargetSlug = String(payload.agentId);
-      const triggered = dynamicAgents.value.find(
-        (a) => a.slug === payload.agentId || a.id === payload.agentId
-      );
-      if (triggered) {
-        producerAgent = triggered;
-        activeAgentForTools.value = triggered;
-        popoverTab.value = 'connected';
-      }
-    }
+    const execTime =
+      result?.data?.executionTimeMs ||
+      result?.executionTimeMs ||
+      0;
 
-    const responseText = payload.response || payload.output || 'Comando processado com sucesso.';
     lastResponse.value = {
-      agent: payload.agent || 'JARVIS',
-      text: responseText,
-      executionTimeMs: payload.executionTimeMs || json.executionTimeMs || 0
+      agent: respondingAgent,
+      text: replyText,
+      executionTimeMs: execTime
     };
 
-    // Dispara a fala em voz alta
-    speakJarvisResponse(responseText);
-
-    await loadEcosystemData();
-
-    if (producerAgent) {
-      memoryDots.value.push({
-        id: `live_mem_${Date.now()}`,
-        agentId: producerAgent.id,
-        agentSlug: producerAgent.slug,
-        agentName: producerAgent.name,
-        summary: String(responseText).slice(0, 160),
-        seedOffset: memoryDots.value.length * 1.65 + 0.5
-      });
-    }
-
-    corePulseBoost = 2.0;
+    speakJarvisResponse(replyText);
   } catch (err: any) {
-    const errText = `Erro de comunicação com o backend: ${err.message}`;
+    const errMsg = 'Falha de comunicação com o servidor do Jarvis.';
     lastResponse.value = {
-      agent: 'Sistema Nervoso Central',
-      text: errText
+      agent: 'JARVIS Core',
+      text: errMsg,
+      executionTimeMs: 0
     };
-    speakJarvisResponse(errText);
+    speakJarvisResponse(errMsg);
   } finally {
     isProcessing.value = false;
   }

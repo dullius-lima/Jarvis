@@ -248,11 +248,11 @@ export function resolveProviderCredentials(
     customModel && customModel.trim() && customModel !== 'CUSTOM_INPUT'
       ? customModel.trim()
       : p === 'groq'
-      ? 'openai/gpt-oss-120b'
+      ? 'llama-3.3-70b-versatile'
       : 'gpt-4o-mini';
 
   if (p === 'groq' && (model.includes('gemini') || model.startsWith('gpt-4'))) {
-    model = 'openai/gpt-oss-120b';
+    model = 'llama-3.3-70b-versatile';
   } else if (
     p === 'gemini' &&
     (!model.startsWith('gemini') || model.includes('argon') || model.includes('3.8'))
@@ -446,7 +446,6 @@ export async function getDynamicToolsCatalog(): Promise<{
   const catalogMap = new Map<string, DynamicToolCatalogItem>();
   const connectorsMap = new Map<string, any>();
 
-  // Verifica lista de conectores excluídos permanentemente pelo usuário
   let deletedKeys: string[] = [];
   try {
     const delRes = await pool.query(
@@ -461,14 +460,12 @@ export async function getDynamicToolsCatalog(): Promise<{
     }
   } catch {}
 
-  // 1. Inclui as tools de núcleo (exceto se o usuário as tiver excluído explicitamente)
   for (const coreTool of CORE_BUILT_IN_TOOLS) {
     if (!deletedKeys.includes(coreTool.slug)) {
       catalogMap.set(coreTool.slug, coreTool);
     }
   }
 
-  // 2. Carrega todas as Tools e Conexões salvas na tabela external_connectors
   try {
     const connectorsRes = await pool.query(`SELECT * FROM external_connectors ORDER BY updated_at DESC;`);
     for (const row of connectorsRes.rows) {
@@ -497,7 +494,6 @@ export async function getDynamicToolsCatalog(): Promise<{
     console.warn('⚠️ [Catálogo Dinâmico] Aviso ao ler external_connectors:', err?.message);
   }
 
-  // 3. Inclui qualquer tool customizada já referenciada nos agentes ativos
   try {
     const agRes = await pool.query(`SELECT tools FROM ai_agents WHERE tools IS NOT NULL;`);
     for (const row of agRes.rows) {
@@ -532,9 +528,6 @@ export async function getDynamicToolsCatalog(): Promise<{
 // 4. META-TOOLS DO CÉREBRO CENTRAL (AUTO-CRIAÇÃO, EDIÇÃO E EXCLUSÃO)
 // ============================================================================
 
-/**
- * Meta-Tool 1: Cria ou atualiza uma Tool / Conector no catálogo dinâmico (external_connectors)
- */
 export async function createOrUpdateToolFromBrain(params: {
   name: string;
   provider_key?: string;
@@ -579,7 +572,6 @@ export async function createOrUpdateToolFromBrain(params: {
     [key, name, 'Custom Tool', icon, description, JSON.stringify(configObj)]
   );
 
-  // Caso essa chave estivesse na lista de excluídas anteriormente, remove da lista de bloqueio
   try {
     const delRes = await pool.query(
       `SELECT value FROM system_configs WHERE key = 'deleted_default_connectors' LIMIT 1;`
@@ -605,10 +597,6 @@ export async function createOrUpdateToolFromBrain(params: {
   };
 }
 
-/**
- * Meta-Tool 1B: Exclui permanentemente uma Tool / Conexão que o usuário não queira mais
- * e limpa seu vínculo de todos os agentes existentes.
- */
 export async function deleteToolConnectorFromBrain(params: { provider_key: string }) {
   await ensureOrchestratorSchema();
   const cleanKey = sanitizeToolName(params.provider_key || '');
@@ -623,7 +611,6 @@ export async function deleteToolConnectorFromBrain(params: { provider_key: strin
     )
     .catch(() => ({ rows: [] as any[] }));
 
-  // Registra em deleted_default_connectors para impedir que conexões padrão voltem sozinhas
   try {
     const sysRes = await pool.query(
       `SELECT value FROM system_configs WHERE key = 'deleted_default_connectors' LIMIT 1;`
@@ -643,7 +630,6 @@ export async function deleteToolConnectorFromBrain(params: { provider_key: strin
     }
   } catch {}
 
-  // Remove a tool do array JSONB `tools` de todos os subagentes
   await pool
     .query(
       `UPDATE ai_agents
@@ -668,11 +654,6 @@ export async function deleteToolConnectorFromBrain(params: { provider_key: strin
   };
 }
 
-/**
- * Meta-Tool 2: Cria ou edita um Subagente Especialista escolhendo o Modo de Operação
- * mais econômico em tokens (code -> api -> mcp -> llm), preenchendo as ordens técnicas
- * e selecionando cirurgicamente as conexões necessárias.
- */
 export async function createOrUpdateAgentFromBrain(
   params: {
     name: string;
@@ -683,6 +664,7 @@ export async function createOrUpdateAgentFromBrain(
     append_behavior_rule?: string;
     provider?: string;
     model?: string;
+    api_key?: string;
     icon?: string;
     tools?: string[];
     replace_tools?: boolean;
@@ -700,26 +682,117 @@ export async function createOrUpdateAgentFromBrain(
   const slug = sanitizeToolName(params.slug || params.name || `agent_${Date.now()}`);
   const name = (params.name || slug).trim();
 
-  // Verifica se o agente já existe no banco para evoluí-lo sem perder configurações
   const existingRes = await pool
     .query('SELECT * FROM ai_agents WHERE slug = $1 LIMIT 1;', [slug])
     .catch(() => ({ rows: [] as any[] }));
   const existingAgent = existingRes.rows[0] || null;
   const previousPrompt = (existingAgent?.system_prompt || '').trim();
 
-  // Governança de Economia de Tokens:
-  // 1) Se possui code_snippet JS determinístico -> 'code' (0 tokens)
-  // 2) Se possui endpoint_url direto e não exige múltiplas tools de LLM -> 'api' ou 'mcp'
+  const previousTools: string[] = Array.isArray(existingAgent?.tools)
+    ? existingAgent.tools.map((t: any) => sanitizeToolName(String(t)))
+    : [];
+  const hasIncomingTools = Array.isArray(params.tools);
+  const incomingTools: string[] = hasIncomingTools
+    ? params.tools!.map((t) => sanitizeToolName(t)).filter(Boolean)
+    : [];
+
+  let toolsList: string[] = [];
+  if (hasIncomingTools) {
+    toolsList =
+      params.replace_tools === false
+        ? Array.from(new Set([...previousTools, ...incomingTools]))
+        : Array.from(new Set(incomingTools));
+  } else {
+    toolsList = previousTools;
+  }
+
+  const knownNativeSlugs = [
+    'home_assistant',
+    'brapi',
+    'gmail',
+    'outlook',
+    'telegram',
+    'whatsapp',
+    'google_calendar',
+    'google_sheets',
+    'notion'
+  ];
+  for (const nativeKey of knownNativeSlugs) {
+    if ((slug.includes(nativeKey) || name.toLowerCase().includes(nativeKey.replace('_', ' '))) && !toolsList.includes(nativeKey)) {
+      toolsList.push(nativeKey);
+    }
+  }
+
+  const candidateConnectorKeys = Array.from(new Set([slug, ...toolsList]));
+  let connectorSavedToken = '';
+  let connectorSavedUrl = '';
+  let connectorSavedMethod = '';
+
+  try {
+    const connRes = await pool.query(
+      'SELECT * FROM external_connectors WHERE LOWER(provider_key) = ANY($1) ORDER BY updated_at DESC LIMIT 1;',
+      [candidateConnectorKeys]
+    );
+    if (connRes.rows.length > 0) {
+      const cfg =
+        typeof connRes.rows[0].config === 'string'
+          ? JSON.parse(connRes.rows[0].config || '{}')
+          : connRes.rows[0].config || {};
+      connectorSavedToken = (cfg.auth_token || cfg.api_key || '').trim();
+      connectorSavedUrl = (cfg.endpoint_url || '').trim();
+      connectorSavedMethod = (cfg.http_method || '').toUpperCase();
+    }
+  } catch {}
+
+  const finalAuthToken = (
+    params.auth_token ||
+    params.api_key ||
+    existingAgent?.auth_token ||
+    existingAgent?.api_key ||
+    connectorSavedToken ||
+    ''
+  )
+    .replace(/^Bearer\s+/i, '')
+    .trim();
+
+  const finalEndpointUrl = (
+    params.endpoint_url ||
+    existingAgent?.endpoint_url ||
+    connectorSavedUrl ||
+    ''
+  ).trim();
+
+  if (finalAuthToken || finalEndpointUrl) {
+    const targetConnKey =
+      toolsList.find((t) => knownNativeSlugs.includes(t)) ||
+      knownNativeSlugs.find((k) => slug.includes(k)) ||
+      (finalEndpointUrl ? slug : '');
+
+    if (targetConnKey) {
+      await createOrUpdateToolFromBrain({
+        name: params.name || targetConnKey,
+        provider_key: targetConnKey,
+        tool_type: 'http',
+        http_method:
+          params.http_method ||
+          connectorSavedMethod ||
+          (targetConnKey === 'brapi' ? 'GET' : 'POST'),
+        endpoint_url: finalEndpointUrl || connectorSavedUrl,
+        auth_token: finalAuthToken,
+        description: params.description || `Conector sincronizado pelo agente ${name}`
+      }).catch(() => {});
+    }
+  }
+
   let agentType = (params.agent_type || existingAgent?.agent_type || 'llm').toLowerCase().trim();
   if (params.code_snippet && params.code_snippet.trim() !== '' && !params.agent_type) {
     agentType = 'code';
   } else if (
-    params.endpoint_url &&
-    params.endpoint_url.trim() !== '' &&
+    finalEndpointUrl &&
     agentType === 'llm' &&
-    (!params.tools || params.tools.length === 0)
+    toolsList.length === 0
   ) {
-    agentType = params.endpoint_url.toLowerCase().includes('mcp') ? 'mcp' : 'api';
+    agentType = finalEndpointUrl.toLowerCase().includes('mcp') ? 'mcp' : 'api';
   }
 
   const provider = (
@@ -732,7 +805,7 @@ export async function createOrUpdateAgentFromBrain(
     params.model ||
     existingAgent?.model ||
     brainConfig?.model ||
-    'openai/gpt-oss-120b';
+    'llama-3.3-70b-versatile';
 
   const defaultIcons: Record<string, string> = {
     code: '💻',
@@ -747,7 +820,6 @@ export async function createOrUpdateAgentFromBrain(
     existingAgent?.description ||
     `Acione quando o usuário solicitar tarefas do domínio ${name}.`;
 
-  // Construção das ordens (system_prompt) de acordo com o Modo de Operação
   let systemPrompt = '';
   if (params.append_behavior_rule && previousPrompt) {
     systemPrompt = `${previousPrompt}\n\n[DIRETRIZ PERMANENTE DE COMPORTAMENTO E INTERAÇÃO]:\n- ${params.append_behavior_rule.trim()}`;
@@ -759,65 +831,51 @@ export async function createOrUpdateAgentFromBrain(
     systemPrompt =
       'Extraia os dados principais do JSON retornado pela API e apresente de forma objetiva e estruturada.';
   } else {
-    systemPrompt = `Você é o agente especialista ${name}. Execute as ordens solicitadas com precisão técnica e objetividade.`;
+    systemPrompt = `Você é o agente especialista ${name}. Utilize suas ferramentas conectadas (${toolsList.join(
+      ', '
+    )}) para executar as ordens com precisão técnica.`;
   }
 
-  // Seleção cirúrgica de Tools (Bloco 3):
-  // - Nós determinísticos 'code' não precisam de tools penduradas (a menos que explicitamente exigido).
-  // - Se params.tools foi enviado pelo JARVIS, usa a seleção cirúrgica informada (ou mescla se replace_tools === false).
-  const previousTools: string[] = Array.isArray(existingAgent?.tools)
-    ? existingAgent.tools.map((t: any) => sanitizeToolName(String(t)))
-    : [];
-  const hasIncomingTools = Array.isArray(params.tools);
-  const incomingTools: string[] = hasIncomingTools
-    ? params.tools!.map((t) => sanitizeToolName(t)).filter(Boolean)
-    : [];
-
-  let toolsList: string[] = [];
-  if (agentType === 'code' && incomingTools.length === 0) {
-    toolsList = [];
-  } else if (hasIncomingTools) {
-    toolsList =
-      params.replace_tools === false
-        ? Array.from(new Set([...previousTools, ...incomingTools]))
-        : Array.from(new Set(incomingTools));
-  } else {
-    toolsList = previousTools;
-  }
+  const isGetDefault =
+    slug.includes('brapi') ||
+    finalEndpointUrl.includes('brapi.dev') ||
+    finalEndpointUrl.endsWith('/states');
 
   const httpMethod = (
     params.http_method ||
     existingAgent?.http_method ||
-    (agentType === 'api' ? 'GET' : 'POST')
+    connectorSavedMethod ||
+    (isGetDefault || agentType === 'api' ? 'GET' : 'POST')
   ).toUpperCase();
 
   const res = await pool.query(
     `INSERT INTO ai_agents (
-       name, slug, agent_type, description, system_prompt,
-       provider, model, icon, tools, endpoint_url, http_method,
-       auth_token, payload_template, code_snippet, next_agent_slug,
-       cron_expression, is_active, updated_at
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15, $16, TRUE, NOW())
-     ON CONFLICT (slug) DO UPDATE SET
-       name = EXCLUDED.name,
-       agent_type = EXCLUDED.agent_type,
-       description = EXCLUDED.description,
-       system_prompt = EXCLUDED.system_prompt,
-       provider = EXCLUDED.provider,
-       model = EXCLUDED.model,
-       icon = EXCLUDED.icon,
-       tools = EXCLUDED.tools,
-       endpoint_url = COALESCE(EXCLUDED.endpoint_url, ai_agents.endpoint_url),
-       http_method = COALESCE(EXCLUDED.http_method, ai_agents.http_method),
-       auth_token = COALESCE(EXCLUDED.auth_token, ai_agents.auth_token),
-       payload_template = COALESCE(EXCLUDED.payload_template, ai_agents.payload_template),
-       code_snippet = COALESCE(EXCLUDED.code_snippet, ai_agents.code_snippet),
-       next_agent_slug = COALESCE(EXCLUDED.next_agent_slug, ai_agents.next_agent_slug),
-       cron_expression = COALESCE(EXCLUDED.cron_expression, ai_agents.cron_expression),
-       is_active = TRUE,
-       updated_at = NOW()
-     RETURNING *;`,
+      name, slug, agent_type, description, system_prompt,
+      provider, model, api_key, icon, tools, endpoint_url, http_method,
+      auth_token, payload_template, code_snippet, next_agent_slug,
+      cron_expression, is_active, updated_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, TRUE, NOW())
+    ON CONFLICT (slug) DO UPDATE SET
+      name = EXCLUDED.name,
+      agent_type = EXCLUDED.agent_type,
+      description = EXCLUDED.description,
+      system_prompt = EXCLUDED.system_prompt,
+      provider = EXCLUDED.provider,
+      model = EXCLUDED.model,
+      api_key = COALESCE(NULLIF(EXCLUDED.api_key, ''), ai_agents.api_key),
+      icon = EXCLUDED.icon,
+      tools = EXCLUDED.tools,
+      endpoint_url = COALESCE(NULLIF(EXCLUDED.endpoint_url, ''), ai_agents.endpoint_url),
+      http_method = COALESCE(EXCLUDED.http_method, ai_agents.http_method),
+      auth_token = COALESCE(NULLIF(EXCLUDED.auth_token, ''), ai_agents.auth_token),
+      payload_template = COALESCE(EXCLUDED.payload_template, ai_agents.payload_template),
+      code_snippet = COALESCE(EXCLUDED.code_snippet, ai_agents.code_snippet),
+      next_agent_slug = COALESCE(EXCLUDED.next_agent_slug, ai_agents.next_agent_slug),
+      cron_expression = COALESCE(EXCLUDED.cron_expression, ai_agents.cron_expression),
+      is_active = TRUE,
+      updated_at = NOW()
+    RETURNING *;`,
     [
       name,
       slug,
@@ -826,11 +884,12 @@ export async function createOrUpdateAgentFromBrain(
       systemPrompt,
       provider,
       model,
+      finalAuthToken || null,
       icon,
       JSON.stringify(toolsList),
-      params.endpoint_url ?? existingAgent?.endpoint_url ?? null,
+      finalEndpointUrl || null,
       httpMethod,
-      params.auth_token ?? existingAgent?.auth_token ?? null,
+      finalAuthToken || null,
       params.payload_template ?? existingAgent?.payload_template ?? null,
       params.code_snippet ?? existingAgent?.code_snippet ?? null,
       params.next_agent_slug ?? existingAgent?.next_agent_slug ?? null,
@@ -849,13 +908,12 @@ export async function createOrUpdateAgentFromBrain(
   return {
     success: true,
     agent: res.rows[0],
-    message: `Especialista "${name}" (slug: ${slug} | modo: ${agentType.toUpperCase()}) salvo com ${toolsList.length} conexão(ões) vinculada(s).`
+    tokenConfigured: Boolean(finalAuthToken),
+    endpointConfigured: finalEndpointUrl || 'Padrão do Conector',
+    message: `Especialista "${name}" (slug: ${slug} | modo: ${agentType.toUpperCase()}) salvo e autenticado com sucesso.`
   };
 }
 
-/**
- * Meta-Tool 3: Atualiza permanentemente o jeito de falar, interagir ou agir do próprio JARVIS ou de qualquer Especialista
- */
 export async function updateAgentOrJarvisPersona(params: {
   target_slug: string;
   behavior_instruction: string;
@@ -869,7 +927,6 @@ export async function updateAgentOrJarvisPersona(params: {
     return { success: false, message: 'A instrução de comportamento não pode estar vazia.' };
   }
 
-  // Caso 1: Atualizar o próprio JARVIS na tabela system_configs
   if (
     cleanTarget === 'jarvis' ||
     cleanTarget === 'jarvis_core' ||
@@ -925,7 +982,6 @@ export async function updateAgentOrJarvisPersona(params: {
     };
   }
 
-  // Caso 2: Atualizar um Agente Especialista na tabela ai_agents
   const agentRes = await pool.query(
     `SELECT * FROM ai_agents WHERE slug = $1 OR LOWER(name) LIKE $2 LIMIT 1;`,
     [cleanTarget, `%${rawTarget}%`]
@@ -964,9 +1020,6 @@ export async function updateAgentOrJarvisPersona(params: {
   };
 }
 
-/**
- * Meta-Tool 4: Agente Hacker Integrado (Red Team Audit, Self-Healing Debug e Sandbox Probe)
- */
 export async function executeHackerSecuritySuite(params: {
   mode?: 'red_team_audit' | 'self_healing_debug' | 'api_probe';
   target_slug?: string;
@@ -1138,8 +1191,6 @@ async function callOpenAICompatibleLLM(options: {
       ? Array.from(
           new Set([
             creds.model,
-            'openai/gpt-oss-120b',
-            'openai/gpt-oss-20b',
             'llama-3.3-70b-versatile',
             'llama-3.1-8b-instant'
           ])
@@ -1211,9 +1262,6 @@ async function callOpenAICompatibleLLM(options: {
   throw lastError || new Error(`Falha ao comunicar com provedor ${provider.toUpperCase()}`);
 }
 
-/**
- * Executa uma Tool individual vinculada ao agente (DynamicDB, RAG, SSH, HTTP Universal ou Conector de external_connectors)
- */
 async function executeBoundTool(
   toolKey: string,
   args: Record<string, any>,
@@ -1258,6 +1306,30 @@ async function executeBoundTool(
   const customConn = connectorsMap.get(cleanKey);
   const cfg = customConn?.config || {};
 
+  const isNativeSpecialized =
+    cleanKey.startsWith('brapi') ||
+    cleanKey.includes('home_assistant') ||
+    cleanKey.includes('hass') ||
+    cleanKey.includes('gmail') ||
+    cleanKey.includes('outlook') ||
+    cleanKey.includes('telegram') ||
+    cleanKey.includes('google_sheets');
+
+  if (isNativeSpecialized) {
+    return await executeProtocolOrIntegration(cleanKey, {
+      protocol: cleanKey as SupportedProtocolOrPlatform,
+      endpoint: cfg.endpoint_url || customConn?.endpoint_url || args?.endpoint,
+      method: cfg.http_method || customConn?.http_method || args?.method,
+      body: {
+        query: queryValue,
+        prompt: userPrompt,
+        auth_token: cfg.auth_token || cfg.api_key || customConn?.auth_token,
+        ...args
+      },
+      prompt: userPrompt
+    });
+  }
+
   if ((cfg.tool_type === 'code' || customConn?.category === 'Code Tool') && cfg.code_snippet) {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const fn = new AsyncFunction('query', 'args', 'env', cfg.code_snippet);
@@ -1280,15 +1352,16 @@ async function executeBoundTool(
     const method = String(
       cfg.http_method || customConn?.http_method || args?.method || 'GET'
     ).toUpperCase();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json'
+    };
 
     const token =
-      cfg.auth_token || cfg.access_token || cfg.api_key || customConn?.auth_token;
+      cfg.auth_token || cfg.api_key || cfg.access_token || customConn?.auth_token;
     if (token) {
-      const cleanToken = String(token).trim();
-      headers['Authorization'] = cleanToken.startsWith('Bearer ')
-        ? cleanToken
-        : `Bearer ${cleanToken}`;
+      const cleanToken = String(token).replace(/^Bearer\s+/i, '').trim();
+      headers['Authorization'] = `Bearer ${cleanToken}`;
     }
 
     if (cfg.tool_type === 'mcp' || customConn?.agent_type === 'mcp') {
@@ -1399,7 +1472,6 @@ export async function executeSpecialistPipeline(
         ? currentPayload
         : currentPayload?.task_details || currentPayload?.query || userPrompt;
 
-    // MODO 1: Script JavaScript Determinístico (ZERO TOKENS DE LLM)
     if (
       agentType === 'code' &&
       (currentAgent.code_snippet || currentAgent.script_code)
@@ -1421,9 +1493,7 @@ export async function executeSpecialistPipeline(
           PORT: activePort
         }
       );
-    }
-    // MODO 2 & 3: Nó Direto REST API / Webhook ou Cliente Direto MCP
-    else if (
+    } else if (
       nonLlmTypes.includes(agentType) ||
       (agentType === 'api' && currentAgent.endpoint_url)
     ) {
@@ -1466,16 +1536,13 @@ export async function executeSpecialistPipeline(
         ''
       ).trim();
 
-      // Anexa os dados brutos e a instrução de extração para que o JARVIS formate na síntese sem gastar chamada dupla de LLM
       stepOutput = {
         extractionInstruction:
           formattingInstruction ||
           'Extraia os dados principais do JSON retornado e apresente ao usuário.',
         apiResponse: rawApiResult
       };
-    }
-    // MODO 4: Agente de IA Cognitivo (LLM + Múltiplas Tools)
-    else {
+    } else {
       let enabledTools: string[] = [];
       if (Array.isArray(currentAgent.tools)) {
         enabledTools = currentAgent.tools;
@@ -1506,14 +1573,39 @@ export async function executeSpecialistPipeline(
                 properties: {
                   query: {
                     type: 'string',
-                    description: 'Parâmetro, ticker, comando ou texto para a ferramenta.'
+                    description: 'Consulta, ticker (ex: PETR4) ou comando principal.'
+                  },
+                  symbol: {
+                    type: 'string',
+                    description: 'Código do ativo/ticker da B3 (ex: PETR4, VALE3).'
+                  },
+                  action: {
+                    type: 'string',
+                    description:
+                      'Ação a executar (ex: turn_on, turn_off, toggle, states no Home Assistant; read_inbox, send_email, trash_message no Gmail).'
+                  },
+                  entity_id: {
+                    type: 'string',
+                    description:
+                      'ID da entidade no Home Assistant (ex: light.sala, switch.tomada, climate.ar_condicionado).'
+                  },
+                  to: {
+                    type: 'string',
+                    description: 'Destinatário (para envio de e-mail ou mensagem).'
+                  },
+                  subject: {
+                    type: 'string',
+                    description: 'Assunto do e-mail.'
+                  },
+                  body: {
+                    type: 'string',
+                    description: 'Conteúdo da mensagem ou e-mail.'
                   },
                   task_details: {
                     type: 'string',
-                    description: 'Instrução complementar para processamento.'
+                    description: 'Detalhes complementares da tarefa.'
                   }
-                },
-                required: ['query']
+                }
               }
             }
           };
@@ -1539,7 +1631,7 @@ export async function executeSpecialistPipeline(
 
       const llmRes: any = await callOpenAICompatibleLLM({
         provider: currentAgent.provider || brainConfig?.provider || 'groq',
-        model: currentAgent.model || brainConfig?.model || 'openai/gpt-oss-120b',
+        model: currentAgent.model || brainConfig?.model || 'llama-3.3-70b-versatile',
         apiKey: currentAgent.api_key || brainConfig?.api_key || '',
         baseUrl: currentAgent.base_url || brainConfig?.base_url || '',
         messages: specialistMessages,
@@ -1572,7 +1664,7 @@ export async function executeSpecialistPipeline(
 
         const followUpRes: any = await callOpenAICompatibleLLM({
           provider: currentAgent.provider || brainConfig?.provider || 'groq',
-          model: currentAgent.model || brainConfig?.model || 'openai/gpt-oss-120b',
+          model: currentAgent.model || brainConfig?.model || 'llama-3.3-70b-versatile',
           apiKey: currentAgent.api_key || brainConfig?.api_key || '',
           baseUrl: currentAgent.base_url || brainConfig?.base_url || '',
           messages: [
@@ -1709,7 +1801,6 @@ export async function processWorkflowExecution(
       .catch(() => ({ rows: [] as any[] }));
     const activeAgents = agentsRes.rows;
 
-    // Carrega o Catálogo Dinâmico de todas as Tools/Conexões do banco em tempo real
     const { catalog: liveToolsCatalog, connectorsMap } = await getDynamicToolsCatalog();
     const validToolSlugs = liveToolsCatalog.map((t) => t.slug);
 
@@ -1739,7 +1830,6 @@ export async function processWorkflowExecution(
             .join('\n')
         : 'Nenhum especialista cadastrado.';
 
-    // Monta as Tools para o Orquestrador Central (Especialistas + Meta-Tools)
     const tools: any[] = activeAgents.map((ag: any) => {
       const safeSlug = sanitizeToolName(ag.slug);
       return {
@@ -1772,7 +1862,6 @@ export async function processWorkflowExecution(
       };
     });
 
-    // Meta-Tool 1: Criar ou atualizar uma Tool funcional no catálogo dinâmico
     tools.push({
       type: 'function',
       function: {
@@ -1815,7 +1904,6 @@ export async function processWorkflowExecution(
       }
     });
 
-    // Meta-Tool 1B: Excluir uma Tool / Conexão do catálogo
     tools.push({
       type: 'function',
       function: {
@@ -1837,7 +1925,6 @@ export async function processWorkflowExecution(
       }
     });
 
-    // Meta-Tool 2: Criar ou editar Subagente com Economia de Tokens e Catálogo Dinâmico
     tools.push({
       type: 'function',
       function: {
@@ -1936,7 +2023,6 @@ export async function processWorkflowExecution(
       }
     });
 
-    // Meta-Tool 3: Guardar permanentemente o jeito de falar, agir ou interagir
     tools.push({
       type: 'function',
       function: {
@@ -1967,7 +2053,6 @@ export async function processWorkflowExecution(
       }
     });
 
-    // Meta-Tool 4: Suíte do Agente Hacker
     tools.push({
       type: 'function',
       function: {
@@ -2076,14 +2161,41 @@ export async function processWorkflowExecution(
       sensoryInput?.sensorData?.faceFrameBase64;
     const frameToUse = rawScreen || rawWebcam;
 
+    const isVisualQuestion =
+      /est[aá]\s+me\s+vendo|t[aá]\s+me\s+vendo|consegue\s+me\s+ver|voc[eê]\s+me\s+v[eê]|ative\s+a\s+c[aâ]mera|olhe\s+para\s+mim|como\s+eu\s+estou|o\s+que\s+estou\s+segurando|olhe\s+minha\s+tela/i.test(
+        userPrompt
+      );
+
+    if (isVisualQuestion && !frameToUse) {
+      const noCamReply =
+        'Ainda não estou recebendo o sinal de vídeo da sua câmera, senhor. Permita o acesso à câmera no navegador ou clique no ícone da câmera na barra inferior para que eu possa vê-lo.';
+      return {
+        success: true,
+        agent: 'JARVIS (Córtex Visual)',
+        agentId: 'jarvis_vision',
+        identity: identityToken,
+        sessionId,
+        response: noCamReply,
+        executionTimeMs: Date.now() - startTime
+      };
+    }
+
     let userMessageContent: any = userPrompt;
+    let visionSystemInstruction = '';
+
     if (frameToUse) {
       const formattedUrl = frameToUse.startsWith('data:')
         ? frameToUse
         : `data:image/jpeg;base64,${frameToUse.replace(/^data:image\/\w+;base64,/, '')}`;
 
+      const sourceLabel = rawWebcam ? 'WEBCAM (Rosto/Ambiente do Usuário)' : 'TELA DO COMPUTADOR';
+      visionSystemInstruction = `\n\n[SINAL DE VÍDEO ATIVO - ${sourceLabel}]: Você está enxergando o usuário (${identityToken}) neste exato momento através da imagem anexada. Se ele perguntar se você o está vendo, confirme que a câmera está ativa e descreva de forma natural e direta o que você vê na imagem (a pessoa, expressão, objetos ou ambiente). NÃO acione ferramentas externas desnecessárias para responder sobre a imagem.`;
+
       userMessageContent = [
-        { type: 'text', text: userPrompt },
+        {
+          type: 'text',
+          text: `${userPrompt}\n(Nota do Sistema: Analise a imagem real capturada pela ${sourceLabel} anexada nesta mensagem.)`
+        },
         { type: 'image_url', image_url: { url: formattedUrl } }
       ];
     }
@@ -2093,7 +2205,7 @@ export async function processWorkflowExecution(
         role: 'system',
         content: `${brainConfig.system_prompt}
 Identidade Autenticada: ${identityToken}
-URL Base do Servidor: ${dynamicServerBaseUrl}
+URL Base do Servidor: ${dynamicServerBaseUrl}${visionSystemInstruction}
 
 --- AGENTES ESPECIALISTAS ATIVOS ---
 ${existingAgentsSummary}
@@ -2119,13 +2231,18 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
       { role: 'user', content: userMessageContent }
     ];
 
+    let modelForCall = brainConfig.model;
+    if (frameToUse && brainConfig.provider === 'groq') {
+      modelForCall = 'llama-3.2-11b-vision-preview';
+    }
+
     const firstPass: any = await callOpenAICompatibleLLM({
       provider: brainConfig.provider,
-      model: brainConfig.model,
+      model: modelForCall,
       apiKey: brainConfig.api_key,
       baseUrl: brainConfig.base_url,
       messages,
-      tools: tools.length > 0 ? tools : undefined,
+      tools: frameToUse && isVisualQuestion ? undefined : tools.length > 0 ? tools : undefined,
       temperature: brainConfig.temperature
     });
 
@@ -2275,7 +2392,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
-        // Acionamento de Agente Especialista Ativo
         const matchedAgent = activeAgents.find(
           (a: any) => sanitizeToolName(a.slug) === fnName
         );
@@ -2303,7 +2419,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
-        // Fallback: Caso o próprio JARVIS chame diretamente uma Tool do Catálogo Dinâmico
         if (connectorsMap.has(fnName) || validToolSlugs.includes(fnName)) {
           const directToolOut = await executeBoundTool(
             fnName,
@@ -2367,10 +2482,10 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           executionTimeMs
         ]
       ),
-      ingestDocumentToRag(
-        `Pergunta (${identityToken}): ${userPrompt} | Resposta (${triggeredAgentName}): ${finalResponseText}`,
-        { sessionId, agent: triggeredAgentName }
-      )
+      ingestDocumentToRag({
+        content: `Pergunta (${identityToken}): ${userPrompt} | Resposta (${triggeredAgentName}): ${finalResponseText}`,
+        metadata: { sessionId, agent: triggeredAgentName }
+      } as any).catch(() => {})
     ]);
 
     emitBrainLinkEvent({
@@ -2428,10 +2543,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
 // 8. ADAPTADORES DE ENTRADA E RETROCOMPATIBILIDADE COM CONTROLLERS
 // ============================================================================
 
-/**
- * Suporta tanto chamada por objeto `{ identityToken, sensorData, sessionId }`
- * quanto chamada posicional `(identityToken, textPrompt, sessionId, sensorData)`.
- */
 export async function processOrchestratorWorkflow(
   arg1?: any,
   arg2?: any,

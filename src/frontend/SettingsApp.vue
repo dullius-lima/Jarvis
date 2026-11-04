@@ -1033,7 +1033,6 @@ async function loadCustomToolsFromBackend() {
     const res = await fetch('/api/v1/connectors');
     const json = await res.json();
     if (json.success && Array.isArray(json.data)) {
-      // Preenche diretamente com os conectores salvos no PostgreSQL
       availableToolsCatalog.value = json.data.map((item: any) => {
         const id = item.provider_key;
         const cfg = item.config || {};
@@ -1414,7 +1413,6 @@ async function saveConnector(conn: any) {
       });
     }
 
-    const json = await res.json();
     connFeedback.value[conn.provider_key] = '💾 Conexão salva com sucesso!';
     setTimeout(() => {
       delete connFeedback.value[conn.provider_key];
@@ -1518,6 +1516,40 @@ function formatTime(iso: string) {
     return new Date(iso).toLocaleTimeString('pt-BR');
   } catch {
     return iso;
+  }
+}
+
+// Aliases de compatibilidade segura para ações de conectores
+async function deleteConnectorConfig(providerKey: string) {
+  return deleteConnectorFromHub(providerKey);
+}
+
+async function saveConnectorConfig(connector: any) {
+  return saveConnector(connector);
+}
+
+// Herança automática de credenciais do conector no Agente caso necessário
+function onAgentToolToggle(toolSlug: string, isChecked: boolean) {
+  if (!editingAgent.value) return;
+  if (!Array.isArray(editingAgent.value.tools)) {
+    editingAgent.value.tools = [];
+  }
+
+  if (isChecked) {
+    if (!editingAgent.value.tools.includes(toolSlug)) {
+      editingAgent.value.tools.push(toolSlug);
+    }
+    const conn = connectorsList.value.find((c: any) => (c.provider_key || c.slug) === toolSlug);
+    if (conn) {
+      if (!editingAgent.value.auth_token) {
+        editingAgent.value.auth_token = conn.api_key || '';
+      }
+      if (!editingAgent.value.endpoint_url) {
+        editingAgent.value.endpoint_url = conn.endpoint_url || '';
+      }
+    }
+  } else {
+    editingAgent.value.tools = editingAgent.value.tools.filter((t: string) => t !== toolSlug);
   }
 }
 
@@ -2089,14 +2121,14 @@ onMounted(async () => {
 /* Tablets e Telas Médias (Abaixo de 1024px) */
 @media (max-width: 1024px) {
   .memory-layout {
-    grid-template-columns: 1fr; /* Lista de sessões em cima, mensagens embaixo */
+    grid-template-columns: 1fr;
   }
 }
 
 /* Celulares e Telas Menores (Abaixo de 768px) */
 @media (max-width: 768px) {
   .settings-layout {
-    flex-direction: column; /* Barra lateral sobe e vira barra superior */
+    flex-direction: column;
   }
 
   .sidebar {
@@ -2112,7 +2144,7 @@ onMounted(async () => {
   }
 
   .nav-menu {
-    flex-direction: row; /* Botões de navegação viram carrossel horizontal */
+    flex-direction: row;
     overflow-x: auto;
     padding-bottom: 8px;
     gap: 6px;
@@ -2121,15 +2153,15 @@ onMounted(async () => {
   .nav-item {
     font-size: 0.78rem;
     padding: 8px 12px;
-    white-space: nowrap; /* Não quebra linha nos botões de abas */
+    white-space: nowrap;
   }
 
   .sidebar-footer {
-    display: none; /* Oculta rodapé da sidebar no mobile para poupar espaço */
+    display: none;
   }
 
   .content-area {
-    padding: 16px; /* Reduz padding lateral para aproveitar melhor a tela */
+    padding: 16px;
   }
 
   .section-header {
@@ -2143,7 +2175,7 @@ onMounted(async () => {
   }
 
   .form-row {
-    flex-direction: column; /* Inputs lado a lado passam a ficar um abaixo do outro */
+    flex-direction: column;
     gap: 0;
   }
 
@@ -2153,11 +2185,10 @@ onMounted(async () => {
   }
 
   .agents-grid {
-    grid-template-columns: 1fr; /* Cards de agentes em coluna única no celular */
+    grid-template-columns: 1fr;
   }
 
-  .modal-card,
-  .modal-window {
+  .modal-card {
     width: 98% !important;
     max-height: 94vh;
     padding: 0;
@@ -2168,7 +2199,7 @@ onMounted(async () => {
   }
 
   .tools-checkbox-grid {
-    grid-template-columns: 1fr; /* Checkboxes de ferramentas em 1 coluna */
+    grid-template-columns: 1fr;
   }
 }
 </style>

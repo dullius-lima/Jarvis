@@ -1,3 +1,4 @@
+// src/services/biometricService.ts
 import { pool } from '../config/database.js';
 import { createLLMClient, getJarvisConfig } from './orchestratorService.js';
 
@@ -103,6 +104,50 @@ export async function verifyBiometricIdentity(
     cleanToken.toLowerCase().includes('matheus') ||
     cleanToken.toLowerCase().includes('admin');
 
+  // Validação complementar de presença física caso tenha imagem anexada
+  let cameraConfirmedPresence = Boolean(frame);
+  if (frame) {
+    try {
+      const config = await getJarvisConfig();
+      if (config) {
+        const client = createLLMClient(config);
+        const visionModel =
+          config.provider === 'groq'
+            ? 'llama-3.2-11b-vision-preview'
+            : config.model;
+
+        const checkRes = await client.chat.completions.create({
+          model: visionModel,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Identifique se há uma pessoa ou ambiente visível em frente à câmera. Responda apenas OK ou AUSENTE.'
+                },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: frame.startsWith('data:')
+                      ? frame
+                      : `data:image/jpeg;base64,${frame.replace(/^data:image\/\w+;base64,/, '')}`
+                  }
+                }
+              ] as any
+            }
+          ],
+          max_tokens: 15
+        });
+
+        const reply = checkRes?.choices?.[0]?.message?.content?.toUpperCase() || 'OK';
+        cameraConfirmedPresence = !reply.includes('AUSENTE');
+      }
+    } catch (visionErr: any) {
+      console.warn('⚠️ [Biometria Vision] Validação visual complementar em modo tolerante:', visionErr.message);
+    }
+  }
+
   try {
     const dbCheck = await pool
       .query(
@@ -114,7 +159,7 @@ export async function verifyBiometricIdentity(
          LIMIT 1;`,
         [cleanToken]
       )
-      .catch(() => ({ rows: [] }));
+      .catch(() => ({ rows: [] as any[] }));
 
     if (dbCheck.rows.length > 0) {
       const row = dbCheck.rows[0];
@@ -125,54 +170,19 @@ export async function verifyBiometricIdentity(
 
       return {
         verified: true,
-        confidenceScore: frame ? 0.98 : 0.92,
+        confidenceScore: frame ? (cameraConfirmedPresence ? 0.99 : 0.85) : 0.92,
         identityToken: cleanToken,
         identityName: row.name || row.full_name || cleanToken,
         fullName: row.full_name || row.name || cleanToken,
         role,
         accessLevel,
-        verifiedByCamera: Boolean(frame),
+        verifiedByCamera: Boolean(frame) && cameraConfirmedPresence,
         permissions: row.permissions || {
           allowCritical: isAdmin,
           allowFinance: isAdmin,
           allowInfra: isAdmin
         }
       };
-    }
-
-    // Se enviou frame e suporta LLM Multimodal, efetua validação de presença humana
-    if (frame) {
-      try {
-        const config = await getJarvisConfig();
-        if (config && config.model) {
-          const client = createLLMClient(config);
-          await client.chat.completions.create({
-            model: config.model,
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  {
-                    type: 'text',
-                    text: 'Identifique se há uma pessoa presente em frente à câmera. Responda apenas OK ou AUSENTE.'
-                  },
-                  {
-                    type: 'image_url',
-                    image_url: {
-                      url: frame.startsWith('data:')
-                        ? frame
-                        : `data:image/jpeg;base64,${frame.replace(/^data:image\/\w+;base64,/, '')}`
-                    }
-                  }
-                ] as any
-              }
-            ],
-            max_tokens: 15
-          });
-        }
-      } catch (visionErr: any) {
-        console.warn('⚠️ [Biometria Vision] Validação complementar visual pausada:', visionErr.message);
-      }
     }
   } catch (error: any) {
     console.warn('⚠️ [Biometria Service] Falha ao consultar identities no banco:', error.message);
@@ -182,14 +192,14 @@ export async function verifyBiometricIdentity(
   const accessLevel = isAdminByToken ? 10 : 2;
 
   return {
-    verified: isAdminByToken || Boolean(frame),
-    confidenceScore: isAdminByToken ? 0.95 : 0.6,
+    verified: isAdminByToken || (Boolean(frame) && cameraConfirmedPresence),
+    confidenceScore: isAdminByToken ? 0.95 : (cameraConfirmedPresence ? 0.8 : 0.5),
     identityToken: cleanToken,
     identityName: isAdminByToken ? 'Matheus-Admin' : cleanToken,
     fullName: isAdminByToken ? 'Matheus (Administrador)' : `Visitante (${cleanToken})`,
     role,
     accessLevel,
-    verifiedByCamera: Boolean(frame),
+    verifiedByCamera: Boolean(frame) && cameraConfirmedPresence,
     permissions: {
       allowCritical: isAdminByToken,
       allowFinance: isAdminByToken,

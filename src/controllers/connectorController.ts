@@ -43,7 +43,7 @@ export const DEFAULT_CONNECTORS = [
     icon: '🏠',
     description: 'Controle de luzes, clima e atuadores residenciais.',
     endpoint_url: 'http://192.168.1.50:8123/api',
-    http_method: 'POST',
+    http_method: 'GET',
     api_key: '',
     is_enabled: false
   },
@@ -54,7 +54,7 @@ export const DEFAULT_CONNECTORS = [
     icon: '📨',
     description: 'Envio e leitura de e-mails via Google REST API.',
     endpoint_url: 'https://gmail.googleapis.com/gmail/v1/users/me/profile',
-    http_method: 'POST',
+    http_method: 'GET',
     api_key: '',
     is_enabled: false
   },
@@ -401,6 +401,55 @@ export async function testExternalConnector(req: Request, res: Response) {
         latencyMs: Date.now() - startTime,
         message: `🟢 Brapi B3 validada! Cotação teste [${testQuery}]: R$ ${price}`,
         data: brapiData
+      });
+    }
+
+    // 3.2-B Teste específico do Home Assistant (GET /api/ com Bearer Token)
+    if (
+      providerKey === 'home_assistant' ||
+      providerKey.includes('hass') ||
+      rawUrl.includes(':8123')
+    ) {
+      if (!apiKey) {
+        return res.status(200).json({
+          success: false,
+          latencyMs: Date.now() - startTime,
+          error: 'Informe o Long-Lived Access Token do Home Assistant.'
+        });
+      }
+
+      const cleanToken = apiKey.replace(/^Bearer\s+/i, '').trim();
+      const baseHaUrl = (rawUrl || 'http://localhost:8123')
+        .trim()
+        .replace(/\/+$/, '')
+        .replace(/\/api(\/states|\/services.*)?$/i, '');
+      const testHaUrl = `${baseHaUrl}/api/`;
+
+      const haRes = await fetch(testHaUrl, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${cleanToken}`,
+          'Content-Type': 'application/json'
+        },
+        signal: AbortSignal.timeout(10000)
+      });
+
+      const haData: any = await haRes.json().catch(async () => ({ raw: await haRes.text() }));
+      if (!haRes.ok) {
+        return res.status(200).json({
+          success: false,
+          status: haRes.status,
+          latencyMs: Date.now() - startTime,
+          error: `Home Assistant retornou HTTP ${haRes.status} em ${testHaUrl}. Verifique se o IP/Porta está acessível pela VM e se o Token é válido.`
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        status: 200,
+        latencyMs: Date.now() - startTime,
+        message: `🟢 Home Assistant conectado com sucesso! (${haData.message || 'API running'})`,
+        data: haData
       });
     }
 
