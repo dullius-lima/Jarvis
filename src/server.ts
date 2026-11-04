@@ -5,7 +5,6 @@ dotenv.config();
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { pool, testConnection } from './config/database.js';
@@ -55,8 +54,7 @@ import {
 } from './controllers/brainConfigController.js';
 import * as connectorController from './controllers/connectorController.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 
 function resolveRouter(mod: any): express.Router {
   if (typeof mod === 'function') return mod;
