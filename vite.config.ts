@@ -11,12 +11,8 @@ export default defineConfig({
     hmr: {
       overlay: false
     },
-    fs: {
-      strict: false,
-      deny: ['.git', '**/.git/**', '**/node_modules/.git/**']
-    },
     watch: {
-      ignored: ['**/.git/**', '**/node_modules/**', '**/dist/**', '**/backups/**']
+      ignored: ['**/.git/**', '**/node_modules/**', '**/dist/**']
     },
     proxy: {
       '/api': {
@@ -26,7 +22,6 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    entries: ['index.html', 'settings.html'],
     exclude: ['.git']
   },
   build: {
