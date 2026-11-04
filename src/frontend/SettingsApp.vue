@@ -830,6 +830,7 @@ if (localStorage.getItem('jarvis_authenticated_session') !== 'true') {
 
 // Mantém a aba que você estava olhando salva mesmo se sair do navegador ou der F5
 const savedTab = (localStorage.getItem('jarvis_settings_tab') as any) || 'jarvis';
+const currentTab = ref<'jarvis' | 'specialists' | 'memory' | 'security'>(savedTab);
 
 watch(currentTab, (newTab) => {
   localStorage.setItem('jarvis_settings_tab', newTab);
