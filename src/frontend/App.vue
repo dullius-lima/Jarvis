@@ -25,7 +25,7 @@
       </div>
     </header>
 
-    <!-- CANVAS 3D INTERATIVO: ORQUESTRADOR <-> MEMÓRIAS (PONTINHOS) <-> AGENTES <-> NÓS DE CONEXÃO FIXOS -->
+    <!-- CANVAS 3D INTERATIVO -->
     <div
       class="canvas-stage"
       @mousedown="onMouseDown"
@@ -36,11 +36,9 @@
     >
       <canvas ref="neuralCanvas"></canvas>
 
-      <!-- Legenda minimalista no canto inferior esquerdo -->
+      <!-- Legenda minimalista -->
       <div class="hud-hint">
-        🖱️ <strong>Agente</strong>: destaca conexões •
-        <strong>Nó Externo Fixo</strong>: compartilhado entre agentes •
-        <strong>• Pontinhos</strong>: memórias (Agente ↔ Orquestrador)
+        <span>{{ voiceStatusText }}</span>
       </div>
 
       <!-- PAINEL DO AGENTE SELECIONADO -->
@@ -81,7 +79,7 @@
           </button>
         </div>
 
-        <!-- ABA 1: NÓS CONECTADOS A ESTE AGENTE -->
+        <!-- ABA 1: CONECTADOS -->
         <div v-if="popoverTab === 'connected'" class="popover-body">
           <p class="popover-help">
             Nós fixos conectados ao agente <strong>{{ activeAgentForTools.name }}</strong>:
@@ -119,10 +117,10 @@
           </div>
         </div>
 
-        <!-- ABA 2: CATÁLOGO DE NÓS FIXOS PARA PLUGAR/DESPLUGAR -->
+        <!-- ABA 2: CATÁLOGO DE NÓS -->
         <div v-else-if="popoverTab === 'saved'" class="popover-body">
           <p class="popover-help">
-            Ligue ou desligue nós fixos neste agente (um mesmo nó pode servir vários agentes):
+            Ligue ou desligue nós fixos neste agente:
           </p>
 
           <div class="saved-connections-list">
@@ -153,7 +151,7 @@
           </div>
         </div>
 
-        <!-- ABA 3: CRIAR UM NOVO NÓ FIXO -->
+        <!-- ABA 3: CRIAR NÓ -->
         <div v-else class="popover-body">
           <div style="display: flex; gap: 6px; margin-bottom: 8px;">
             <input
@@ -209,7 +207,7 @@
         </div>
       </div>
 
-      <!-- INSPETOR QUANDO CLICA EM UM NÓ DE CONEXÃO FIXO COMPARTILHADO -->
+      <!-- INSPETOR DE NÓ FIXO -->
       <div v-if="selectedSubNode" class="subnode-inspector">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
           <strong style="color: #38bdf8; font-size: 13px;">
@@ -242,7 +240,7 @@
         </div>
       </div>
 
-      <!-- INSPETOR SUTIL QUANDO CLICA EM UM PONTINHO DE MEMÓRIA -->
+      <!-- INSPETOR DE MEMÓRIA -->
       <div v-if="selectedMemoryDot" class="subnode-inspector">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
           <strong style="color: #a855f7; font-size: 12.5px;">
@@ -258,7 +256,7 @@
         </div>
       </div>
 
-      <!-- PREVIEW DE CÂMERA / TELA QUANDO ATIVOS -->
+      <!-- PREVIEW DE CÂMERA / TELA -->
       <div v-show="isCameraActive || isScreenActive" class="media-preview-box">
         <div class="media-preview-header">
           <span>{{ isCameraActive ? '📷 Câmera Ativa' : '🖥️ Tela Ativa' }}</span>
@@ -283,9 +281,9 @@
     <footer class="command-dock-wrapper">
       <div class="command-dock">
         <button
-          @click="toggleSpeechRecognition"
-          :class="['dock-icon-btn', { 'active-mic': isListening }]"
-          title="Microfone (Voz)"
+          @click="toggleMicrophone"
+          :class="['dock-icon-btn', { 'active-mic': isJarvisAwake }]"
+          :title="isAlwaysListening ? 'Microfone Ativo (Vigília JARVIS)' : 'Ativar Microfone'"
         >
           🎙️
         </button>
@@ -306,15 +304,15 @@
 
         <input
           v-model="promptText"
-          @keyup.enter="sendCommand"
+          @keyup.enter="sendCommand()"
           type="text"
           class="dock-input"
-          :placeholder="isProcessing ? 'Processando sinapses na LLM...' : 'Envie uma instrução ou pergunta para o cérebro...'"
+          :placeholder="isProcessing ? 'Processando sinapses na LLM...' : 'Diga \'Jarvis\' ou envie uma mensagem...'"
           :disabled="isProcessing"
         />
 
         <button
-          @click="sendCommand"
+          @click="sendCommand()"
           class="dock-send-btn"
           :disabled="isProcessing || !promptText.trim()"
         >
@@ -328,7 +326,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 
-// Catálogo base + Conexões salvas no PostgreSQL (/api/v1/connectors)
+// Catálogo base de conexões salvas no PostgreSQL (/api/v1/connectors)
 const DEFAULT_CONNECTIONS = [
   { id: 'brapi_b3', icon: '📈', label: 'Brapi B3 (Ações)', color: '#10b981', http_method: 'GET', endpoint_url: 'https://brapi.dev/api/quote/{{query}}', description: 'Cotação de ações na B3' },
   { id: 'save_to_database', icon: '🗄️', label: 'PostgreSQL Dinâmico', color: '#a855f7', http_method: 'SQL', endpoint_url: 'internal://postgres/dynamic_collections', description: 'Salva dados no banco' },
@@ -377,12 +375,10 @@ const newConnForm = reactive({
 const promptText = ref('');
 const isProcessing = ref(false);
 const lastResponse = ref<{ agent: string; text: string; executionTimeMs?: number } | null>(null);
-const isListening = ref(false);
 const isCameraActive = ref(false);
 const isScreenActive = ref(false);
 const videoElement = ref<HTMLVideoElement | null>(null);
 let mediaStream: MediaStream | null = null;
-let recognition: any = null;
 
 // Estados do Canvas 3D
 const neuralCanvas = ref<HTMLCanvasElement | null>(null);
@@ -425,6 +421,221 @@ function getConnectionMeta(toolId: string) {
   };
 }
 
+// ============================================================================
+// MOTOR DE VOZ COMPLETO: WAKE WORD ("JARVIS") + STT + SÍNTESE DE VOZ (TTS)
+// ============================================================================
+const isAlwaysListening = ref<boolean>(true);
+const isJarvisAwake = ref<boolean>(false);
+const isJarvisSpeaking = ref<boolean>(false);
+const isVoiceMuted = ref<boolean>(false);
+const voiceStatusText = ref<string>('Vigília ativa: diga "Jarvis"...');
+
+let wakeRecognition: any = null;
+let wakeTimeoutId: any = null;
+
+function playJarvisChime(type: 'wake' | 'send' = 'wake') {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    if (type === 'wake') {
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.09);
+    } else {
+      osc.frequency.setValueAtTime(659.25, ctx.currentTime);
+      osc.frequency.setValueAtTime(523.25, ctx.currentTime + 0.09);
+    }
+
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.25);
+  } catch {}
+}
+
+function speakJarvisResponse(rawText: string) {
+  if (isVoiceMuted.value || !('speechSynthesis' in window) || !rawText) return;
+
+  const cleanText = rawText
+    .replace(/```[\s\S]*?```/g, 'bloco de código exibido na tela.')
+    .replace(/[*#_`~>|]/g, '')
+    .replace(/https?:\/\/\S+/g, 'link disponível na tela')
+    .trim();
+
+  if (!cleanText) return;
+
+  try {
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.resume();
+
+    isJarvisSpeaking.value = true;
+    if (wakeRecognition) {
+      try {
+        wakeRecognition.stop();
+      } catch {}
+    }
+
+    const sentences = cleanText.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleanText];
+    const voices = window.speechSynthesis.getVoices();
+    const ptVoice =
+      voices.find((v) => v.lang.includes('pt-BR') && (v.name.includes('Google') || v.name.includes('Antonio') || v.name.includes('Francisca') || v.name.includes('Natural'))) ||
+      voices.find((v) => v.lang.includes('pt-BR')) ||
+      voices.find((v) => v.lang.startsWith('pt'));
+
+    sentences.forEach((sentence, idx) => {
+      const utterance = new SpeechSynthesisUtterance(sentence.trim());
+      utterance.lang = 'pt-BR';
+      utterance.rate = 1.08;
+      utterance.pitch = 1.0;
+      if (ptVoice) utterance.voice = ptVoice;
+
+      if (idx === sentences.length - 1) {
+        utterance.onend = () => {
+          isJarvisSpeaking.value = false;
+          restartWakeWordAfterSpeech();
+        };
+        utterance.onerror = () => {
+          isJarvisSpeaking.value = false;
+          restartWakeWordAfterSpeech();
+        };
+      }
+
+      window.speechSynthesis.speak(utterance);
+    });
+  } catch (err) {
+    console.warn('Falha ao sintetizar voz:', err);
+    isJarvisSpeaking.value = false;
+    restartWakeWordAfterSpeech();
+  }
+}
+
+function restartWakeWordAfterSpeech() {
+  if (isAlwaysListening.value && wakeRecognition) {
+    setTimeout(() => {
+      try {
+        wakeRecognition.start();
+        voiceStatusText.value = 'Vigília ativa: diga "Jarvis"...';
+      } catch {}
+    }, 300);
+  }
+}
+
+function initWakeWordListener() {
+  const SpeechRecognition =
+    (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+    voiceStatusText.value = 'Navegador sem suporte a Web Speech API (use Chrome/Edge).';
+    return;
+  }
+
+  if (wakeRecognition) {
+    try {
+      wakeRecognition.stop();
+    } catch {}
+  }
+
+  wakeRecognition = new SpeechRecognition();
+  wakeRecognition.continuous = true;
+  wakeRecognition.interimResults = true;
+  wakeRecognition.lang = 'pt-BR';
+
+  wakeRecognition.onstart = () => {
+    if (!isJarvisAwake.value) {
+      voiceStatusText.value = '🟢 Ouvindo gatilho "Jarvis"...';
+    }
+  };
+
+  wakeRecognition.onresult = (event: any) => {
+    if (isJarvisSpeaking.value) return;
+
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      const transcript = result[0].transcript.trim();
+      const lower = transcript.toLowerCase();
+
+      // Caso 1: Chamou "Jarvis" na frase
+      if (lower.includes('jarvis') && !isJarvisAwake.value) {
+        const afterWakeWord = transcript.split(/jarvis/i).pop()?.replace(/^[,.\s]+/, '').trim() || '';
+
+        if (result.isFinal && afterWakeWord.length > 2) {
+          playJarvisChime('wake');
+          voiceStatusText.value = `⚡ Comando: "${afterWakeWord}"`;
+          sendCommand(afterWakeWord);
+          return;
+        }
+
+        if (result.isFinal && afterWakeWord.length <= 2) {
+          isJarvisAwake.value = true;
+          playJarvisChime('wake');
+          voiceStatusText.value = '🎙️ Estou ouvindo! Diga seu comando...';
+
+          if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
+          wakeTimeoutId = setTimeout(() => {
+            if (isJarvisAwake.value) {
+              isJarvisAwake.value = false;
+              voiceStatusText.value = '🟢 Ouvindo gatilho "Jarvis"...';
+            }
+          }, 8000);
+          return;
+        }
+      }
+
+      // Caso 2: Já estava acordado aguardando o comando
+      if (isJarvisAwake.value && result.isFinal && transcript.length > 1) {
+        const cleanCmd = transcript.replace(/^jarvis[,.\s]*/i, '').trim();
+        if (cleanCmd.length > 1) {
+          isJarvisAwake.value = false;
+          if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
+          playJarvisChime('send');
+          voiceStatusText.value = `⚡ Processando: "${cleanCmd}"`;
+          sendCommand(cleanCmd);
+          return;
+        }
+      }
+    }
+  };
+
+  wakeRecognition.onerror = (event: any) => {
+    if (event.error === 'not-allowed') {
+      voiceStatusText.value = '🔴 Microfone bloqueado! Acesse via HTTPS e permita o microfone.';
+      isAlwaysListening.value = false;
+    }
+  };
+
+  wakeRecognition.onend = () => {
+    if (isAlwaysListening.value && !isJarvisSpeaking.value) {
+      setTimeout(() => {
+        try {
+          wakeRecognition.start();
+        } catch {}
+      }, 250);
+    }
+  };
+
+  try {
+    wakeRecognition.start();
+  } catch {}
+}
+
+function toggleMicrophone() {
+  if (!isAlwaysListening.value) {
+    isAlwaysListening.value = true;
+    initWakeWordListener();
+  } else {
+    isJarvisAwake.value = true;
+    playJarvisChime('wake');
+    voiceStatusText.value = '🎙️ Estou ouvindo! Pode falar...';
+  }
+}
+
 function getAgentsUsingTool(toolId: string) {
   const clean = String(toolId).trim().toLowerCase();
   return dynamicAgents.value.filter(
@@ -432,10 +643,8 @@ function getAgentsUsingTool(toolId: string) {
   );
 }
 
-// Lista única de todos os Nós de Conexão Fixos (sem duplicatas)
 const fixedSharedNodes = computed(() => {
   const uniqueIds = new Set<string>();
-  // Inclui todos os conectores vinculados a pelo menos um agente + conectores salvos habilitados
   for (const ag of dynamicAgents.value) {
     if (Array.isArray(ag.tools)) {
       for (const t of ag.tools) {
@@ -457,7 +666,7 @@ function getAgentMemoryCount(agent: any) {
   ).length;
 }
 
-// 1. Carrega Agentes, Nós de Conexão e Memórias produzidas
+// 1. Carrega dados do ecossistema
 async function loadEcosystemData() {
   try {
     const localCustom = JSON.parse(localStorage.getItem('custom_agent_tools_catalog') || '[]');
@@ -574,7 +783,6 @@ async function loadMemoryDots() {
     }
   } catch {}
 
-  // Garante que cada agente já exiba seus pontinhos de memória ativa no mapa 3D
   if (loadedDots.length === 0 && dynamicAgents.value.length > 0) {
     dynamicAgents.value.forEach((ag, idx) => {
       loadedDots.push(
@@ -714,7 +922,7 @@ function clearSelection() {
 }
 
 // ============================================================================
-// MOTOR 3D: NÓS COMPARTILHADOS FIXOS + PONTINHOS DE MEMÓRIA
+// MOTOR 3D
 // ============================================================================
 function project3D(x: number, y: number, z: number, cx: number, cy: number) {
   const cosY = Math.cos(rotY);
@@ -811,7 +1019,7 @@ function startNeuralLoop() {
 
     hitboxes = [];
 
-    // 1. NÚCLEO HOLOGRÁFICO CENTRAL (ORQUESTRADOR JARVIS)
+    // Núcleo
     const coreProj = project3D(0, 0, 0, cx, cy);
     const coreRadius = (60 + Math.sin(time * 2.5) * 3 + corePulseBoost * 18) * coreProj.scale;
 
@@ -889,7 +1097,7 @@ function startNeuralLoop() {
       r: coreRadius * 1.15
     });
 
-    // 2. CALCULA POSIÇÕES 3D DOS AGENTES (ANEL INTERMEDIÁRIO)
+    // Posições dos Agentes
     const agents = dynamicAgents.value;
     const totalAgents = agents.length;
     const agentOrbitRadius = 215;
@@ -917,12 +1125,11 @@ function startNeuralLoop() {
       agentPositionsMap.set(ag.id, { ag, ax, ay, az, proj, color, angle });
     });
 
-    // 3. PONTINHOS DE MEMÓRIA (ENTRE O AGENTE PRODUTOR E O ORQUESTRADOR CENTRAL)
+    // Memórias
     memoryDots.value.forEach((mem, mIdx) => {
       const parentInfo = agentPositionsMap.get(mem.agentId);
       if (!parentInfo) return;
 
-      // Posiciona o pontinho de memória a meio caminho entre o Agente e o Orquestrador com leve órbita 3D
       const sideOffset = Math.sin(mem.seedOffset + mIdx * 1.7) * 36;
       const verticalOffset = Math.cos(mem.seedOffset * 1.3 + mIdx) * 32;
       const perpAngle = parentInfo.angle + Math.PI / 2;
@@ -936,7 +1143,6 @@ function startNeuralLoop() {
       const isMemSelected = selectedMemoryDot.value?.id === mem.id;
       const isDimmed = (hasSelectedAgent && !isParentSelected) || hasSelectedSubNode;
 
-      // Linha 1: Agente Produtor -> Pontinho de Memória
       drawCurvedSynapse(
         ctx,
         parentInfo.proj.x,
@@ -951,7 +1157,6 @@ function startNeuralLoop() {
         0.1
       );
 
-      // Linha 2: Pontinho de Memória -> Orquestrador Central (JARVIS)
       drawCurvedSynapse(
         ctx,
         memProj.x,
@@ -966,7 +1171,6 @@ function startNeuralLoop() {
         0.1
       );
 
-      // Desenha APENAS um pontinho luminoso minimalista no mapa
       const dotR = (isMemSelected ? 5.5 : 3.6) * memProj.scale;
       ctx.save();
       ctx.globalAlpha = isDimmed ? 0.22 : 0.95;
@@ -988,13 +1192,12 @@ function startNeuralLoop() {
       });
     });
 
-    // 4. NÓS DE CONEXÃO FIXOS E COMPARTILHADOS (1 NÓ PODE CONECTAR COM VÁRIOS AGENTES)
+    // Nós Compartilhados Fixos
     const sharedNodes = fixedSharedNodes.value;
     const totalShared = sharedNodes.length;
     const outerNodeRadius = 355;
 
     sharedNodes.forEach((nodeMeta, nIdx) => {
-      // Posição 3D FIXA para cada Nó de Conexão no anel externo
       const nAngle = (nIdx / Math.max(1, totalShared)) * Math.PI * 2 + 0.22;
       const nx = Math.cos(nAngle) * outerNodeRadius;
       const ny = Math.cos(nAngle * 3) * 68;
@@ -1010,7 +1213,6 @@ function startNeuralLoop() {
         (hasSelectedAgent && !isLinkedToSelectedAgent) ||
         (hasSelectedSubNode && !isSubNodeSelected);
 
-      // Desenha uma linha de conexão para CADA Agente que utiliza este Nó Fixo
       connectedAgents.forEach((ag, linkIdx) => {
         const agInfo = agentPositionsMap.get(ag.id);
         if (!agInfo) return;
@@ -1039,7 +1241,6 @@ function startNeuralLoop() {
         );
       });
 
-      // Orbe Minimalista do Nó Fixo (sem texto embaixo)
       const subNodeR = (isSubNodeSelected || isLinkedToSelectedAgent ? 16 : 13.5) * subProj.scale;
       ctx.save();
       ctx.globalAlpha = isDimmed ? 0.25 : 0.96;
@@ -1058,7 +1259,6 @@ function startNeuralLoop() {
       ctx.textBaseline = 'middle';
       ctx.fillText(nodeMeta.icon || '🔌', subProj.x, subProj.y);
 
-      // Se o nó estiver compartilhado por 2+ agentes, mostra um pequeno indicador discreto
       if (connectedAgents.length > 1) {
         const bx = subProj.x + subNodeR * 0.72;
         const by = subProj.y - subNodeR * 0.72;
@@ -1085,7 +1285,8 @@ function startNeuralLoop() {
       });
     });
 
-      Array.from(agentPositionsMap.values()).forEach(({ ag, proj: agProj, color }, index) => {
+    // Render dos Agentes
+    Array.from(agentPositionsMap.values()).forEach(({ ag, proj: agProj, color }, index) => {
       const isSelected = activeAgentForTools.value?.id === ag.id;
       const isTriggered = activeTargetSlug === ag.slug;
       const isConnectedToSelectedSub =
@@ -1094,7 +1295,6 @@ function startNeuralLoop() {
         (hasSelectedAgent && !isSelected) ||
         (hasSelectedSubNode && !isConnectedToSelectedSub);
 
-      // Linha sináptica principal: Orquestrador Central <-> Agente
       drawCurvedSynapse(
         ctx,
         coreProj.x,
@@ -1170,9 +1370,7 @@ function startNeuralLoop() {
   animFrameId = requestAnimationFrame(render);
 }
 
-// ============================================================================
-// INTERAÇÃO DE CLIQUE E ROTAÇÃO NO CANVAS 3D
-// ============================================================================
+// Mouse Interativo
 function onMouseDown(e: MouseEvent) {
   isDragging = true;
   dragStartX = e.clientX;
@@ -1241,11 +1439,12 @@ function onWheel(e: WheelEvent) {
 }
 
 // ============================================================================
-// DISPARO DE COMANDO AO ORQUESTRADOR (CRIA NOVO PONTINHO DE MEMÓRIA AO RESPONDER)
+// DISPARO DE COMANDO UNIFICADO COM SÍNTESE DE VOZ
 // ============================================================================
-async function sendCommand() {
-  if (!promptText.value.trim() || isProcessing.value) return;
-  const textToSend = promptText.value.trim();
+async function sendCommand(overrideText?: string) {
+  const textToSend = (overrideText || promptText.value || '').trim();
+  if (!textToSend || isProcessing.value) return;
+
   promptText.value = '';
   isProcessing.value = true;
   corePulseBoost = 1.5;
@@ -1269,11 +1468,13 @@ async function sendCommand() {
     const payload = json.data || json;
 
     if (!res.ok || json.success === false || payload.success === false) {
+      const errMsg = payload.response || json.error || payload.error || 'Falha ao processar comando.';
       lastResponse.value = {
         agent: payload.agent || 'JARVIS (Aviso)',
-        text: payload.response || json.error || payload.error || 'Falha ao processar comando.',
+        text: errMsg,
         executionTimeMs: json.executionTimeMs || payload.executionTimeMs || 0
       };
+      speakJarvisResponse(errMsg);
       return;
     }
 
@@ -1290,15 +1491,18 @@ async function sendCommand() {
       }
     }
 
-    const responseText = payload.response || payload.output || 'Comando processado.';
+    const responseText = payload.response || payload.output || 'Comando processado com sucesso.';
     lastResponse.value = {
       agent: payload.agent || 'JARVIS',
       text: responseText,
       executionTimeMs: payload.executionTimeMs || json.executionTimeMs || 0
     };
+
+    // Dispara a fala em voz alta
+    speakJarvisResponse(responseText);
+
     await loadEcosystemData();
 
-    // Adiciona um novo pontinho de memória conectando o Agente produtor e o Orquestrador
     if (producerAgent) {
       memoryDots.value.push({
         id: `live_mem_${Date.now()}`,
@@ -1312,38 +1516,15 @@ async function sendCommand() {
 
     corePulseBoost = 2.0;
   } catch (err: any) {
+    const errText = `Erro de comunicação com o backend: ${err.message}`;
     lastResponse.value = {
       agent: 'Sistema Nervoso Central',
-      text: `Erro de comunicação com o backend (porta 3333): ${err.message}`
+      text: errText
     };
+    speakJarvisResponse(errText);
   } finally {
     isProcessing.value = false;
   }
-}
-
-function toggleSpeechRecognition() {
-  const SpeechRecognition =
-    (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    alert('Seu navegador não suporta reconhecimento de voz nativo.');
-    return;
-  }
-  if (isListening.value && recognition) {
-    recognition.stop();
-    isListening.value = false;
-    return;
-  }
-  recognition = new SpeechRecognition();
-  recognition.lang = 'pt-BR';
-  recognition.interimResults = false;
-  recognition.onstart = () => (isListening.value = true);
-  recognition.onend = () => (isListening.value = false);
-  recognition.onresult = (event: any) => {
-    const transcript = event.results[0][0].transcript;
-    promptText.value = transcript;
-    sendCommand();
-  };
-  recognition.start();
 }
 
 async function toggleWebcam() {
@@ -1388,11 +1569,35 @@ function stopAllMedia() {
 onMounted(async () => {
   await loadEcosystemData();
   startNeuralLoop();
+
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+  }
+  initWakeWordListener();
+
+  window.addEventListener(
+    'click',
+    () => {
+      if ('speechSynthesis' in window) window.speechSynthesis.resume();
+      if (isAlwaysListening.value && wakeRecognition) {
+        try {
+          wakeRecognition.start();
+        } catch {}
+      }
+    },
+    { once: true }
+  );
 });
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(animFrameId);
   stopAllMedia();
+  if (wakeRecognition) {
+    try {
+      wakeRecognition.stop();
+    } catch {}
+  }
 });
 </script>
 
@@ -1494,7 +1699,7 @@ onBeforeUnmount(() => {
   bottom: 84px;
   left: 24px;
   font-size: 11.5px;
-  color: #94a3b8;
+  color: #38bdf8;
   background: rgba(9, 13, 22, 0.75);
   border: 1px solid rgba(51, 65, 85, 0.5);
   padding: 6px 12px;
@@ -1700,8 +1905,8 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 .active-mic {
-  border-color: #ef4444;
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
+  border-color: #22c55e;
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.6);
 }
 .active-cam,
 .active-screen {

@@ -9,6 +9,10 @@ import { executeSshCommand, readRemoteFileViaSshToRag } from './sshService.js';
 import { dispatchErrorTrigger } from './errorTriggerService.js';
 import { appendShortTermMemory } from './shortTermMemoryService.js';
 
+// ============================================================================
+// 1. TIPAGENS E INTERFACES EXPORTADAS
+// ============================================================================
+
 export type SupportedProtocolOrPlatform =
   | 'whatsapp'
   | 'google_workspace'
@@ -57,6 +61,15 @@ export interface SensorPayload {
   sensorData?: any;
 }
 
+export interface DynamicToolCatalogItem {
+  slug: string;
+  name: string;
+  category: string;
+  method: string;
+  endpoint: string;
+  description: string;
+}
+
 const DEFAULT_KNOWN_ENDPOINTS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
   openai: 'https://api.openai.com/v1',
@@ -65,6 +78,86 @@ const DEFAULT_KNOWN_ENDPOINTS: Record<string, string> = {
   ollama: 'http://localhost:11434/v1',
   openrouter: 'https://openrouter.ai/api/v1'
 };
+
+const CORE_BUILT_IN_TOOLS: DynamicToolCatalogItem[] = [
+  {
+    slug: 'dynamicdatabasetool',
+    name: 'DynamicDatabaseTool',
+    category: 'SQL',
+    method: 'SQL',
+    endpoint: '',
+    description: 'Grava registros e documentos JSON estruturados no PostgreSQL.'
+  },
+  {
+    slug: 'consultar_base_rag',
+    name: 'Consultar Base RAG',
+    category: 'RAG',
+    method: 'RAG',
+    endpoint: '',
+    description: 'Pesquisa semântica na base de conhecimento vetorial (RAG).'
+  },
+  {
+    slug: 'executar_comando_ssh',
+    name: 'Executar Comando SSH',
+    category: 'SSH',
+    method: 'SSH',
+    endpoint: '',
+    description: 'Executa comandos remotos via terminal SSH ou lê logs do servidor.'
+  },
+  {
+    slug: 'http_request_universal',
+    name: 'HTTP Request Universal',
+    category: 'HTTP',
+    method: 'HTTP',
+    endpoint: '',
+    description: 'Dispara requisições HTTP REST/Webhook para URLs externas.'
+  }
+];
+
+let schemaVerified = false;
+
+/**
+ * Garante de forma silenciosa que todas as colunas necessárias para os 4 modos
+ * de Agentes e para o Catálogo Dinâmico de Tools existam no PostgreSQL.
+ */
+async function ensureOrchestratorSchema(): Promise<void> {
+  if (schemaVerified) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS external_connectors (
+        provider_key VARCHAR(120) PRIMARY KEY,
+        name VARCHAR(180) NOT NULL,
+        category VARCHAR(100) DEFAULT 'Custom Tool',
+        icon VARCHAR(30) DEFAULT '🔌',
+        description TEXT DEFAULT '',
+        is_enabled BOOLEAN DEFAULT TRUE,
+        config JSONB DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) DEFAULT 'llm';
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS code_snippet TEXT;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS http_method VARCHAR(20) DEFAULT 'POST';
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS endpoint_url TEXT;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS auth_token TEXT;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS payload_template TEXT;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS tools JSONB DEFAULT '[]'::jsonb;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS next_agent_slug VARCHAR(120);
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS cron_expression VARCHAR(80);
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS icon VARCHAR(30) DEFAULT '🤖';
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS temperature NUMERIC DEFAULT 0.2;
+    `);
+    schemaVerified = true;
+  } catch {
+    // Continua sem bloquear caso alguma constraint específica já exista
+  }
+}
+
+// ============================================================================
+// 2. UTILITÁRIOS DE FORMATAÇÃO, URL E CREDENCIAIS DE IA
+// ============================================================================
 
 export function sanitizeToolName(name: string): string {
   return (
@@ -107,7 +200,7 @@ export function interpolateApiTemplate(
 ): string {
   if (!templateStr) return '';
   const queryVal = taskArgs?.query || taskArgs?.task_details || userPrompt || '';
-  const symbolMatch = (taskArgs?.symbol || userPrompt || '')
+  const symbolMatch = String(taskArgs?.symbol || userPrompt || '')
     .toUpperCase()
     .match(/\b([A-Z]{4}\d{1,2})\b/);
   const symbolVal = taskArgs?.symbol || (symbolMatch ? symbolMatch[1] : queryVal);
@@ -233,7 +326,7 @@ export async function getCentralBrainConfig(): Promise<{
           temperature: Number(parsed.temperature ?? 0.2),
           system_prompt:
             parsed.system_prompt ||
-            'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema. Analise os estímulos, consulte a memória, crie ou evolua Agentes/Tools quando solicitado e acione os Agentes Especialistas.'
+            'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema. Analise os estímulos, consulte a memória, crie ou evolua Agentes/Tools economizando tokens e acione os Agentes Especialistas.'
         };
       }
     }
@@ -275,6 +368,10 @@ export function createLLMClient(config?: any): OpenAI {
     timeout: 30000
   });
 }
+
+// ============================================================================
+// 3. PERSISTÊNCIA AUTÔNOMA E CATÁLOGO DINÂMICO DE TOOLS / CONEXÕES
+// ============================================================================
 
 export async function saveToDatabase(params: {
   collectionName: string;
@@ -338,7 +435,105 @@ export async function saveToDatabase(params: {
 }
 
 /**
- * Meta-Tool 1: Permite que o próprio n8n (JARVIS) crie ou atualize uma Tool / Conector no banco
+ * Monta o catálogo dinâmico de todas as Tools / Conexões ativas no banco
+ * sem travar em listas fixas e respeitando conexões excluídas pelo usuário.
+ */
+export async function getDynamicToolsCatalog(): Promise<{
+  catalog: DynamicToolCatalogItem[];
+  connectorsMap: Map<string, any>;
+}> {
+  await ensureOrchestratorSchema();
+  const catalogMap = new Map<string, DynamicToolCatalogItem>();
+  const connectorsMap = new Map<string, any>();
+
+  // Verifica lista de conectores excluídos permanentemente pelo usuário
+  let deletedKeys: string[] = [];
+  try {
+    const delRes = await pool.query(
+      `SELECT value FROM system_configs WHERE key = 'deleted_default_connectors' LIMIT 1;`
+    );
+    if (delRes.rows.length > 0) {
+      const rawVal = delRes.rows[0].value;
+      const parsedVal = typeof rawVal === 'string' ? JSON.parse(rawVal) : rawVal;
+      if (Array.isArray(parsedVal)) {
+        deletedKeys = parsedVal.map((k: any) => sanitizeToolName(String(k)));
+      }
+    }
+  } catch {}
+
+  // 1. Inclui as tools de núcleo (exceto se o usuário as tiver excluído explicitamente)
+  for (const coreTool of CORE_BUILT_IN_TOOLS) {
+    if (!deletedKeys.includes(coreTool.slug)) {
+      catalogMap.set(coreTool.slug, coreTool);
+    }
+  }
+
+  // 2. Carrega todas as Tools e Conexões salvas na tabela external_connectors
+  try {
+    const connectorsRes = await pool.query(`SELECT * FROM external_connectors ORDER BY updated_at DESC;`);
+    for (const row of connectorsRes.rows) {
+      const slug = sanitizeToolName(row.provider_key || row.name);
+      if (row.is_enabled === false) continue;
+
+      const cfg =
+        typeof row.config === 'string'
+          ? JSON.parse(row.config || '{}')
+          : row.config || {};
+
+      connectorsMap.set(slug, { ...row, config: cfg });
+      catalogMap.set(slug, {
+        slug,
+        name: row.name || slug,
+        category: row.category || cfg.tool_type || 'Custom Tool',
+        method: String(cfg.http_method || cfg.method || cfg.tool_type || 'API').toUpperCase(),
+        endpoint: cfg.endpoint_url || row.endpoint_url || '',
+        description:
+          row.description ||
+          cfg.description ||
+          `Conector externo ${row.name || slug}.`
+      });
+    }
+  } catch (err: any) {
+    console.warn('⚠️ [Catálogo Dinâmico] Aviso ao ler external_connectors:', err?.message);
+  }
+
+  // 3. Inclui qualquer tool customizada já referenciada nos agentes ativos
+  try {
+    const agRes = await pool.query(`SELECT tools FROM ai_agents WHERE tools IS NOT NULL;`);
+    for (const row of agRes.rows) {
+      const list = Array.isArray(row.tools)
+        ? row.tools
+        : typeof row.tools === 'string'
+        ? JSON.parse(row.tools || '[]')
+        : [];
+      for (const item of list) {
+        const slug = sanitizeToolName(String(item));
+        if (slug && !catalogMap.has(slug) && !deletedKeys.includes(slug)) {
+          catalogMap.set(slug, {
+            slug,
+            name: slug,
+            category: 'Agent Tool',
+            method: 'TOOL',
+            endpoint: '',
+            description: `Ferramenta ${slug} vinculada a especialista.`
+          });
+        }
+      }
+    }
+  } catch {}
+
+  return {
+    catalog: Array.from(catalogMap.values()),
+    connectorsMap
+  };
+}
+
+// ============================================================================
+// 4. META-TOOLS DO CÉREBRO CENTRAL (AUTO-CRIAÇÃO, EDIÇÃO E EXCLUSÃO)
+// ============================================================================
+
+/**
+ * Meta-Tool 1: Cria ou atualiza uma Tool / Conector no catálogo dinâmico (external_connectors)
  */
 export async function createOrUpdateToolFromBrain(params: {
   name: string;
@@ -352,11 +547,13 @@ export async function createOrUpdateToolFromBrain(params: {
   payload_template?: string;
   code_snippet?: string;
 }) {
+  await ensureOrchestratorSchema();
   const key = sanitizeToolName(params.provider_key || params.name || `tool_${Date.now()}`);
   const name = (params.name || key).trim();
   const toolType = (params.tool_type || 'http').toLowerCase();
   const icon =
-    params.icon || (toolType === 'mcp' ? '🔌' : toolType === 'code' ? '💻' : toolType === 'ssh' ? '🖥️' : '🌐');
+    params.icon ||
+    (toolType === 'mcp' ? '🔌' : toolType === 'code' ? '💻' : toolType === 'ssh' ? '🖥️' : '🌐');
   const description = params.description || `Ferramenta ${name} criada pelo JARVIS.`;
 
   const configObj = {
@@ -371,7 +568,7 @@ export async function createOrUpdateToolFromBrain(params: {
 
   await pool.query(
     `INSERT INTO external_connectors (provider_key, name, category, icon, description, config, is_enabled, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, TRUE, NOW())
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, TRUE, NOW())
      ON CONFLICT (provider_key) DO UPDATE SET
        name = EXCLUDED.name,
        icon = EXCLUDED.icon,
@@ -382,25 +579,105 @@ export async function createOrUpdateToolFromBrain(params: {
     [key, name, 'Custom Tool', icon, description, JSON.stringify(configObj)]
   );
 
+  // Caso essa chave estivesse na lista de excluídas anteriormente, remove da lista de bloqueio
+  try {
+    const delRes = await pool.query(
+      `SELECT value FROM system_configs WHERE key = 'deleted_default_connectors' LIMIT 1;`
+    );
+    if (delRes.rows.length > 0 && Array.isArray(delRes.rows[0].value)) {
+      const updatedList = delRes.rows[0].value.filter(
+        (k: string) => sanitizeToolName(k) !== key
+      );
+      await pool.query(
+        `UPDATE system_configs SET value = $1::jsonb, updated_at = NOW() WHERE key = 'deleted_default_connectors';`,
+        [JSON.stringify(updatedList)]
+      );
+    }
+  } catch {}
+
   return {
     success: true,
     tool_id: key,
     name,
     tool_type: toolType,
     endpoint_url: configObj.endpoint_url,
-    message: `Tool "${name}" (${key}) criada e habilitada no catálogo do n8n.`
+    message: `Tool "${name}" (${key}) criada e habilitada no catálogo dinâmico.`
   };
 }
 
 /**
- * Meta-Tool 2: Permite que o próprio n8n (JARVIS) crie ou atualize um Agente de IA completo,
- * preservando ou evoluindo o system_prompt existente e vinculando Tools
+ * Meta-Tool 1B: Exclui permanentemente uma Tool / Conexão que o usuário não queira mais
+ * e limpa seu vínculo de todos os agentes existentes.
+ */
+export async function deleteToolConnectorFromBrain(params: { provider_key: string }) {
+  await ensureOrchestratorSchema();
+  const cleanKey = sanitizeToolName(params.provider_key || '');
+  if (!cleanKey) {
+    return { success: false, message: 'Identificador da conexão (provider_key) não informado.' };
+  }
+
+  const delRes = await pool
+    .query(
+      `DELETE FROM external_connectors WHERE LOWER(provider_key) = LOWER($1) RETURNING provider_key, name;`,
+      [cleanKey]
+    )
+    .catch(() => ({ rows: [] as any[] }));
+
+  // Registra em deleted_default_connectors para impedir que conexões padrão voltem sozinhas
+  try {
+    const sysRes = await pool.query(
+      `SELECT value FROM system_configs WHERE key = 'deleted_default_connectors' LIMIT 1;`
+    );
+    const currentDeleted: string[] =
+      sysRes.rows.length > 0 && Array.isArray(sysRes.rows[0].value)
+        ? sysRes.rows[0].value
+        : [];
+    if (!currentDeleted.includes(cleanKey)) {
+      currentDeleted.push(cleanKey);
+      await pool.query(
+        `INSERT INTO system_configs (key, value, updated_at)
+         VALUES ('deleted_default_connectors', $1::jsonb, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
+        [JSON.stringify(currentDeleted)]
+      );
+    }
+  } catch {}
+
+  // Remove a tool do array JSONB `tools` de todos os subagentes
+  await pool
+    .query(
+      `UPDATE ai_agents
+       SET tools = COALESCE(
+         (
+           SELECT jsonb_agg(elem)
+           FROM jsonb_array_elements_text(COALESCE(tools, '[]'::jsonb)) AS elem
+           WHERE LOWER(elem) <> LOWER($1)
+         ),
+         '[]'::jsonb
+       ),
+       updated_at = NOW()
+       WHERE tools IS NOT NULL;`,
+      [cleanKey]
+    )
+    .catch(() => {});
+
+  return {
+    success: true,
+    deleted_key: cleanKey,
+    message: `Conexão "${delRes.rows[0]?.name || cleanKey}" excluída permanentemente do catálogo e desvinculada dos agentes.`
+  };
+}
+
+/**
+ * Meta-Tool 2: Cria ou edita um Subagente Especialista escolhendo o Modo de Operação
+ * mais econômico em tokens (code -> api -> mcp -> llm), preenchendo as ordens técnicas
+ * e selecionando cirurgicamente as conexões necessárias.
  */
 export async function createOrUpdateAgentFromBrain(
   params: {
     name: string;
     slug?: string;
-    agent_type?: 'llm' | 'api' | 'mcp' | 'code' | string;
+    agent_type?: 'code' | 'api' | 'mcp' | 'llm' | string;
     description?: string;
     system_prompt?: string;
     append_behavior_rule?: string;
@@ -408,33 +685,69 @@ export async function createOrUpdateAgentFromBrain(
     model?: string;
     icon?: string;
     tools?: string[];
+    replace_tools?: boolean;
     endpoint_url?: string;
     http_method?: string;
+    auth_token?: string;
+    payload_template?: string;
     code_snippet?: string;
     next_agent_slug?: string;
+    cron_expression?: string;
   },
   brainConfig?: any
 ) {
+  await ensureOrchestratorSchema();
   const slug = sanitizeToolName(params.slug || params.name || `agent_${Date.now()}`);
   const name = (params.name || slug).trim();
-  const agentType = (params.agent_type || 'llm').toLowerCase();
-  const provider = (params.provider || brainConfig?.provider || 'groq').toLowerCase();
-  const model = params.model || brainConfig?.model || 'openai/gpt-oss-120b';
-  const icon = params.icon || '🤖';
 
-  // Verifica se o agente já existe no banco para não perder instruções ou tools anteriores
+  // Verifica se o agente já existe no banco para evoluí-lo sem perder configurações
   const existingRes = await pool
     .query('SELECT * FROM ai_agents WHERE slug = $1 LIMIT 1;', [slug])
-    .catch(() => ({ rows: [] }));
+    .catch(() => ({ rows: [] as any[] }));
   const existingAgent = existingRes.rows[0] || null;
   const previousPrompt = (existingAgent?.system_prompt || '').trim();
+
+  // Governança de Economia de Tokens:
+  // 1) Se possui code_snippet JS determinístico -> 'code' (0 tokens)
+  // 2) Se possui endpoint_url direto e não exige múltiplas tools de LLM -> 'api' ou 'mcp'
+  let agentType = (params.agent_type || existingAgent?.agent_type || 'llm').toLowerCase().trim();
+  if (params.code_snippet && params.code_snippet.trim() !== '' && !params.agent_type) {
+    agentType = 'code';
+  } else if (
+    params.endpoint_url &&
+    params.endpoint_url.trim() !== '' &&
+    agentType === 'llm' &&
+    (!params.tools || params.tools.length === 0)
+  ) {
+    agentType = params.endpoint_url.toLowerCase().includes('mcp') ? 'mcp' : 'api';
+  }
+
+  const provider = (
+    params.provider ||
+    existingAgent?.provider ||
+    brainConfig?.provider ||
+    'groq'
+  ).toLowerCase();
+  const model =
+    params.model ||
+    existingAgent?.model ||
+    brainConfig?.model ||
+    'openai/gpt-oss-120b';
+
+  const defaultIcons: Record<string, string> = {
+    code: '💻',
+    api: '🌐',
+    mcp: '🔌',
+    llm: '🧠'
+  };
+  const icon = params.icon || existingAgent?.icon || defaultIcons[agentType] || '🤖';
 
   const description =
     params.description ||
     existingAgent?.description ||
-    `Especialista ${name} responsável por tarefas de ${name}.`;
+    `Acione quando o usuário solicitar tarefas do domínio ${name}.`;
 
-  // Evolução inteligente do systemPrompt
+  // Construção das ordens (system_prompt) de acordo com o Modo de Operação
   let systemPrompt = '';
   if (params.append_behavior_rule && previousPrompt) {
     systemPrompt = `${previousPrompt}\n\n[DIRETRIZ PERMANENTE DE COMPORTAMENTO E INTERAÇÃO]:\n- ${params.append_behavior_rule.trim()}`;
@@ -442,25 +755,50 @@ export async function createOrUpdateAgentFromBrain(
     systemPrompt = params.system_prompt.trim();
   } else if (previousPrompt) {
     systemPrompt = previousPrompt;
+  } else if (agentType === 'api' || agentType === 'mcp') {
+    systemPrompt =
+      'Extraia os dados principais do JSON retornado pela API e apresente de forma objetiva e estruturada.';
   } else {
-    systemPrompt = `Você é o agente especialista ${name}. Execute as tarefas solicitadas com precisão técnica.`;
+    systemPrompt = `Você é o agente especialista ${name}. Execute as ordens solicitadas com precisão técnica e objetividade.`;
   }
 
+  // Seleção cirúrgica de Tools (Bloco 3):
+  // - Nós determinísticos 'code' não precisam de tools penduradas (a menos que explicitamente exigido).
+  // - Se params.tools foi enviado pelo JARVIS, usa a seleção cirúrgica informada (ou mescla se replace_tools === false).
   const previousTools: string[] = Array.isArray(existingAgent?.tools)
-    ? existingAgent.tools
+    ? existingAgent.tools.map((t: any) => sanitizeToolName(String(t)))
     : [];
-  const incomingTools: string[] = Array.isArray(params.tools)
-    ? params.tools.map((t) => sanitizeToolName(t))
+  const hasIncomingTools = Array.isArray(params.tools);
+  const incomingTools: string[] = hasIncomingTools
+    ? params.tools!.map((t) => sanitizeToolName(t)).filter(Boolean)
     : [];
-  const toolsList = Array.from(new Set([...previousTools, ...incomingTools]));
+
+  let toolsList: string[] = [];
+  if (agentType === 'code' && incomingTools.length === 0) {
+    toolsList = [];
+  } else if (hasIncomingTools) {
+    toolsList =
+      params.replace_tools === false
+        ? Array.from(new Set([...previousTools, ...incomingTools]))
+        : Array.from(new Set(incomingTools));
+  } else {
+    toolsList = previousTools;
+  }
+
+  const httpMethod = (
+    params.http_method ||
+    existingAgent?.http_method ||
+    (agentType === 'api' ? 'GET' : 'POST')
+  ).toUpperCase();
 
   const res = await pool.query(
     `INSERT INTO ai_agents (
        name, slug, agent_type, description, system_prompt,
        provider, model, icon, tools, endpoint_url, http_method,
-       code_snippet, next_agent_slug, is_active, updated_at
+       auth_token, payload_template, code_snippet, next_agent_slug,
+       cron_expression, is_active, updated_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, TRUE, NOW())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15, $16, TRUE, NOW())
      ON CONFLICT (slug) DO UPDATE SET
        name = EXCLUDED.name,
        agent_type = EXCLUDED.agent_type,
@@ -472,8 +810,11 @@ export async function createOrUpdateAgentFromBrain(
        tools = EXCLUDED.tools,
        endpoint_url = COALESCE(EXCLUDED.endpoint_url, ai_agents.endpoint_url),
        http_method = COALESCE(EXCLUDED.http_method, ai_agents.http_method),
+       auth_token = COALESCE(EXCLUDED.auth_token, ai_agents.auth_token),
+       payload_template = COALESCE(EXCLUDED.payload_template, ai_agents.payload_template),
        code_snippet = COALESCE(EXCLUDED.code_snippet, ai_agents.code_snippet),
        next_agent_slug = COALESCE(EXCLUDED.next_agent_slug, ai_agents.next_agent_slug),
+       cron_expression = COALESCE(EXCLUDED.cron_expression, ai_agents.cron_expression),
        is_active = TRUE,
        updated_at = NOW()
      RETURNING *;`,
@@ -487,10 +828,13 @@ export async function createOrUpdateAgentFromBrain(
       model,
       icon,
       JSON.stringify(toolsList),
-      params.endpoint_url || null,
-      params.http_method || 'POST',
-      params.code_snippet || null,
-      params.next_agent_slug || null
+      params.endpoint_url ?? existingAgent?.endpoint_url ?? null,
+      httpMethod,
+      params.auth_token ?? existingAgent?.auth_token ?? null,
+      params.payload_template ?? existingAgent?.payload_template ?? null,
+      params.code_snippet ?? existingAgent?.code_snippet ?? null,
+      params.next_agent_slug ?? existingAgent?.next_agent_slug ?? null,
+      params.cron_expression ?? existingAgent?.cron_expression ?? null
     ]
   );
 
@@ -505,7 +849,7 @@ export async function createOrUpdateAgentFromBrain(
   return {
     success: true,
     agent: res.rows[0],
-    message: `Agente "${name}" (slug: ${slug}) criado/atualizado com sucesso com ${toolsList.length} tool(s) vinculada(s).`
+    message: `Especialista "${name}" (slug: ${slug} | modo: ${agentType.toUpperCase()}) salvo com ${toolsList.length} conexão(ões) vinculada(s).`
   };
 }
 
@@ -534,7 +878,7 @@ export async function updateAgentOrJarvisPersona(params: {
   ) {
     const currentRes = await pool
       .query("SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;")
-      .catch(() => ({ rows: [] }));
+      .catch(() => ({ rows: [] as any[] }));
     const existingCfg =
       typeof currentRes.rows[0]?.value === 'string'
         ? JSON.parse(currentRes.rows[0].value)
@@ -633,7 +977,7 @@ export async function executeHackerSecuritySuite(params: {
   if (mode === 'red_team_audit') {
     const agentsRes = await pool
       .query('SELECT name, slug, agent_type, system_prompt FROM ai_agents WHERE is_active = true;')
-      .catch(() => ({ rows: [] }));
+      .catch(() => ({ rows: [] as any[] }));
 
     const auditReport = agentsRes.rows.map((ag: any) => {
       const prompt = String(ag.system_prompt || '');
@@ -679,7 +1023,7 @@ export async function executeHackerSecuritySuite(params: {
     .query(
       'SELECT id, agent_name, action_payload, response_payload, created_at FROM agent_audit_logs ORDER BY id DESC LIMIT 10;'
     )
-    .catch(() => ({ rows: [] }));
+    .catch(() => ({ rows: [] as any[] }));
 
   return {
     success: true,
@@ -687,6 +1031,10 @@ export async function executeHackerSecuritySuite(params: {
     recent_audit_logs: logsRes.rows
   };
 }
+
+// ============================================================================
+// 5. MOTOR DE INFERÊNCIA MULTI-LLM E EXECUÇÃO DE TOOLS VINCULADAS
+// ============================================================================
 
 async function callOpenAICompatibleLLM(options: {
   provider: string;
@@ -864,7 +1212,7 @@ async function callOpenAICompatibleLLM(options: {
 }
 
 /**
- * Executa uma Tool individual (Salva em external_connectors, DynamicDB, RAG, SSH, Code ou Integração Nativa)
+ * Executa uma Tool individual vinculada ao agente (DynamicDB, RAG, SSH, HTTP Universal ou Conector de external_connectors)
  */
 async function executeBoundTool(
   toolKey: string,
@@ -887,12 +1235,20 @@ async function executeBoundTool(
     });
   }
 
-  if (cleanKey === 'vector_rag' || cleanKey === 'rag_search') {
+  if (
+    cleanKey === 'vector_rag' ||
+    cleanKey === 'rag_search' ||
+    cleanKey === 'consultar_base_rag'
+  ) {
     const docs = await searchVectorDocuments(queryValue, 4).catch(() => []);
     return { matches: docs };
   }
 
-  if (cleanKey === 'execute_ssh_command' || cleanKey === 'ssh_terminal') {
+  if (
+    cleanKey === 'execute_ssh_command' ||
+    cleanKey === 'ssh_terminal' ||
+    cleanKey === 'executar_comando_ssh'
+  ) {
     if (args?.remoteFilePath) {
       return await readRemoteFileViaSshToRag({ remoteFilePath: String(args.remoteFilePath) });
     }
@@ -912,15 +1268,22 @@ async function executeBoundTool(
     return await executeSshCommand(cfg.endpoint_url || queryValue || 'uptime');
   }
 
-  if (cfg.endpoint_url || customConn?.endpoint_url) {
-    const rawEndpoint = cfg.endpoint_url || customConn.endpoint_url;
-    let targetUrl = resolveDynamicUrl(rawEndpoint, serverBaseUrl);
+  const rawEndpoint =
+    cfg.endpoint_url ||
+    customConn?.endpoint_url ||
+    (cleanKey === 'http_request_universal' ? args?.endpoint || args?.url || queryValue : '');
+
+  if (rawEndpoint && String(rawEndpoint).startsWith('http')) {
+    let targetUrl = resolveDynamicUrl(String(rawEndpoint), serverBaseUrl);
     targetUrl = interpolateApiTemplate(targetUrl, userPrompt, { query: queryValue, ...args });
 
-    const method = String(cfg.http_method || customConn.http_method || 'GET').toUpperCase();
+    const method = String(
+      cfg.http_method || customConn?.http_method || args?.method || 'GET'
+    ).toUpperCase();
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
-    const token = cfg.auth_token || cfg.access_token || cfg.api_key || customConn.auth_token;
+    const token =
+      cfg.auth_token || cfg.access_token || cfg.api_key || customConn?.auth_token;
     if (token) {
       const cleanToken = String(token).trim();
       headers['Authorization'] = cleanToken.startsWith('Bearer ')
@@ -928,7 +1291,7 @@ async function executeBoundTool(
         : `Bearer ${cleanToken}`;
     }
 
-    if (cfg.tool_type === 'mcp' || customConn.agent_type === 'mcp') {
+    if (cfg.tool_type === 'mcp' || customConn?.agent_type === 'mcp') {
       const mcpRes = await fetch(targetUrl, {
         method: 'POST',
         headers,
@@ -968,9 +1331,10 @@ async function executeBoundTool(
   }).catch((err: any) => ({ error: err.message, tool: cleanKey }));
 }
 
-/**
- * Pipeline Sequencial de Especialistas com Suporte a Sub-Tools, APIs e Encadeamento (next_agent_slug)
- */
+// ============================================================================
+// 6. PIPELINE SEQUENCIAL DE ESPECIALISTAS (CODE, API, MCP E LLM)
+// ============================================================================
+
 export async function executeSpecialistPipeline(
   initialAgent: any,
   taskArgs: Record<string, any>,
@@ -989,6 +1353,7 @@ export async function executeSpecialistPipeline(
   const executionChain: Array<{
     agentSlug: string;
     agentName: string;
+    agentType?: string;
     responseInstruction?: string;
     output: any;
   }> = [];
@@ -1034,11 +1399,35 @@ export async function executeSpecialistPipeline(
         ? currentPayload
         : currentPayload?.task_details || currentPayload?.query || userPrompt;
 
+    // MODO 1: Script JavaScript Determinístico (ZERO TOKENS DE LLM)
     if (
+      agentType === 'code' &&
+      (currentAgent.code_snippet || currentAgent.script_code)
+    ) {
+      const codeToRun = currentAgent.code_snippet || currentAgent.script_code;
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      const fn = new AsyncFunction('payload', 'env', codeToRun);
+      let activePort = 3333;
+      try {
+        activePort =
+          typeof getEnvRegisteredPort === 'function' ? getEnvRegisteredPort() : 3333;
+      } catch {
+        activePort = 3333;
+      }
+      stepOutput = await fn(
+        { ...currentPayload, query: promptText, userPrompt },
+        {
+          BASE_URL: serverBaseUrl,
+          PORT: activePort
+        }
+      );
+    }
+    // MODO 2 & 3: Nó Direto REST API / Webhook ou Cliente Direto MCP
+    else if (
       nonLlmTypes.includes(agentType) ||
       (agentType === 'api' && currentAgent.endpoint_url)
     ) {
-      const rawUrl = resolveDynamicUrl(currentAgent.endpoint_url, serverBaseUrl);
+      const rawUrl = resolveDynamicUrl(currentAgent.endpoint_url || '', serverBaseUrl);
       const targetUrl = interpolateApiTemplate(rawUrl, userPrompt, currentPayload);
       const protocolToUse = (
         agentType === 'api' ? 'rest_api' : agentType
@@ -1063,7 +1452,11 @@ export async function executeSpecialistPipeline(
         protocol: protocolToUse,
         endpoint: targetUrl,
         method: currentAgent.http_method || 'GET',
-        body: { ...(currentAgent.protocol_config || {}), ...currentPayload, ...customBodyParams },
+        body: {
+          ...(currentAgent.protocol_config || {}),
+          ...currentPayload,
+          ...customBodyParams
+        },
         prompt: userPrompt
       });
 
@@ -1072,49 +1465,17 @@ export async function executeSpecialistPipeline(
         currentAgent.system_prompt ||
         ''
       ).trim();
-      if (formattingInstruction && brainConfig) {
-        try {
-          const formatRes = await callOpenAICompatibleLLM({
-            provider: brainConfig.provider,
-            model: brainConfig.model,
-            apiKey: brainConfig.api_key,
-            baseUrl: brainConfig.base_url,
-            messages: [
-              { role: 'system', content: formattingInstruction },
-              {
-                role: 'user',
-                content: `Pergunta do usuário: "${promptText}"\nDados retornados da API:\n${JSON.stringify(
-                  rawApiResult
-                )}`
-              }
-            ]
-          });
-          stepOutput = formatRes?.choices?.[0]?.message?.content || rawApiResult;
-        } catch {
-          stepOutput = rawApiResult;
-        }
-      } else {
-        stepOutput = rawApiResult;
-      }
-    } else if (
-      agentType === 'code' &&
-      (currentAgent.code_snippet || currentAgent.script_code)
-    ) {
-      const codeToRun = currentAgent.code_snippet || currentAgent.script_code;
-      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const fn = new AsyncFunction('payload', 'env', codeToRun);
-      let activePort = 3333;
-      try {
-        activePort =
-          typeof getEnvRegisteredPort === 'function' ? getEnvRegisteredPort() : 3333;
-      } catch {
-        activePort = 3333;
-      }
-      stepOutput = await fn(currentPayload, {
-        BASE_URL: serverBaseUrl,
-        PORT: activePort
-      });
-    } else {
+
+      // Anexa os dados brutos e a instrução de extração para que o JARVIS formate na síntese sem gastar chamada dupla de LLM
+      stepOutput = {
+        extractionInstruction:
+          formattingInstruction ||
+          'Extraia os dados principais do JSON retornado e apresente ao usuário.',
+        apiResponse: rawApiResult
+      };
+    }
+    // MODO 4: Agente de IA Cognitivo (LLM + Múltiplas Tools)
+    else {
       let enabledTools: string[] = [];
       if (Array.isArray(currentAgent.tools)) {
         enabledTools = currentAgent.tools;
@@ -1149,7 +1510,7 @@ export async function executeSpecialistPipeline(
                   },
                   task_details: {
                     type: 'string',
-                    description: 'Instrução para processamento.'
+                    description: 'Instrução complementar para processamento.'
                   }
                 },
                 required: ['query']
@@ -1259,6 +1620,7 @@ export async function executeSpecialistPipeline(
     executionChain.push({
       agentSlug: currentAgent.slug,
       agentName: currentAgent.name,
+      agentType,
       responseInstruction: currentAgent.system_prompt || undefined,
       output: stepOutput
     });
@@ -1287,6 +1649,11 @@ export async function executeSpecialistPipeline(
 }
 
 export const executeSpecialistNode = executeSpecialistPipeline;
+export const executeAgentChain = executeSpecialistPipeline;
+
+// ============================================================================
+// 7. FLUXO PRINCIPAL DO ORQUESTRADOR CENTRAL (JARVIS)
+// ============================================================================
 
 export async function processWorkflowExecution(
   identityToken: string,
@@ -1298,6 +1665,7 @@ export async function processWorkflowExecution(
   let brainConfig: any;
 
   try {
+    await ensureOrchestratorSchema();
     brainConfig = await getCentralBrainConfig();
     const dynamicServerBaseUrl = brainConfig.server_base_url;
 
@@ -1315,7 +1683,7 @@ export async function processWorkflowExecution(
          WHERE session_id = $1 ORDER BY id ASC LIMIT 12;`,
         [sessionId]
       )
-      .catch(() => ({ rows: [] }));
+      .catch(() => ({ rows: [] as any[] }));
 
     const conversationThread = historyRes.rows.map((r: any) => ({
       role: r.role,
@@ -1338,46 +1706,40 @@ export async function processWorkflowExecution(
 
     const agentsRes = await pool
       .query(`SELECT * FROM ai_agents WHERE is_active = true ORDER BY id ASC;`)
-      .catch(() => ({ rows: [] }));
+      .catch(() => ({ rows: [] as any[] }));
     const activeAgents = agentsRes.rows;
 
-    await pool
-      .query(`
-        CREATE TABLE IF NOT EXISTS external_connectors (
-          provider_key VARCHAR(80) PRIMARY KEY,
-          name VARCHAR(120) NOT NULL,
-          category VARCHAR(60) DEFAULT 'Custom Tool',
-          icon VARCHAR(20) DEFAULT '🔌',
-          description TEXT DEFAULT '',
-          is_enabled BOOLEAN DEFAULT TRUE,
-          config JSONB DEFAULT '{}'::jsonb,
-          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        );
-      `)
-      .catch(() => {});
+    // Carrega o Catálogo Dinâmico de todas as Tools/Conexões do banco em tempo real
+    const { catalog: liveToolsCatalog, connectorsMap } = await getDynamicToolsCatalog();
+    const validToolSlugs = liveToolsCatalog.map((t) => t.slug);
 
-    const connectorsRes = await pool
-      .query(`SELECT * FROM external_connectors;`)
-      .catch(() => ({ rows: [] }));
-    const connectorsMap = new Map<string, any>();
-    for (const row of connectorsRes.rows) {
-      connectorsMap.set(sanitizeToolName(row.provider_key), row);
-    }
+    const liveToolsSummary =
+      liveToolsCatalog.length > 0
+        ? liveToolsCatalog
+            .map(
+              (t) =>
+                `- slug: "${t.slug}" | Nome: "${t.name}" | Método: ${t.method}${
+                  t.endpoint ? ` | Endpoint: ${t.endpoint}` : ''
+                } | Uso: ${t.description}`
+            )
+            .join('\n')
+        : 'Nenhuma tool cadastrada no momento.';
 
-    // Resumo dos Agentes e Conectores existentes para o JARVIS saber quando editar vs criar
     const existingAgentsSummary =
       activeAgents.length > 0
         ? activeAgents
             .map(
               (a: any) =>
-                `- Nome: "${a.name}" | Slug: "${sanitizeToolName(a.slug)}" | Tools: ${JSON.stringify(
-                  a.tools || []
-                )} | Escopo: ${a.description || ''}`
+                `- Nome: "${a.name}" | Slug: "${sanitizeToolName(a.slug)}" | Modo: ${(
+                  a.agent_type || 'llm'
+                ).toUpperCase()} | Tools: ${JSON.stringify(a.tools || [])} | Gatilho: ${
+                  a.description || ''
+                }`
             )
             .join('\n')
         : 'Nenhum especialista cadastrado.';
 
-    // Monta as Tools para o Orquestrador Central (Especialistas + Meta-Tools de Auto-Criação e Persona)
+    // Monta as Tools para o Orquestrador Central (Especialistas + Meta-Tools)
     const tools: any[] = activeAgents.map((ag: any) => {
       const safeSlug = sanitizeToolName(ag.slug);
       return {
@@ -1396,11 +1758,12 @@ export async function processWorkflowExecution(
               },
               symbol: {
                 type: 'string',
-                description: 'Ticker ou código da ação/ativo caso seja uma consulta financeira (ex: PETR4, WEGE3).'
+                description:
+                  'Ticker ou código da ação/ativo caso seja uma consulta financeira (ex: PETR4, WEGE3).'
               },
               query: {
                 type: 'string',
-                description: 'Parâmetro de pesquisa ou filtro.'
+                description: 'Parâmetro de pesquisa, cálculo ou filtro.'
               }
             },
             required: ['task_details']
@@ -1409,18 +1772,21 @@ export async function processWorkflowExecution(
       };
     });
 
-    // Meta-Tool 1: Criar ou atualizar uma Tool funcional pelo próprio JARVIS
+    // Meta-Tool 1: Criar ou atualizar uma Tool funcional no catálogo dinâmico
     tools.push({
       type: 'function',
       function: {
         name: 'create_or_update_tool_connector',
         description:
-          'Cria ou atualiza uma Tool / Conector (API HTTP, Webhook, Servidor MCP, Script JS ou SSH) no catálogo do n8n.',
+          'Cria ou atualiza uma Tool / Conexão (API HTTP, Webhook, Servidor MCP, Script JS ou SSH) no catálogo dinâmico.',
         parameters: {
           type: 'object',
           properties: {
             name: { type: 'string', description: 'Nome amigável da Tool (ex: API CoinGecko)' },
-            provider_key: { type: 'string', description: 'ID único em snake_case (ex: coingecko_api)' },
+            provider_key: {
+              type: 'string',
+              description: 'ID único em snake_case (ex: coingecko_api)'
+            },
             tool_type: {
               type: 'string',
               enum: ['http', 'mcp', 'code', 'ssh'],
@@ -1429,62 +1795,148 @@ export async function processWorkflowExecution(
             http_method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'] },
             endpoint_url: {
               type: 'string',
-              description: 'URL do Endpoint ou servidor MCP (aceita {{query}}, {{symbol}}, {{BASE_URL}})'
+              description:
+                'URL do Endpoint ou servidor MCP (aceita {{query}}, {{symbol}}, {{BASE_URL}})'
             },
             description: { type: 'string', description: 'Quando a IA deve usar esta Tool' },
             icon: { type: 'string', description: 'Emoji representativo (ex: 📈, 🔌, 🌐)' },
-            payload_template: { type: 'string', description: 'Template JSON opcional para POST/PUT' },
-            code_snippet: { type: 'string', description: 'Código JavaScript caso tool_type seja code' }
+            auth_token: { type: 'string', description: 'Token Bearer ou API Key opcional' },
+            payload_template: {
+              type: 'string',
+              description: 'Template JSON opcional para POST/PUT'
+            },
+            code_snippet: {
+              type: 'string',
+              description: 'Código JavaScript caso tool_type seja code'
+            }
           },
           required: ['name']
         }
       }
     });
 
-    // Meta-Tool 2: Criar ou atualizar um Agente de IA pelo próprio JARVIS
+    // Meta-Tool 1B: Excluir uma Tool / Conexão do catálogo
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'delete_tool_connector',
+        description:
+          'Exclui permanentemente uma Tool / Conexão que o usuário não queira mais e a desvincula de todos os agentes.',
+        parameters: {
+          type: 'object',
+          properties: {
+            provider_key: {
+              type: 'string',
+              description: `Slug (provider_key) da conexão a excluir. Catálogo atual: [${validToolSlugs.join(
+                ', '
+              )}]`
+            }
+          },
+          required: ['provider_key']
+        }
+      }
+    });
+
+    // Meta-Tool 2: Criar ou editar Subagente com Economia de Tokens e Catálogo Dinâmico
     tools.push({
       type: 'function',
       function: {
         name: 'create_or_update_ai_agent',
         description:
-          'Cria um novo Agente de IA ou EDITA/ATUALIZA um agente existente (usando o mesmo slug) e vincula Tools a ele automaticamente.',
+          'Cria um novo Subagente Especialista ou EDITA um existente (usando o mesmo slug). REGRA DE ECONOMIA DE TOKENS: 1) Use agent_type="code" (ZERO tokens) para cálculos matemáticos, valuation Bazin, filtros e lógica determinística em JS. 2) Use agent_type="api" (ZERO tokens de subagente) para consultas HTTP REST/Webhook diretas. 3) Use agent_type="mcp" para servidores MCP. 4) Só use agent_type="llm" quando raciocínio subjetivo e múltiplas tools forem indispensáveis.',
         parameters: {
           type: 'object',
           properties: {
-            name: { type: 'string', description: 'Nome do Agente (ex: Analista de Cripto)' },
-            slug: { type: 'string', description: 'Identificador único em snake_case (use o mesmo slug se quiser editar um agente atual)' },
-            agent_type: { type: 'string', enum: ['llm', 'api', 'mcp', 'code'] },
+            name: {
+              type: 'string',
+              description: 'Nome do Agente Especialista (ex: Calculadora Bazin, Consultor B3)'
+            },
+            slug: {
+              type: 'string',
+              description:
+                'Identificador único em snake_case (use o MESMO slug se quiser editar um agente existente do mesmo domínio)'
+            },
+            agent_type: {
+              type: 'string',
+              enum: ['code', 'api', 'mcp', 'llm'],
+              description:
+                'Modo de Operação: "code" (Script JS determinístico, 0 tokens), "api" (REST API/Webhook direto), "mcp" (Cliente Direto MCP) ou "llm" (Agente Cognitivo com LLM).'
+            },
             description: {
               type: 'string',
-              description: 'Descrição clara de quando o Orquestrador deve acionar este agente'
+              description:
+                'Gatilho claro para Tool Calling (Quando o JARVIS deve acionar este Agente?)'
+            },
+            code_snippet: {
+              type: 'string',
+              description:
+                'Obrigatório se agent_type="code". Código JS puro que recebe "payload" e "env" e executa return { ... };'
+            },
+            http_method: {
+              type: 'string',
+              enum: ['GET', 'POST', 'PUT', 'DELETE'],
+              description: 'Método HTTP caso agent_type="api" (GET ou POST).'
+            },
+            endpoint_url: {
+              type: 'string',
+              description:
+                'URL do Endpoint caso agent_type="api" ou "mcp" (aceita {{query}}, {{symbol}}, {{BASE_URL}}).'
+            },
+            auth_token: {
+              type: 'string',
+              description: 'Token Bearer ou API Key opcional para a requisição.'
+            },
+            payload_template: {
+              type: 'string',
+              description:
+                'Template JSON para o Body caso agent_type="api" e método POST/PUT (ex: {"ticker": "{{symbol}}"}).'
             },
             system_prompt: {
               type: 'string',
-              description: 'Instruções completas de comportamento e regras do especialista'
+              description:
+                'Se agent_type="api" ou "mcp": instrução de quais campos extrair do JSON e como formatar a resposta. Se agent_type="llm": System Prompt completo com as ordens técnicas do especialista.'
             },
             append_behavior_rule: {
               type: 'string',
-              description: 'Opcional: Nova regra de fala/comportamento para adicionar ao system_prompt atual sem apagá-lo'
+              description:
+                'Opcional: Nova regra de comportamento para anexar ao system_prompt atual sem apagá-lo.'
             },
-            icon: { type: 'string', description: 'Emoji do agente (ex: 🤖, 📈, 🛡️)' },
+            icon: {
+              type: 'string',
+              description: 'Emoji do agente (ex: 💻, 🌐, 🔌, 🧠, 📈).'
+            },
             tools: {
               type: 'array',
               items: { type: 'string' },
-              description: 'Lista de IDs das Tools conectadas a este agente (ex: ["brapi", "save_to_database"])'
+              description: `Slugs das conexões do catálogo dinâmico habilitadas para este agente. Catálogo disponível: [${validToolSlugs.join(
+                ', '
+              )}]. Selecione apenas as pertinentes ao domínio.`
             },
-            endpoint_url: { type: 'string', description: 'URL caso seja um agente do tipo api ou mcp' },
-            next_agent_slug: { type: 'string', description: 'Slug do próximo agente se houver pipeline' },
+            replace_tools: {
+              type: 'boolean',
+              description:
+                'True (padrão) para definir exatamente a lista de tools enviada; False para apenas adicionar às tools atuais.'
+            },
+            next_agent_slug: {
+              type: 'string',
+              description: 'Slug opcional do próximo agente para encadeamento Pipeline.'
+            },
+            cron_expression: {
+              type: 'string',
+              description: 'Expressão Cron opcional de agendamento (ex: "*/5 * * * *").'
+            },
             execute_immediately: {
               type: 'boolean',
-              description: 'Se true, após criar ou editar o agente, já executa o pedido do usuário nele imediatamente!'
+              description:
+                'Se true, após criar ou editar o agente, já executa o pedido do usuário nele imediatamente.'
             }
           },
-          required: ['name', 'description']
+          required: ['name', 'slug', 'agent_type', 'description']
         }
       }
     });
 
-    // Meta-Tool 3: Guardar permanentemente o jeito de falar, agir ou interagir (no JARVIS ou em qualquer Especialista)
+    // Meta-Tool 3: Guardar permanentemente o jeito de falar, agir ou interagir
     tools.push({
       type: 'function',
       function: {
@@ -1497,7 +1949,7 @@ export async function processWorkflowExecution(
             target_slug: {
               type: 'string',
               description:
-                'Use "jarvis_core" para atualizar o próprio JARVIS, ou informe o slug do agente especialista (ex: "finance_agent").'
+                'Use "jarvis_core" para atualizar o próprio JARVIS, ou informe o slug do agente especialista.'
             },
             behavior_instruction: {
               type: 'string',
@@ -1515,7 +1967,7 @@ export async function processWorkflowExecution(
       }
     });
 
-    // Meta-Tool 4: Suíte do Agente Hacker (Red Team Audit, Self-Healing Debug e API Probe)
+    // Meta-Tool 4: Suíte do Agente Hacker
     tools.push({
       type: 'function',
       function: {
@@ -1531,7 +1983,10 @@ export async function processWorkflowExecution(
               description: 'Modo de operação do Agente Hacker'
             },
             target_slug: { type: 'string', description: 'Slug opcional do agente a auditar' },
-            target_url: { type: 'string', description: 'URL opcional para testar no modo api_probe' }
+            target_url: {
+              type: 'string',
+              description: 'URL opcional para testar no modo api_probe'
+            }
           },
           required: ['mode']
         }
@@ -1643,9 +2098,21 @@ URL Base do Servidor: ${dynamicServerBaseUrl}
 --- AGENTES ESPECIALISTAS ATIVOS ---
 ${existingAgentsSummary}
 
---- REGRAS DE AUTO-EVOLUÇÃO E PERSONALIDADE ---
-1. Quando o usuário pedir para você ou qualquer agente guardar/lembrar um novo jeito de falar, interagir ou formatar respostas, acione 'update_persona_and_behavior' para gravar isso no system_prompt permanentemente.
-2. Quando o usuário pedir um relatório de uma ação/ativo e já existir um agente do mesmo domínio (ex: Finanças), acione a tool desse agente passando o ticker. Se faltar alguma instrução ou tool nesse agente existente, edite-o chamando 'create_or_update_ai_agent' com o MESMO slug e execute_immediately: true. Só crie um novo slug se for um domínio totalmente inexistente.
+--- CATÁLOGO DINÂMICO DE TOOLS / CONEXÕES DISPONÍVEIS ---
+${liveToolsSummary}
+
+--- DIRETRIZES DE ECONOMIA DE TOKENS E GOVERNANÇA DE SUBAGENTES ---
+1. ESCOLHA DO MODO DE OPERAÇÃO (MENOR CUSTO DE TOKENS):
+   - Prioridade 1 (agent_type="code" | ZERO tokens): Para cálculos matemáticos, Preço-Teto Bazin, indicadores financeiros, filtros e manipulação de JSON/datas. Escreva o código JS puro em 'code_snippet' recebendo 'payload' e 'env' e retornando o objeto calculado.
+   - Prioridade 2 (agent_type="api" | ZERO tokens de subagente): Para buscar dados em endpoints REST HTTP ou Webhooks diretos. Configure 'endpoint_url' (usando {{symbol}}, {{query}} ou {{BASE_URL}}), 'http_method' e defina em 'system_prompt' quais campos extrair do JSON e como formatar.
+   - Prioridade 3 (agent_type="mcp"): Para servidores Model Context Protocol.
+   - Prioridade 4 (agent_type="llm"): Use SOMENTE quando a tarefa exigir interpretação subjetiva complexa e combinação de múltiplas tools do catálogo dinâmico.
+2. SELEÇÃO CIRÚRGICA DE CONEXÕES:
+   - Ao criar ou editar um agente, vincule no array 'tools' APENAS os slugs do [CATÁLOGO DINÂMICO DE TOOLS / CONEXÕES DISPONÍVEIS] estritamente necessários para aquele domínio. Se o usuário pedir para excluir uma conexão, acione 'delete_tool_connector'.
+3. EVOLUÇÃO SEM DUPLICIDADE:
+   - Se já existir um especialista do mesmo domínio na lista [AGENTES ESPECIALISTAS ATIVOS], edite-o chamando 'create_or_update_ai_agent' com o MESMO 'slug' e defina execute_immediately: true.
+4. PERSONALIDADE E COMPORTAMENTO:
+   - Sempre que o usuário pedir para guardar um novo jeito de falar ou regra permanente para você ou qualquer especialista, acione 'update_persona_and_behavior'.
 ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
       },
       ...conversationThread,
@@ -1695,12 +2162,25 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
+        if (fnName === 'delete_tool_connector') {
+          const deletedTool = await deleteToolConnectorFromBrain({
+            provider_key: parsedArgs.provider_key
+          });
+          toolOutputsForSynthesis.push({
+            toolName: 'delete_tool_connector',
+            result: deletedTool
+          });
+          continue;
+        }
+
         if (fnName === 'create_or_update_ai_agent') {
-          const createdAg = await createOrUpdateAgentFromBrain(parsedArgs as any, brainConfig);
+          const createdAg = await createOrUpdateAgentFromBrain(
+            parsedArgs as any,
+            brainConfig
+          );
           triggeredAgentName = createdAg.agent?.name || triggeredAgentName;
           triggeredAgentId = createdAg.agent?.slug || null;
 
-          // Se execute_immediately for true (ou se o usuário pediu um relatório junto), já executa o agente atualizado!
           let immediateChainResult: any = null;
           if (parsedArgs.execute_immediately !== false && createdAg.agent) {
             immediateChainResult = await executeSpecialistPipeline(
@@ -1795,6 +2275,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
+        // Acionamento de Agente Especialista Ativo
         const matchedAgent = activeAgents.find(
           (a: any) => sanitizeToolName(a.slug) === fnName
         );
@@ -1819,6 +2300,22 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
             responseInstruction: matchedAgent.system_prompt || undefined,
             result: chainResults
           });
+          continue;
+        }
+
+        // Fallback: Caso o próprio JARVIS chame diretamente uma Tool do Catálogo Dinâmico
+        if (connectorsMap.has(fnName) || validToolSlugs.includes(fnName)) {
+          const directToolOut = await executeBoundTool(
+            fnName,
+            parsedArgs,
+            userPrompt,
+            connectorsMap,
+            dynamicServerBaseUrl
+          );
+          toolOutputsForSynthesis.push({
+            toolName: fnName,
+            result: directToolOut
+          });
         }
       }
 
@@ -1830,7 +2327,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
             toolOutputsForSynthesis,
             null,
             2
-          )}\n\nElabore a resposta final de forma clara, completa e direta ao usuário.`
+          )}\n\nRespeite eventuais instruções em 'extractionInstruction' ou 'responseInstruction' e elabore a resposta final de forma clara, completa e direta ao usuário.`
         }
       ];
 
@@ -1927,13 +2424,40 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
   }
 }
 
-export async function processOrchestratorWorkflow(params: {
-  identityToken?: string;
-  sensorData?: any;
-  sessionId?: string;
-}) {
+// ============================================================================
+// 8. ADAPTADORES DE ENTRADA E RETROCOMPATIBILIDADE COM CONTROLLERS
+// ============================================================================
+
+/**
+ * Suporta tanto chamada por objeto `{ identityToken, sensorData, sessionId }`
+ * quanto chamada posicional `(identityToken, textPrompt, sessionId, sensorData)`.
+ */
+export async function processOrchestratorWorkflow(
+  arg1?: any,
+  arg2?: any,
+  arg3?: string,
+  arg4?: any
+) {
+  if (typeof arg1 === 'string') {
+    const token = arg1 || 'Admin-Node';
+    const prompt =
+      typeof arg2 === 'string'
+        ? arg2
+        : arg2?.textPrompt ||
+          arg2?.prompt ||
+          arg2?.text ||
+          arg2?.command ||
+          'Verificar status operacional';
+    const sid = arg3 || arg2?.sessionId || `sess_${Date.now()}`;
+    const sensory = arg4 || (typeof arg2 === 'object' ? arg2 : undefined);
+    return processWorkflowExecution(token, prompt, sid, sensory);
+  }
+
+  const params = arg1 || {};
   const token = params?.identityToken || params?.sensorData?.faceBadge || 'Admin-Node';
   const prompt =
+    params?.prompt ||
+    params?.textPrompt ||
     params?.sensorData?.textPrompt ||
     params?.sensorData?.prompt ||
     params?.sensorData?.text ||

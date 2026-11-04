@@ -3,6 +3,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import http from 'http';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { pool, testConnection } from './config/database.js';
@@ -52,6 +55,9 @@ import {
 } from './controllers/brainConfigController.js';
 import * as connectorController from './controllers/connectorController.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 function resolveRouter(mod: any): express.Router {
   if (typeof mod === 'function') return mod;
   if (!mod || typeof mod !== 'object') return express.Router();
@@ -98,8 +104,9 @@ const PORT = Number(process.env.PORT || 3333);
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// 1. Módulos Principais de Rotas
+// 1. Módulos Principais de Rotas API
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/agents', agentRoutes);
 app.use('/api/v1/rag', ragRoutes);
@@ -192,7 +199,41 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
-// 8. Interceptor Global de Erros
+// 8. Roteamento de Telas (Garante que a raiz '/' abra o Cérebro 3D e não as Configurações)
+const staticCandidates = [
+  path.resolve(__dirname, '../dist'),
+  path.resolve(__dirname, '../../dist'),
+  path.resolve(process.cwd(), 'dist'),
+  path.resolve(process.cwd(), 'public')
+];
+const clientDistPath = staticCandidates.find((dir) => fs.existsSync(dir)) || staticCandidates[0];
+
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+
+  // Rota explícita para configurações
+  app.get(['/settings', '/settings.html'], (_req: Request, res: Response) => {
+    const settingsFile = path.join(clientDistPath, 'settings.html');
+    if (fs.existsSync(settingsFile)) {
+      return res.sendFile(settingsFile);
+    }
+    return res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+
+  // Rota raiz e qualquer outra página carregam o index.html (Avatar/Cérebro 3D)
+  app.get('*', (req: Request, res: Response, next: NextFunction) => {
+    if (req.path.startsWith('/api/') || req.path.startsWith('/health')) {
+      return next();
+    }
+    const indexFile = path.join(clientDistPath, 'index.html');
+    if (fs.existsSync(indexFile)) {
+      return res.sendFile(indexFile);
+    }
+    return next();
+  });
+}
+
+// 9. Interceptor Global de Erros
 app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   console.error('💥 [Global Error Interceptor]:', err.message);
   if (typeof dispatchErrorTrigger === 'function') {

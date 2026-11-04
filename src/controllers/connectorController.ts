@@ -93,13 +93,26 @@ export const DEFAULT_CONNECTORS = [
   }
 ];
 
+function sanitizeKey(rawKey: string): string {
+  return String(rawKey || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Garante que a tabela external_connectors e as colunas necessárias existam no PostgreSQL
+ */
 async function ensureConnectorsTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS external_connectors (
-      provider_key VARCHAR(80) PRIMARY KEY,
-      name VARCHAR(120) NOT NULL,
-      category VARCHAR(60) NOT NULL DEFAULT 'Custom Tool',
-      icon VARCHAR(20) DEFAULT '🔌',
+      provider_key VARCHAR(120) PRIMARY KEY,
+      name VARCHAR(180) NOT NULL,
+      category VARCHAR(100) NOT NULL DEFAULT 'Custom Tool',
+      icon VARCHAR(30) DEFAULT '🔌',
       description TEXT DEFAULT '',
       config JSONB NOT NULL DEFAULT '{}'::jsonb,
       is_enabled BOOLEAN DEFAULT TRUE,
@@ -108,48 +121,82 @@ async function ensureConnectorsTable() {
     );
   `);
 
-  // Garante que colunas adicionais existam caso a tabela tenha sido criada em versão anterior
   await pool.query(`
-    ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS icon VARCHAR(20) DEFAULT '🔌';
+    ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS icon VARCHAR(30) DEFAULT '🔌';
     ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
     ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS last_tested_at TIMESTAMP WITH TIME ZONE;
   `).catch(() => {});
 }
 
-// 1. Listar todos os conectores (mesclando catálogo base + conexões customizadas salvas)
+/**
+ * Recupera do banco a lista de conectores padrão que o usuário optou por excluir
+ */
+async function getDeletedDefaultKeys(): Promise<string[]> {
+  try {
+    const res = await pool.query(
+      `SELECT value FROM system_configs WHERE key = 'deleted_default_connectors' LIMIT 1;`
+    );
+    if (res.rows.length > 0) {
+      const rawVal = res.rows[0].value;
+      const parsed = typeof rawVal === 'string' ? JSON.parse(rawVal) : rawVal;
+      if (Array.isArray(parsed)) {
+        return parsed.map((k) => sanitizeKey(String(k)));
+      }
+    }
+  } catch {}
+  return [];
+}
+
+// ============================================================================
+// 1. LISTAR CONECTORES (Catálogo Dinâmico sem ressuscitar conexões excluídas)
+// ============================================================================
 export async function listConnectors(_req: Request, res: Response) {
   try {
     await ensureConnectorsTable();
-    const result = await pool.query('SELECT * FROM external_connectors ORDER BY updated_at DESC;');
-    const savedMap = new Map(result.rows.map((r: any) => [r.provider_key, r]));
+    const deletedDefaults = await getDeletedDefaultKeys();
 
-    const merged = DEFAULT_CONNECTORS.map((def) => {
-      const saved = savedMap.get(def.provider_key);
+    const result = await pool.query('SELECT * FROM external_connectors ORDER BY updated_at DESC;');
+    const savedMap = new Map(result.rows.map((r: any) => [sanitizeKey(r.provider_key), r]));
+
+    // Mescla apenas os conectores padrão que NÃO foram excluídos pelo usuário
+    const merged: any[] = [];
+    for (const def of DEFAULT_CONNECTORS) {
+      const defKey = sanitizeKey(def.provider_key);
+      if (deletedDefaults.includes(defKey)) {
+        continue; // Ignora conector excluído permanentemente
+      }
+
+      const saved = savedMap.get(defKey);
       if (saved) {
-        savedMap.delete(def.provider_key);
+        savedMap.delete(defKey);
         const cfg = saved.config || {};
-        return {
+        merged.push({
           provider_key: saved.provider_key,
           name: saved.name || def.name,
           category: saved.category || def.category,
           icon: saved.icon || cfg.icon || def.icon,
           description: saved.description || cfg.description || def.description,
           endpoint_url: cfg.endpoint_url || def.endpoint_url,
-          http_method: cfg.http_method || def.http_method || 'GET',
+          http_method: (cfg.http_method || def.http_method || 'GET').toUpperCase(),
           api_key: cfg.api_key || cfg.auth_token || '',
+          auth_token: cfg.auth_token || cfg.api_key || '',
           is_enabled: Boolean(saved.is_enabled),
-          config: cfg
-        };
+          config: cfg,
+          last_tested_at: saved.last_tested_at
+        });
+      } else {
+        merged.push({
+          ...def,
+          auth_token: def.api_key,
+          config: {
+            endpoint_url: def.endpoint_url,
+            http_method: def.http_method,
+            api_key: def.api_key,
+            auth_token: def.api_key
+          }
+        });
       }
-      return {
-        ...def,
-        config: {
-          endpoint_url: def.endpoint_url,
-          http_method: def.http_method,
-          api_key: def.api_key
-        }
-      };
-    });
+    }
 
     // Acrescenta todas as novas conexões e custom tools criadas pelo usuário
     for (const [, custom] of savedMap) {
@@ -161,10 +208,12 @@ export async function listConnectors(_req: Request, res: Response) {
         icon: custom.icon || cfg.icon || '🛠️',
         description: custom.description || cfg.description || 'Ferramenta/Conexão customizada.',
         endpoint_url: cfg.endpoint_url || '',
-        http_method: cfg.http_method || 'GET',
+        http_method: (cfg.http_method || 'GET').toUpperCase(),
         api_key: cfg.api_key || cfg.auth_token || '',
+        auth_token: cfg.auth_token || cfg.api_key || '',
         is_enabled: Boolean(custom.is_enabled),
-        config: cfg
+        config: cfg,
+        last_tested_at: custom.last_tested_at
       });
     }
 
@@ -174,26 +223,26 @@ export async function listConnectors(_req: Request, res: Response) {
   }
 }
 
-// 2. Criar ou Salvar uma Conexão / Tool (compatível com PUT e POST)
+// ============================================================================
+// 2. CRIAR OU ATUALIZAR UMA CONEXÃO / TOOL (Compatível com PUT e POST)
+// ============================================================================
 export async function saveConnectorConfig(req: Request, res: Response) {
   try {
     await ensureConnectorsTable();
     const body = req.body || {};
-    const provider_key = body.provider_key || body.slug;
+    const provider_key = body.provider_key || body.slug || body.id;
     const name = body.name || body.label || provider_key;
 
     if (!provider_key) {
-      return res.status(400).json({ success: false, error: 'O identificador (provider_key ou slug) é obrigatório.' });
+      return res.status(400).json({
+        success: false,
+        error: 'O identificador (provider_key ou slug) é obrigatório.'
+      });
     }
 
-    const cleanKey = String(provider_key)
-      .trim()
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9_]/g, '_');
-
-    const incomingConfig = typeof body.config === 'object' && body.config !== null ? body.config : {};
+    const cleanKey = sanitizeKey(provider_key);
+    const incomingConfig =
+      typeof body.config === 'object' && body.config !== null ? body.config : {};
 
     const category = body.category || incomingConfig.category || 'Custom Tool';
     const icon = body.icon || incomingConfig.icon || '🔌';
@@ -203,11 +252,29 @@ export async function saveConnectorConfig(req: Request, res: Response) {
     const mergedConfig = {
       ...incomingConfig,
       tool_type: incomingConfig.tool_type || body.tool_type || 'http',
-      http_method: (incomingConfig.http_method || body.http_method || 'GET').toUpperCase(),
+      http_method: (
+        incomingConfig.http_method ||
+        body.http_method ||
+        'GET'
+      ).toUpperCase(),
       endpoint_url: (incomingConfig.endpoint_url || body.endpoint_url || '').trim(),
-      auth_token: (incomingConfig.auth_token || incomingConfig.api_key || body.auth_token || body.api_key || '').trim(),
-      api_key: (incomingConfig.api_key || incomingConfig.auth_token || body.api_key || body.auth_token || '').trim(),
-      payload_template: incomingConfig.payload_template || body.payload_template || '',
+      auth_token: (
+        incomingConfig.auth_token ||
+        incomingConfig.api_key ||
+        body.auth_token ||
+        body.api_key ||
+        ''
+      ).trim(),
+      api_key: (
+        incomingConfig.api_key ||
+        incomingConfig.auth_token ||
+        body.api_key ||
+        body.auth_token ||
+        ''
+      ).trim(),
+      payload_template:
+        incomingConfig.payload_template || body.payload_template || '',
+      code_snippet: incomingConfig.code_snippet || body.code_snippet || '',
       description
     };
 
@@ -226,6 +293,20 @@ export async function saveConnectorConfig(req: Request, res: Response) {
       [cleanKey, name, category, icon, description, JSON.stringify(mergedConfig), is_enabled]
     );
 
+    // Se a conexão estava na lista de exclusão prévia, remove do bloqueio para permitir seu uso normal
+    try {
+      const deletedDefaults = await getDeletedDefaultKeys();
+      if (deletedDefaults.includes(cleanKey)) {
+        const updated = deletedDefaults.filter((k) => k !== cleanKey);
+        await pool.query(
+          `INSERT INTO system_configs (key, value, updated_at)
+           VALUES ('deleted_default_connectors', $1::jsonb, NOW())
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
+          [JSON.stringify(updated)]
+        );
+      }
+    } catch {}
+
     return res.status(200).json({
       success: true,
       message: `Conexão/Tool [${name}] salva com sucesso no PostgreSQL!`,
@@ -236,7 +317,12 @@ export async function saveConnectorConfig(req: Request, res: Response) {
   }
 }
 
-// 3. Testar Conexão / Tool em Tempo Real (suporta tanto teste via modal de Tool quanto aba Connectors)
+// Alias para compatibilidade com rotas que chamam saveConnector
+export const saveConnector = saveConnectorConfig;
+
+// ============================================================================
+// 3. TESTAR CONEXÃO / TOOL EM TEMPO REAL
+// ============================================================================
 export async function testExternalConnector(req: Request, res: Response) {
   const startTime = Date.now();
   try {
@@ -244,19 +330,33 @@ export async function testExternalConnector(req: Request, res: Response) {
     const cfg = typeof body.config === 'object' && body.config !== null ? body.config : {};
     const testQuery = String(body.testQuery || body.query || 'PETR4').trim();
 
-    const providerKey = String(body.provider_key || cfg.provider_key || '').toLowerCase();
-    const rawUrl = String(cfg.endpoint_url || body.endpoint_url || cfg.base_url || '').trim();
-    const apiKey = String(cfg.auth_token || cfg.api_key || body.api_key || body.auth_token || '').trim();
+    const providerKey = sanitizeKey(body.provider_key || cfg.provider_key || '');
+    const rawUrl = String(
+      cfg.endpoint_url || body.endpoint_url || cfg.base_url || ''
+    ).trim();
+    const apiKey = String(
+      cfg.auth_token || cfg.api_key || body.api_key || body.auth_token || ''
+    ).trim();
 
     // 3.1 Teste específico do Telegram Bot
     if (providerKey === 'telegram' || rawUrl.includes('api.telegram.org')) {
       if (!apiKey) {
-        return res.status(200).json({ success: false, latencyMs: Date.now() - startTime, error: 'Informe o Token do Bot do Telegram.' });
+        return res.status(200).json({
+          success: false,
+          latencyMs: Date.now() - startTime,
+          error: 'Informe o Token do Bot do Telegram.'
+        });
       }
-      const tgRes = await fetch(`https://api.telegram.org/bot${apiKey}/getMe`, { signal: AbortSignal.timeout(10000) });
+      const tgRes = await fetch(`https://api.telegram.org/bot${apiKey}/getMe`, {
+        signal: AbortSignal.timeout(10000)
+      });
       const tgData: any = await tgRes.json().catch(() => ({}));
       if (!tgRes.ok || !tgData.ok) {
-        return res.status(200).json({ success: false, latencyMs: Date.now() - startTime, error: tgData.description || 'Token do Telegram inválido.' });
+        return res.status(200).json({
+          success: false,
+          latencyMs: Date.now() - startTime,
+          error: tgData.description || 'Token do Telegram inválido.'
+        });
       }
       return res.status(200).json({
         success: true,
@@ -268,12 +368,22 @@ export async function testExternalConnector(req: Request, res: Response) {
     }
 
     // 3.2 Teste específico da Brapi B3
-    if (providerKey === 'brapi' || providerKey === 'brapi_b3' || rawUrl.includes('brapi.dev')) {
-      let brapiUrl = rawUrl.includes('quote/') ? rawUrl : 'https://brapi.dev/api/quote/{{query}}';
-      brapiUrl = brapiUrl.replace(/\{\{\s*query\s*\}\}/gi, testQuery).replace(/\{\{\s*symbol\s*\}\}/gi, testQuery);
+    if (
+      providerKey === 'brapi' ||
+      providerKey === 'brapi_b3' ||
+      rawUrl.includes('brapi.dev')
+    ) {
+      let brapiUrl = rawUrl.includes('quote/')
+        ? rawUrl
+        : 'https://brapi.dev/api/quote/{{query}}';
+      brapiUrl = brapiUrl
+        .replace(/\{\{\s*query\s*\}\}/gi, testQuery)
+        .replace(/\{\{\s*symbol\s*\}\}/gi, testQuery);
+
       if (apiKey && !brapiUrl.includes('token=')) {
         brapiUrl += `${brapiUrl.includes('?') ? '&' : '?'}token=${apiKey}`;
       }
+
       const brapiRes = await fetch(brapiUrl, { signal: AbortSignal.timeout(10000) });
       const brapiData: any = await brapiRes.json().catch(() => ({}));
       if (!brapiRes.ok || brapiData.error) {
@@ -343,10 +453,12 @@ export async function testExternalConnector(req: Request, res: Response) {
     const data = await response.json().catch(async () => ({ text: await response.text() }));
 
     if (providerKey) {
-      await pool.query(
-        `UPDATE external_connectors SET last_tested_at = NOW() WHERE provider_key = $1;`,
-        [providerKey]
-      ).catch(() => {});
+      await pool
+        .query(
+          `UPDATE external_connectors SET last_tested_at = NOW() WHERE LOWER(provider_key) = $1;`,
+          [providerKey]
+        )
+        .catch(() => {});
     }
 
     return res.status(200).json({
@@ -367,20 +479,80 @@ export async function testExternalConnector(req: Request, res: Response) {
   }
 }
 
-// 4. Excluir uma Conexão Customizada do Banco
+// ============================================================================
+// 4. EXCLUIR CONEXÃO PERMANENTEMENTE E LIMPAR VÍNCULOS DOS SUBAGENTES
+// ============================================================================
 export async function deleteExternalConnector(req: Request, res: Response) {
   try {
-    const { key } = req.params;
-    await pool.query('DELETE FROM external_connectors WHERE provider_key = $1;', [key]);
-    return res.status(200).json({ success: true, message: `Conector [${key}] removido do banco.` });
+    await ensureConnectorsTable();
+    const rawKey = req.params?.key || req.params?.id || req.body?.provider_key;
+    const cleanKey = sanitizeKey(rawKey);
+
+    if (!cleanKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Identificador do conector não informado.'
+      });
+    }
+
+    // 1. Remove da tabela external_connectors (busca por provider_key)
+    const delRes = await pool.query(
+      `DELETE FROM external_connectors 
+       WHERE LOWER(provider_key) = $1 
+       RETURNING provider_key, name;`,
+      [cleanKey]
+    );
+
+    // 2. Grava na lista de exclusões permanentes para nunca recriar em DEFAULT_CONNECTORS
+    const deletedDefaults = await getDeletedDefaultKeys();
+    if (!deletedDefaults.includes(cleanKey)) {
+      deletedDefaults.push(cleanKey);
+      await pool.query(
+        `INSERT INTO system_configs (key, value, updated_at)
+         VALUES ('deleted_default_connectors', $1::jsonb, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
+        [JSON.stringify(deletedDefaults)]
+      );
+    }
+
+    // 3. Remove essa conexão do array JSONB `tools` de todos os subagentes cadastrados
+    await pool
+      .query(
+        `UPDATE ai_agents
+         SET tools = COALESCE(
+           (
+             SELECT jsonb_agg(elem)
+             FROM jsonb_array_elements_text(COALESCE(tools, '[]'::jsonb)) AS elem
+             WHERE LOWER(elem) <> LOWER($1)
+           ),
+           '[]'::jsonb
+         ),
+         updated_at = NOW()
+         WHERE tools IS NOT NULL;`,
+        [cleanKey]
+      )
+      .catch(() => {});
+
+    const connectorName = delRes.rows[0]?.name || cleanKey;
+
+    return res.status(200).json({
+      success: true,
+      deletedKey: cleanKey,
+      message: `Conexão "${connectorName}" excluída permanentemente e desvinculada dos subagentes.`
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
 }
 
+// Alias para compatibilidade com rotas que chamam deleteConnector
+export const deleteConnector = deleteExternalConnector;
+
 export default {
   listConnectors,
   saveConnectorConfig,
+  saveConnector,
   testExternalConnector,
-  deleteExternalConnector
+  deleteExternalConnector,
+  deleteConnector
 };

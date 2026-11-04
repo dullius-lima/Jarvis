@@ -1,6 +1,6 @@
 <template>
   <div class="settings-layout">
-    <!-- BARRA LATERAL DE NAVEGAÇÃO -->
+    <!-- BARRA LATERAL / CABEÇALHO RESPONSIVO -->
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-icon">🧠</span>
@@ -28,19 +28,19 @@
         </button>
 
         <button
-          @click="currentTab = 'memory'"
-          :class="{ active: currentTab === 'memory' }"
-          class="nav-item"
-        >
-          🗂️ Memória Dinâmica (Sessions)
-        </button>
-
-        <button
           @click="currentTab = 'connectors'"
           :class="{ active: currentTab === 'connectors' }"
           class="nav-item"
         >
           🔌 Conexões Externas &amp; IoT
+        </button>
+
+        <button
+          @click="currentTab = 'memory'"
+          :class="{ active: currentTab === 'memory' }"
+          class="nav-item"
+        >
+          🗂️ Memória Dinâmica (Sessions)
         </button>
 
         <button
@@ -66,7 +66,7 @@
         <header class="section-header">
           <div>
             <h1>👑 Configuração do Cérebro Central ({{ brainSettings.agent_name || 'JARVIS' }})</h1>
-            <p>Gerencie o Agente Líder, chaves multi-provedor e modelos sincronizados automaticamente com o seu GitHub Gist.</p>
+            <p>Gerencie o Agente Líder, chaves multi-provedor e modelos sincronizados automaticamente com o GitHub Gist.</p>
           </div>
           <div class="gist-sync-box">
             <button @click="loadSupportedModels(true)" :disabled="isSyncingGist" class="btn-secondary">
@@ -208,7 +208,7 @@
         <header class="section-header">
           <div>
             <h1>🤖 Agentes Especialistas &amp; Terminações Nervosas (SNP)</h1>
-            <p>Crie especialistas cognitivos (LLM), nós de API REST, servidores MCP ou scripts JS encadeados.</p>
+            <p>Crie especialistas cognitivos (LLM), nós de API REST, servidores MCP ou scripts JS determinísticos.</p>
           </div>
           <button @click="openNewAgentModal" class="btn-primary">+ Novo Especialista</button>
         </header>
@@ -227,7 +227,7 @@
             <p class="agent-desc">{{ ag.description || ag.system_prompt || 'Sem descrição configurada.' }}</p>
 
             <div class="agent-meta">
-              <span v-if="ag.provider">🧠 {{ ag.provider }} ({{ ag.model }})</span>
+              <span v-if="ag.provider && ag.agent_type !== 'code'">🧠 {{ ag.provider }} ({{ ag.model }})</span>
               <span v-if="ag.endpoint_url">🌐 {{ ag.endpoint_url }}</span>
               <span v-if="ag.next_agent_slug" class="chain-badge">🔗 Próximo Nó: {{ ag.next_agent_slug }}</span>
             </div>
@@ -245,7 +245,65 @@
       </section>
 
       <!-- =========================================================
-           ABA 3: MEMÓRIA DINÂMICA (SESSION ID)
+           ABA 3: CONEXÕES EXTERNAS & IOT (COM TESTE E EXCLUSÃO)
+           ========================================================= -->
+      <section v-if="currentTab === 'connectors'" class="tab-section">
+        <header class="section-header">
+          <div>
+            <h1>🔌 Cofre de Conexões Externas, E-mail, Mensageria &amp; IoT</h1>
+            <p>Cadastre, teste em tempo real ou exclua credenciais para Brapi B3, Gmail, Outlook, WhatsApp, Telegram e APIs REST.</p>
+          </div>
+          <button @click="openNewConnectorModal" class="btn-primary">➕ Nova Conexão Externa</button>
+        </header>
+
+        <div class="agents-grid">
+          <div v-for="conn in connectorsList" :key="conn.provider_key" class="agent-card">
+            <div class="agent-card-header">
+              <div>
+                <span class="agent-type-tag">{{ conn.category || 'Conector' }}</span>
+                <h3>{{ conn.icon || '🔌' }} {{ conn.name }}</h3>
+                <code class="slug-code">{{ conn.provider_key }}</code>
+              </div>
+              <input type="checkbox" v-model="conn.is_enabled" title="Habilitar/Desabilitar" />
+            </div>
+
+            <p class="agent-desc">{{ conn.description || 'Sem descrição.' }}</p>
+
+            <div class="form-group">
+              <label>API Key / Token de Acesso</label>
+              <input type="password" v-model="conn.api_key" class="input-field" placeholder="Token ou Chave..." />
+            </div>
+
+            <div class="form-group">
+              <label v-pre>Endpoint / URL (Aceita {{BASE_URL}}, {{query}})</label>
+              <input type="text" v-model="conn.endpoint_url" class="input-field" placeholder="https://..." />
+            </div>
+
+            <div class="agent-card-actions" style="margin-top: 10px;">
+              <button @click="testExistingConnector(conn)" class="btn-test" style="flex: 1;">
+                ⚡ Testar
+              </button>
+              <button @click="saveConnector(conn)" class="btn-primary" style="flex: 1;">
+                💾 Salvar
+              </button>
+              <button
+                @click="deleteConnectorFromHub(conn.provider_key, conn.name)"
+                class="btn-danger"
+                title="Excluir Conexão"
+              >
+                🗑️
+              </button>
+            </div>
+
+            <div v-if="connFeedback[conn.provider_key]" class="connector-feedback-box">
+              {{ connFeedback[conn.provider_key] }}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================================
+           ABA 4: MEMÓRIA DINÂMICA (SESSION ID)
            ========================================================= -->
       <section v-if="currentTab === 'memory'" class="tab-section">
         <header class="section-header">
@@ -300,45 +358,6 @@
       </section>
 
       <!-- =========================================================
-           ABA 4: CONEXÕES EXTERNAS & IOT
-           ========================================================= -->
-      <section v-if="currentTab === 'connectors'" class="tab-section">
-        <header class="section-header">
-          <div>
-            <h1>🔌 Cofre de Conexões Externas, E-mail, Mensageria &amp; IoT</h1>
-            <p>Configure chaves de API e endpoints para Gmail, Outlook, WhatsApp, Telegram, Brapi B3, GitHub e Home Assistant.</p>
-          </div>
-        </header>
-
-        <div class="agents-grid">
-          <div v-for="conn in connectorsList" :key="conn.provider_key" class="agent-card">
-            <div class="agent-card-header">
-              <div>
-                <span class="agent-type-tag">{{ conn.category }}</span>
-                <h3>{{ conn.icon }} {{ conn.name }}</h3>
-              </div>
-              <input type="checkbox" v-model="conn.is_enabled" />
-            </div>
-            <p class="agent-desc">{{ conn.description }}</p>
-
-            <div class="form-group">
-              <label>API Key / Token de Acesso</label>
-              <input type="password" v-model="conn.api_key" class="input-field" placeholder="Token ou Senha de App..." />
-            </div>
-
-            <div class="form-group">
-              <label v-pre>Endpoint / URL (Aceita {{BASE_URL}})</label>
-              <input type="text" v-model="conn.endpoint_url" class="input-field" placeholder="https://..." />
-            </div>
-
-            <button @click="saveConnector(conn)" class="btn-primary" style="width: 100%;">
-              💾 Salvar {{ conn.name }}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <!-- =========================================================
            ABA 5: MANUAL DE OPERAÇÃO
            ========================================================= -->
       <section v-if="currentTab === 'manual'" class="tab-section">
@@ -387,7 +406,7 @@
             <div class="step-badge">1. Identidade &amp; Papel no Ecossistema</div>
 
             <div class="form-row">
-              <div class="form-group" style="max-width: 90px;">
+              <div class="form-group icon-group">
                 <label>Ícone</label>
                 <input type="text" v-model="editingAgent.icon" class="input-field" style="text-align: center; font-size: 18px;" placeholder="🤖" />
               </div>
@@ -400,10 +419,10 @@
               <div class="form-group" style="flex: 2;">
                 <label>Modo de Operação do Agente</label>
                 <select v-model="editingAgent.agent_type" class="input-field">
-                  <option value="llm">🧠 Agente de IA Cognitivo (LLM + Múltiplas Tools)</option>
-                  <option value="api">🌐 Nó Direto REST API / Webhook (Com Formatação)</option>
+                  <option value="code">💻 Nó de Script JavaScript (Determinístico - 0 Tokens)</option>
+                  <option value="api">🌐 Nó Direto REST API / Webhook (0 Tokens Subagente)</option>
                   <option value="mcp">🔌 Cliente Direto MCP (Model Context Protocol)</option>
-                  <option value="code">💻 Nó de Script JavaScript (Determinístico)</option>
+                  <option value="llm">🧠 Agente de IA Cognitivo (LLM + Múltiplas Tools)</option>
                 </select>
               </div>
             </div>
@@ -527,9 +546,9 @@
             </div>
           </div>
 
-          <!-- BLOCO 2C: SE FOR NÓ DE SCRIPT JAVASCRIPT -->
+          <!-- BLOCO 2C: SE FOR NÓ DE SCRIPT JAVASCRIPT DETERMINÍSTICO -->
           <div v-else-if="editingAgent.agent_type === 'code'" class="step-section">
-            <div class="step-badge">2. Script JavaScript / TypeScript Determinístico</div>
+            <div class="step-badge">2. Script JavaScript / TypeScript Determinístico (ZERO TOKENS)</div>
             <div class="form-group">
               <label>Código de Execução (Recebe `payload` e `env`)</label>
               <textarea
@@ -544,11 +563,11 @@
 
           <!-- BLOCO 3: FERRAMENTAS (TOOLS / NÓS FIXOS) VINCULADAS A ESTE AGENTE -->
           <div class="step-section">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div class="tools-header-row">
               <div>
-                <span class="step-badge" style="margin-bottom: 2px;">3. 🛠️ Ferramentas (Tools / Nós Fixos) Conectadas a este Agente</span>
+                <span class="step-badge" style="margin-bottom: 2px;">3. 🛠️ Ferramentas (Tools / Nós Fixos) Conectadas</span>
                 <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0 0;">
-                  Marque os nós existentes (um mesmo nó fixo pode servir vários agentes) ou crie uma nova Tool funcional abaixo.
+                  Selecione as tools que este agente pode usar, ou exclua conexões que não queira mais no botão 🗑️.
                 </p>
               </div>
               <button
@@ -556,14 +575,14 @@
                 @click="showInlineToolCreator = !showInlineToolCreator"
                 class="btn-secondary"
               >
-                {{ showInlineToolCreator ? '✕ Fechar Criador de Tool' : '➕ Criar Nova Tool Funcional' }}
+                {{ showInlineToolCreator ? '✕ Fechar Criador' : '➕ Criar Nova Tool' }}
               </button>
             </div>
 
             <!-- CRIADOR INLINE DE NOVA TOOL FUNCIONAL -->
             <div v-if="showInlineToolCreator" class="inline-tool-creator-box">
               <div class="form-row">
-                <div class="form-group" style="max-width: 70px;">
+                <div class="form-group icon-group">
                   <label>Ícone</label>
                   <input type="text" v-model="newToolDraft.icon" class="input-field" style="text-align: center;" placeholder="🛠️" />
                 </div>
@@ -682,37 +701,48 @@
                 {{ toolCreatorFeedback }}
               </div>
 
-              <div style="display: flex; justify-content: flex-end; gap: 10px;">
+              <div class="actions-row" style="justify-content: flex-end;">
                 <button type="button" @click="testCustomToolDraft" class="btn-test">
                   ⚡ Testar Tool
                 </button>
                 <button type="button" @click="saveCustomToolAndAttach" class="btn-primary">
-                  💾 Salvar Tool no Banco &amp; Vincular ao Agente
+                  💾 Salvar no Catálogo &amp; Vincular
                 </button>
               </div>
             </div>
 
-            <!-- GRADE DE CHECKBOXES DAS TOOLS EXISTENTES -->
+            <!-- GRADE DE CHECKBOXES DAS TOOLS EXISTENTES COM BOTÃO DE EXCLUIR CONEXÃO -->
             <div class="tools-checkbox-grid">
-              <label
+              <div
                 v-for="tool in availableToolsCatalog"
                 :key="tool.id"
                 class="tool-checkbox-card"
                 :class="{ selected: Array.isArray(editingAgent.tools) && editingAgent.tools.includes(tool.id) }"
               >
-                <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
+                <label class="tool-label-click">
                   <input
                     type="checkbox"
                     :value="tool.id"
                     v-model="editingAgent.tools"
                   />
                   <span>{{ tool.icon || '🔌' }}</span>
-                  <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600;">
+                  <span class="tool-name-text">
                     {{ tool.label }}
                   </span>
+                </label>
+
+                <div class="tool-actions-box">
+                  <span class="tool-badge-mini">{{ (tool.http_method || tool.tool_type || 'NÓ').toUpperCase() }}</span>
+                  <button
+                    type="button"
+                    title="Excluir Conexão Permanentemente"
+                    @click.stop.prevent="deleteConnectorFromHub(tool.id, tool.label)"
+                    class="btn-trash-inline"
+                  >
+                    🗑️
+                  </button>
                 </div>
-                <span class="tool-badge-mini">{{ (tool.http_method || tool.tool_type || 'NÓ').toUpperCase() }}</span>
-              </label>
+              </div>
             </div>
           </div>
 
@@ -754,9 +784,8 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
 
-const currentTab = ref<'brain' | 'agents' | 'memory' | 'connectors' | 'manual'>('brain');
+const currentTab = ref<'brain' | 'agents' | 'connectors' | 'memory' | 'manual'>('brain');
 
-// Endpoints padrão por provedor
 const DEFAULT_ENDPOINTS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
   gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
@@ -766,7 +795,6 @@ const DEFAULT_ENDPOINTS: Record<string, string> = {
   ollama: 'http://localhost:11434/v1'
 };
 
-// Catálogo reativo sincronizado com o GitHub Gist
 const supportedModels = ref<Record<string, Array<{ label: string; value: string }>>>({
   groq: [
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
@@ -801,7 +829,6 @@ const gistSourceLabel = computed(() => {
   return 'Catálogo Local (Fallback)';
 });
 
-// Estado do Cérebro Central (JARVIS)
 const brainSettings = ref<any>({
   agent_name: 'JARVIS',
   provider: 'groq',
@@ -959,20 +986,8 @@ async function saveBrainSettings() {
 const agents = ref<any[]>([]);
 const showAgentModal = ref(false);
 const isEditingAgent = ref(false);
+const availableToolsCatalog = ref<any[]>([]);
 
-const availableToolsCatalog = ref<any[]>([
-  { id: 'save_to_database', icon: '🗄️', label: 'DynamicDatabaseTool (Salvar JSON)', description: 'Salva dados em coleção JSON no PostgreSQL', http_method: 'SQL' },
-  { id: 'vector_rag', icon: '📚', label: 'Consultar Base RAG (Vetorial)', description: 'Busca semântica de documentos no pgvector', http_method: 'RAG' },
-  { id: 'ssh_exec', icon: '💻', label: 'Executar Comando SSH', description: 'Executa comandos remotamente em servidor SSH', http_method: 'SSH' },
-  { id: 'http_request', icon: '🌐', label: 'HTTP Request Universal', description: 'Dispara requisições REST externas', http_method: 'HTTP' },
-  { id: 'brapi_b3', icon: '📈', label: 'Brapi B3 (Cotações e FIIs)', description: 'Consulta cotações e dividendos na B3', http_method: 'GET', endpoint_url: 'https://brapi.dev/api/quote/{{query}}' },
-  { id: 'gmail_send', icon: '📧', label: 'Google Gmail (Enviar/Ler)', description: 'Dispara e lê e-mails via Gmail', http_method: 'POST' },
-  { id: 'outlook_mail', icon: '📨', label: 'Microsoft Outlook / 365', description: 'Integração com Microsoft Graph', http_method: 'POST' },
-  { id: 'whatsapp_msg', icon: '💬', label: 'WhatsApp Business API', description: 'Envio de mensagens WhatsApp', http_method: 'POST' },
-  { id: 'home_assistant', icon: '🏠', label: 'Home Assistant IoT', description: 'Automação residencial e sensores', http_method: 'POST' }
-]);
-
-// Identificadores alinhados com o <template> do modal
 const showInlineToolCreator = ref(false);
 const toolCreatorFeedback = ref('');
 
@@ -994,7 +1009,7 @@ const editingAgent = ref<any>({
   slug: '',
   icon: '🤖',
   description: '',
-  agent_type: 'llm',
+  agent_type: 'code',
   provider: 'groq',
   model: 'llama-3.3-70b-versatile',
   custom_model_id: '',
@@ -1015,46 +1030,57 @@ const editingAgent = ref<any>({
 
 async function loadCustomToolsFromBackend() {
   try {
-    const localCustom = JSON.parse(localStorage.getItem('custom_agent_tools_catalog') || '[]');
-    for (const item of localCustom) {
-      if (!availableToolsCatalog.value.some((t: any) => t.id === item.id)) {
-        availableToolsCatalog.value.push({
-          id: item.id,
-          icon: item.icon || '🛠️',
-          label: item.label || item.id,
-          description: item.description || '',
-          http_method: item.http_method || 'GET',
-          tool_type: item.tool_type || 'http',
-          endpoint_url: item.endpoint_url || ''
-        });
-      }
-    }
-
     const res = await fetch('/api/v1/connectors');
     const json = await res.json();
     if (json.success && Array.isArray(json.data)) {
-      for (const item of json.data) {
+      // Preenche diretamente com os conectores salvos no PostgreSQL
+      availableToolsCatalog.value = json.data.map((item: any) => {
         const id = item.provider_key;
         const cfg = item.config || {};
-        const existingIdx = availableToolsCatalog.value.findIndex((t: any) => t.id === id);
-        const entry = {
+        return {
           id,
-          icon: item.icon || '🛠️',
+          icon: item.icon || '🔌',
           label: item.name || id,
           description: item.description || cfg.description || '',
           http_method: cfg.http_method || item.http_method || 'GET',
           tool_type: cfg.tool_type || 'http',
           endpoint_url: cfg.endpoint_url || item.endpoint_url || ''
         };
-        if (existingIdx >= 0) {
-          availableToolsCatalog.value[existingIdx] = { ...availableToolsCatalog.value[existingIdx], ...entry };
-        } else {
-          availableToolsCatalog.value.push(entry);
-        }
-      }
+      });
     }
   } catch (err) {
-    console.warn('Falha ao carregar tools customizadas do banco:', err);
+    console.warn('Falha ao carregar tools dinâmicas:', err);
+  }
+}
+
+async function deleteConnectorFromHub(providerKey: string, name?: string) {
+  if (!confirm(`Deseja realmente EXCLUIR a conexão "${name || providerKey}" permanentemente?`)) return;
+
+  try {
+    const res = await fetch(`/api/v1/connectors/${encodeURIComponent(providerKey)}`, {
+      method: 'DELETE'
+    });
+    const json = await res.json();
+
+    if (json.success) {
+      availableToolsCatalog.value = availableToolsCatalog.value.filter(
+        (t) => t.id.toLowerCase() !== providerKey.toLowerCase()
+      );
+      connectorsList.value = connectorsList.value.filter(
+        (c) => c.provider_key.toLowerCase() !== providerKey.toLowerCase()
+      );
+      if (Array.isArray(editingAgent.value.tools)) {
+        editingAgent.value.tools = editingAgent.value.tools.filter(
+          (k: string) => k.toLowerCase() !== providerKey.toLowerCase()
+        );
+      }
+      alert(`🗑️ Conexão "${name || providerKey}" removida com sucesso!`);
+      await fetchAgents();
+    } else {
+      alert(`Erro: ${json.error || 'Falha ao excluir conexão'}`);
+    }
+  } catch (err: any) {
+    alert(`Erro de comunicação: ${err.message}`);
   }
 }
 
@@ -1139,27 +1165,8 @@ async function saveCustomToolAndAttach() {
       });
     }
 
-    const newEntry = {
-      id,
-      icon: payload.icon,
-      label: payload.name,
-      description: payload.description,
-      http_method: newToolDraft.http_method,
-      tool_type: newToolDraft.tool_type,
-      endpoint_url: newToolDraft.endpoint_url.trim()
-    };
-
-    const idx = availableToolsCatalog.value.findIndex((t: any) => t.id === id);
-    if (idx >= 0) {
-      availableToolsCatalog.value[idx] = newEntry;
-    } else {
-      availableToolsCatalog.value.push(newEntry);
-    }
-
-    const savedLocal = JSON.parse(localStorage.getItem('custom_agent_tools_catalog') || '[]');
-    const filteredLocal = savedLocal.filter((t: any) => t.id !== id);
-    filteredLocal.push({ ...newEntry, color: '#38bdf8' });
-    localStorage.setItem('custom_agent_tools_catalog', JSON.stringify(filteredLocal));
+    await loadCustomToolsFromBackend();
+    await fetchConnectors();
 
     if (editingAgent.value) {
       if (!Array.isArray(editingAgent.value.tools)) editingAgent.value.tools = [];
@@ -1177,7 +1184,7 @@ async function saveCustomToolAndAttach() {
     toolCreatorFeedback.value = '';
     showInlineToolCreator.value = false;
   } catch (err: any) {
-    toolCreatorFeedback.value = `🔴 Erro ao salvar no banco: ${err.message}`;
+    toolCreatorFeedback.value = `🔴 Erro ao salvar: ${err.message}`;
   }
 }
 
@@ -1208,19 +1215,17 @@ async function fetchAgents() {
 
 function openNewAgentModal() {
   isEditingAgent.value = false;
-  const list = currentProviderModels('groq');
-  const firstMod = list.find((m) => m.value !== 'CUSTOM_INPUT')?.value || 'llama-3.3-70b-versatile';
   editingAgent.value = {
     id: null,
     name: '',
     slug: '',
-    icon: '🤖',
+    icon: '💻',
     description: '',
-    agent_type: 'llm',
+    agent_type: 'code',
     provider: 'groq',
-    model: firstMod,
+    model: 'llama-3.3-70b-versatile',
     custom_model_id: '',
-    temperature: 0.3,
+    temperature: 0.2,
     api_key: '',
     base_url: DEFAULT_ENDPOINTS.groq,
     system_prompt: '',
@@ -1228,7 +1233,7 @@ function openNewAgentModal() {
     http_method: 'POST',
     auth_token: '',
     payload_template: '',
-    code_snippet: '',
+    code_snippet: 'return { status: "ok", resultado: payload };',
     tools: [] as string[],
     next_agent_slug: null,
     cron_expression: '*/5 * * * *',
@@ -1249,7 +1254,7 @@ function openEditAgentModal(ag: any) {
     provider: prov,
     model: exists ? ag.model : 'CUSTOM_INPUT',
     custom_model_id: exists ? '' : ag.model || '',
-    temperature: Number(ag.temperature ?? 0.3),
+    temperature: Number(ag.temperature ?? 0.2),
     tools: Array.isArray(ag.tools) ? [...ag.tools] : [],
     next_agent_slug: ag.next_agent_slug || null,
     cron_expression: ag.cron_expression || '*/5 * * * *'
@@ -1327,6 +1332,129 @@ async function deleteAgent(ag: any) {
 }
 
 // =========================================================
+// CONEXÕES EXTERNAS & IOT
+// =========================================================
+const connectorsList = ref<any[]>([]);
+const connFeedback = ref<Record<string, string>>({});
+
+function openNewConnectorModal() {
+  const name = prompt('Nome da nova Conexão Externa (ex: CoinGecko API, Webhook n8n):');
+  if (!name || !name.trim()) return;
+
+  const key = name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  const newConn = {
+    provider_key: key,
+    name: name.trim(),
+    category: 'Custom API',
+    icon: '🔌',
+    description: `Conexão externa ${name.trim()}`,
+    is_enabled: true,
+    api_key: '',
+    endpoint_url: ''
+  };
+
+  saveConnector(newConn);
+}
+
+async function fetchConnectors() {
+  try {
+    const res = await fetch('/api/v1/connectors');
+    const json = await res.json();
+    if (json.success && Array.isArray(json.data)) {
+      connectorsList.value = json.data.map((row: any) => {
+        const cfg = row.config || {};
+        return {
+          provider_key: row.provider_key,
+          name: row.name,
+          category: row.category || 'Custom Tool',
+          icon: row.icon || '🔌',
+          description: row.description || cfg.description || '',
+          is_enabled: Boolean(row.is_enabled),
+          api_key: row.api_key || cfg.api_key || cfg.auth_token || '',
+          endpoint_url: row.endpoint_url || cfg.endpoint_url || ''
+        };
+      });
+    }
+  } catch {}
+}
+
+async function saveConnector(conn: any) {
+  try {
+    const payload = {
+      provider_key: conn.provider_key,
+      name: conn.name,
+      category: conn.category || 'Connector',
+      icon: conn.icon || '🔌',
+      description: conn.description || '',
+      is_enabled: Boolean(conn.is_enabled),
+      config: {
+        api_key: conn.api_key || '',
+        endpoint_url: conn.endpoint_url || '',
+        auth_token: conn.api_key || '',
+        description: conn.description || ''
+      }
+    };
+
+    let res = await fetch('/api/v1/connectors', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok && res.status === 404) {
+      res = await fetch('/api/v1/connectors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    const json = await res.json();
+    connFeedback.value[conn.provider_key] = '💾 Conexão salva com sucesso!';
+    setTimeout(() => {
+      delete connFeedback.value[conn.provider_key];
+    }, 3500);
+
+    await fetchConnectors();
+    await loadCustomToolsFromBackend();
+  } catch (err: any) {
+    alert(`Erro ao salvar conector: ${err.message}`);
+  }
+}
+
+async function testExistingConnector(conn: any) {
+  connFeedback.value[conn.provider_key] = '⏳ Testando conexão...';
+  try {
+    const res = await fetch('/api/v1/connectors/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider_key: conn.provider_key,
+        testQuery: 'PETR4',
+        config: {
+          endpoint_url: conn.endpoint_url,
+          api_key: conn.api_key,
+          auth_token: conn.api_key
+        }
+      })
+    });
+    const json = await res.json();
+    if (json.success) {
+      connFeedback.value[conn.provider_key] = `🟢 ${json.message || 'Conexão validada!'}`;
+    } else {
+      connFeedback.value[conn.provider_key] = `🔴 ${json.error || 'Falha no teste.'}`;
+    }
+  } catch (err: any) {
+    connFeedback.value[conn.provider_key] = `🔴 Erro: ${err.message}`;
+  }
+}
+
+// =========================================================
 // MEMÓRIA DINÂMICA (SESSIONS)
 // =========================================================
 const memorySessions = ref<any[]>([]);
@@ -1385,79 +1513,6 @@ function exportSessionJson() {
   a.click();
 }
 
-// =========================================================
-// CONECTORES EXTERNOS & IOT
-// =========================================================
-const defaultConnectors = [
-  { provider_key: 'gmail', name: 'Google Gmail', category: 'E-mail', icon: '📧', description: 'Leitura e disparo de e-mails via Gmail API / SMTP.', is_enabled: true, api_key: '', endpoint_url: 'https://gmail.googleapis.com' },
-  { provider_key: 'outlook', name: 'Microsoft Outlook / 365', category: 'E-mail', icon: '📨', description: 'Integração Microsoft Graph para e-mail e calendário.', is_enabled: true, api_key: '', endpoint_url: 'https://graph.microsoft.com/v1.0' },
-  { provider_key: 'whatsapp', name: 'WhatsApp Business / Evolution', category: 'Mensageria', icon: '💬', description: 'Envio e recepção de mensagens via Webhook/API.', is_enabled: true, api_key: '', endpoint_url: '{{BASE_URL}}/api/v1/messaging/whatsapp' },
-  { provider_key: 'telegram', name: 'Telegram Bot API', category: 'Mensageria', icon: '✈️', description: 'Notificações em tempo real e comandos via BotFather.', is_enabled: true, api_key: '', endpoint_url: 'https://api.telegram.org' },
-  { provider_key: 'brapi_b3', name: 'Brapi B3 (Ações & FIIs)', category: 'Finanças', icon: '📈', description: 'Cotações em tempo real, dividendos e indicadores fundamentalistas da B3.', is_enabled: true, api_key: '', endpoint_url: 'https://brapi.dev/api/quote/{{symbol}}' },
-  { provider_key: 'home_assistant', name: 'Home Assistant IoT', category: 'Smart Home', icon: '🏠', description: 'Automação residencial e sensores físicos.', is_enabled: true, api_key: '', endpoint_url: 'http://homeassistant.local:8123/api' }
-];
-
-const connectorsList = ref<any[]>([...defaultConnectors]);
-
-async function fetchConnectors() {
-  try {
-    const res = await fetch('/api/v1/connectors');
-    const json = await res.json();
-    if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-      const map = new Map(defaultConnectors.map((c) => [c.provider_key, { ...c }]));
-      for (const row of json.data) {
-        const cfg = row.config || {};
-        map.set(row.provider_key, {
-          ...(map.get(row.provider_key) || {}),
-          ...row,
-          api_key: row.api_key || cfg.api_key || cfg.auth_token || '',
-          endpoint_url: row.endpoint_url || cfg.endpoint_url || ''
-        });
-      }
-      connectorsList.value = Array.from(map.values());
-    }
-  } catch {}
-}
-
-async function saveConnector(conn: any) {
-  try {
-    const payload = {
-      provider_key: conn.provider_key,
-      name: conn.name,
-      category: conn.category || 'Connector',
-      icon: conn.icon || '🔌',
-      description: conn.description || '',
-      is_enabled: Boolean(conn.is_enabled),
-      config: {
-        api_key: conn.api_key || '',
-        endpoint_url: conn.endpoint_url || '',
-        auth_token: conn.api_key || '',
-        description: conn.description || ''
-      }
-    };
-
-    let res = await fetch('/api/v1/connectors', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok && res.status === 404) {
-      res = await fetch('/api/v1/connectors', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-    }
-
-    const json = await res.json();
-    alert(json.message || 'Conector salvo com sucesso!');
-    await fetchConnectors();
-    await loadCustomToolsFromBackend();
-  } catch (err: any) {
-    alert(`Erro ao salvar conector: ${err.message}`);
-  }
-}
-
 function formatTime(iso: string) {
   try {
     return new Date(iso).toLocaleTimeString('pt-BR');
@@ -1470,20 +1525,24 @@ onMounted(async () => {
   await loadSupportedModels(true);
   await fetchBrainSettings();
   await fetchAgents();
-  await fetchMemorySessions();
   await fetchConnectors();
   await loadCustomToolsFromBackend();
+  await fetchMemorySessions();
 });
 </script>
 
 <style scoped>
+/* =========================================================
+   ESTILOS RESPONSIVOS MODERNOS
+   ========================================================= */
 .settings-layout {
   display: flex;
   min-height: 100vh;
   background: #020617;
   color: #f8fafc;
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
+
 .sidebar {
   width: 270px;
   background: #090f1d;
@@ -1491,7 +1550,9 @@ onMounted(async () => {
   padding: 20px;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
 }
+
 .brand {
   display: flex;
   align-items: center;
@@ -1510,6 +1571,7 @@ onMounted(async () => {
   font-size: 0.72rem;
   color: #64748b;
 }
+
 .nav-menu {
   display: flex;
   flex-direction: column;
@@ -1525,6 +1587,7 @@ onMounted(async () => {
   cursor: pointer;
   font-size: 0.88rem;
   transition: all 0.2s;
+  white-space: nowrap;
 }
 .nav-item:hover,
 .nav-item.active {
@@ -1533,6 +1596,7 @@ onMounted(async () => {
   border-color: rgba(56, 189, 248, 0.3);
   font-weight: 600;
 }
+
 .sidebar-footer {
   margin-top: auto;
   padding-top: 16px;
@@ -1542,18 +1606,23 @@ onMounted(async () => {
   color: #38bdf8;
   text-decoration: none;
   font-size: 0.85rem;
+  display: inline-block;
 }
+
 .content-area {
   flex: 1;
   padding: 32px;
   overflow-y: auto;
+  min-width: 0;
 }
+
 .section-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 20px;
   margin-bottom: 24px;
+  flex-wrap: wrap;
 }
 .section-header h1 {
   margin: 0 0 6px 0;
@@ -1565,6 +1634,7 @@ onMounted(async () => {
   color: #94a3b8;
   font-size: 0.88rem;
 }
+
 .gist-sync-box {
   display: flex;
   flex-direction: column;
@@ -1575,12 +1645,14 @@ onMounted(async () => {
   font-size: 0.72rem;
   color: #94a3b8;
 }
+
 .card {
   background: #0f172a;
   border: 1px solid #1e293b;
   border-radius: 12px;
   padding: 24px;
 }
+
 .form-row {
   display: flex;
   gap: 16px;
@@ -1594,6 +1666,10 @@ onMounted(async () => {
   flex-direction: column;
   gap: 6px;
 }
+.form-group.icon-group {
+  max-width: 80px;
+  min-width: 70px;
+}
 .form-group label {
   font-size: 0.8rem;
   color: #cbd5e1;
@@ -1604,6 +1680,7 @@ onMounted(async () => {
   font-size: 0.72rem;
   margin-left: 6px;
 }
+
 .input-field {
   background: #020617;
   border: 1px solid #334155;
@@ -1611,19 +1688,24 @@ onMounted(async () => {
   padding: 10px 12px;
   border-radius: 8px;
   font-size: 0.88rem;
+  width: 100%;
+  box-sizing: border-box;
 }
+
 .custom-model-box {
   background: rgba(56, 189, 248, 0.08);
   border: 1px dashed #38bdf8;
   padding: 12px;
   border-radius: 8px;
 }
+
 .actions-row {
   display: flex;
   gap: 12px;
   margin-top: 12px;
   flex-wrap: wrap;
 }
+
 .btn-primary {
   background: #0284c7;
   color: white;
@@ -1632,6 +1714,10 @@ onMounted(async () => {
   border-radius: 8px;
   cursor: pointer;
   font-weight: 600;
+  transition: opacity 0.2s;
+}
+.btn-primary:hover {
+  opacity: 0.9;
 }
 .btn-secondary {
   background: #1e293b;
@@ -1673,6 +1759,7 @@ onMounted(async () => {
   border: none;
   cursor: pointer;
 }
+
 .alert-box {
   margin-top: 16px;
   padding: 12px 16px;
@@ -1689,9 +1776,10 @@ onMounted(async () => {
   border: 1px solid #ef4444;
   color: #fca5a5;
 }
+
 .agents-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
   gap: 18px;
 }
 .agent-card {
@@ -1718,15 +1806,18 @@ onMounted(async () => {
   color: #38bdf8;
   padding: 2px 8px;
   border-radius: 12px;
+  font-weight: bold;
 }
 .slug-code {
   font-size: 0.72rem;
   color: #64748b;
+  word-break: break-all;
 }
 .status-dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
 .status-dot.online {
   background: #22c55e;
@@ -1734,6 +1825,7 @@ onMounted(async () => {
 .status-dot.offline {
   background: #64748b;
 }
+
 .agent-desc {
   font-size: 0.82rem;
   color: #94a3b8;
@@ -1766,7 +1858,19 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   margin-top: auto;
+  flex-wrap: wrap;
 }
+
+.connector-feedback-box {
+  font-size: 0.76rem;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+/* Memória */
 .memory-layout {
   display: grid;
   grid-template-columns: 280px 1fr;
@@ -1793,6 +1897,8 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 14px;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 .message-card {
   background: #020617;
@@ -1810,29 +1916,31 @@ onMounted(async () => {
   font-size: 0.75rem;
   color: #38bdf8;
 }
+
+/* Modal */
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(2, 6, 23, 0.85);
+  background: rgba(2, 6, 23, 0.88);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  padding: 20px;
+  padding: 16px;
 }
 .modal-card {
   background: #0f172a;
   border: 1px solid #334155;
   border-radius: 14px;
-  width: 95%;
+  width: 100%;
   max-width: 860px;
-  max-height: 90vh;
+  max-height: 92vh;
   display: flex;
   flex-direction: column;
 }
 .modal-header,
 .modal-footer {
-  padding: 16px 22px;
+  padding: 16px 20px;
   border-bottom: 1px solid #1e293b;
   display: flex;
   justify-content: space-between;
@@ -1847,7 +1955,7 @@ onMounted(async () => {
   background: transparent;
   border: none;
   color: #94a3b8;
-  font-size: 1.2rem;
+  font-size: 1.3rem;
   cursor: pointer;
 }
 .modal-footer {
@@ -1855,9 +1963,10 @@ onMounted(async () => {
   border-bottom: none;
   justify-content: flex-end;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .modal-body {
-  padding: 20px 22px;
+  padding: 18px 20px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1886,9 +1995,19 @@ onMounted(async () => {
   padding: 14px;
   margin-bottom: 14px;
 }
+
+.tools-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .tools-checkbox-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 8px;
 }
 .tool-checkbox-card {
@@ -1896,16 +2015,37 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  padding: 9px 12px;
+  padding: 8px 10px;
   background: #020617;
   border: 1px solid #1e293b;
   border-radius: 8px;
   font-size: 0.8rem;
-  cursor: pointer;
 }
 .tool-checkbox-card.selected {
   border-color: #38bdf8;
-  background: rgba(56, 189, 248, 0.1);
+  background: rgba(56, 189, 248, 0.08);
+}
+.tool-label-click {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+}
+.tool-name-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.tool-actions-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 .tool-badge-mini {
   font-size: 0.65rem;
@@ -1914,9 +2054,24 @@ onMounted(async () => {
   padding: 2px 6px;
   border-radius: 4px;
 }
+.btn-trash-inline {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #f87171;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-trash-inline:hover {
+  background: #ef4444;
+  color: white;
+}
+
 .manual-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 18px;
 }
 .manual-card {
@@ -1929,5 +2084,91 @@ onMounted(async () => {
 .manual-card h3 {
   margin-top: 0;
   color: #38bdf8;
+}
+
+/* Tablets e Telas Médias (Abaixo de 1024px) */
+@media (max-width: 1024px) {
+  .memory-layout {
+    grid-template-columns: 1fr; /* Lista de sessões em cima, mensagens embaixo */
+  }
+}
+
+/* Celulares e Telas Menores (Abaixo de 768px) */
+@media (max-width: 768px) {
+  .settings-layout {
+    flex-direction: column; /* Barra lateral sobe e vira barra superior */
+  }
+
+  .sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid #1e293b;
+    padding: 12px 16px;
+    box-sizing: border-box;
+  }
+
+  .brand {
+    margin-bottom: 10px;
+  }
+
+  .nav-menu {
+    flex-direction: row; /* Botões de navegação viram carrossel horizontal */
+    overflow-x: auto;
+    padding-bottom: 8px;
+    gap: 6px;
+  }
+
+  .nav-item {
+    font-size: 0.78rem;
+    padding: 8px 12px;
+    white-space: nowrap; /* Não quebra linha nos botões de abas */
+  }
+
+  .sidebar-footer {
+    display: none; /* Oculta rodapé da sidebar no mobile para poupar espaço */
+  }
+
+  .content-area {
+    padding: 16px; /* Reduz padding lateral para aproveitar melhor a tela */
+  }
+
+  .section-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .gist-sync-box {
+    align-items: stretch;
+  }
+
+  .form-row {
+    flex-direction: column; /* Inputs lado a lado passam a ficar um abaixo do outro */
+    gap: 0;
+  }
+
+  .form-group {
+    min-width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .agents-grid {
+    grid-template-columns: 1fr; /* Cards de agentes em coluna única no celular */
+  }
+
+  .modal-card,
+  .modal-window {
+    width: 98% !important;
+    max-height: 94vh;
+    padding: 0;
+  }
+
+  .modal-body {
+    padding: 14px;
+  }
+
+  .tools-checkbox-grid {
+    grid-template-columns: 1fr; /* Checkboxes de ferramentas em 1 coluna */
+  }
 }
 </style>
