@@ -15,7 +15,7 @@ export const KNOWN_ENDPOINTS: Record<string, string> = {
 
 export const DEFAULT_MODELS: Record<string, string> = {
   groq: 'llama-3.3-70b-versatile',
-  gemini: 'gemini-2.5-flash',
+  gemini: 'gemini-3.8-flash',
   openai: 'gpt-4o-mini',
   deepseek: 'deepseek-chat',
   openrouter: 'anthropic/claude-3.5-sonnet',
@@ -27,8 +27,7 @@ export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
     { label: 'Llama 3.3 70B Versatile', value: 'llama-3.3-70b-versatile' },
     { label: 'Llama 3.1 8B Instant', value: 'llama-3.1-8b-instant' },
-    { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' },
-    { label: 'Mixtral 8x7B 32k', value: 'mixtral-8x7b-32768' }
+    { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' }
   ],
   openai: [
     { label: '✍️ Inserir ID Manual da OpenAI', value: 'CUSTOM_INPUT' },
@@ -38,9 +37,9 @@ export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string
   ],
   gemini: [
     { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' },
+    { label: 'Gemini 3.8 Flash', value: 'gemini-3.8-flash' },
     { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
-    { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
-    { label: 'Gemini 1.5 Flash', value: 'gemini-1.5-flash' }
+    { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' }
   ],
   deepseek: [
     { label: '✍️ Inserir ID Manual da DeepSeek', value: 'CUSTOM_INPUT' },
@@ -90,7 +89,7 @@ function normalizeModelsCatalog(rawCatalog: any): Record<string, Array<{ label: 
         .filter((item: any) => item && typeof item === 'object' && item.value)
         .map((item: any) => ({
           label: String(item.label || item.value),
-          value: String(item.value)
+          value: String(item.value).replace(/^models\//, '')
         }));
 
       const hasCustom = normalizedList.some((m) => m.value === 'CUSTOM_INPUT');
@@ -323,10 +322,14 @@ export async function updateBrainConfig(req: Request, res: Response) {
         ? KNOWN_ENDPOINTS[normalizedProvider] || KNOWN_ENDPOINTS.groq
         : base_url.trim();
 
+    const cleanModel = (model || DEFAULT_MODELS[normalizedProvider] || 'llama-3.3-70b-versatile')
+      .trim()
+      .replace(/^models\//, '');
+
     const newConfig = {
       agent_name: (agent_name || existingData.agent_name || 'JARVIS').trim(),
       provider: normalizedProvider,
-      model: (model || DEFAULT_MODELS[normalizedProvider] || 'llama-3.3-70b-versatile').trim(),
+      model: cleanModel,
       api_key: finalApiKey,
       base_url: resolvedBaseUrl,
       temperature: Number(temperature ?? existingData.temperature ?? 0.2),
@@ -392,21 +395,48 @@ export async function validateLLMConnection(req: Request, res: Response) {
     }
 
     const rawSelectedModel =
-      model && model !== 'CUSTOM_INPUT' ? String(model).trim() : DEFAULT_MODELS[effectiveProvider];
+      model && model !== 'CUSTOM_INPUT'
+        ? String(model).trim().replace(/^models\//, '')
+        : DEFAULT_MODELS[effectiveProvider];
 
     if (effectiveProvider === 'gemini') {
-      const sanitizedModel =
-        !rawSelectedModel.startsWith('gemini') ||
-        rawSelectedModel.includes('argon') ||
-        rawSelectedModel.includes('3.8') ||
-        rawSelectedModel.includes('2.0')
-          ? 'gemini-2.5-flash'
-          : rawSelectedModel;
+      const requestedModel = rawSelectedModel.startsWith('gemini')
+        ? rawSelectedModel
+        : 'gemini-3.8-flash';
 
-      const testModels = Array.from(new Set([sanitizedModel, 'gemini-2.5-flash', 'gemini-1.5-flash']));
-      let lastErr = '';
+      // 1. Monta a lista priorizando exatamente o modelo escolhido pelo usuário (sem bloquear 3.8!)
+      const candidateModels = Array.from(
+        new Set([requestedModel, 'gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'])
+      );
 
-      for (const m of testModels) {
+      // 2. Consulta dinâmica na Google API (ListModels) para descobrir os modelos reais da chave caso necessário
+      try {
+        const listResp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`,
+          { method: 'GET', signal: AbortSignal.timeout(8000) }
+        );
+        if (listResp.ok) {
+          const listJson: any = await listResp.json();
+          const availableApiModels: string[] = (listJson.models || [])
+            .filter(
+              (m: any) =>
+                Array.isArray(m.supportedGenerationMethods) &&
+                m.supportedGenerationMethods.includes('generateContent')
+            )
+            .map((m: any) => String(m.name || '').replace(/^models\//, ''))
+            .filter((name: string) => name.startsWith('gemini'));
+
+          for (const apiMod of availableApiModels) {
+            if (!candidateModels.includes(apiMod)) {
+              candidateModels.push(apiMod);
+            }
+          }
+        }
+      } catch {}
+
+      let firstModelError = '';
+
+      for (const m of candidateModels) {
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${cleanKey}`;
         const resp = await fetch(geminiUrl, {
           method: 'POST',
@@ -426,13 +456,16 @@ export async function validateLLMConnection(req: Request, res: Response) {
             message: `Conexão com Google Gemini (${m}) validada com sucesso!`
           });
         }
+
         const errBody = await resp.text();
-        lastErr = `HTTP ${resp.status}: ${errBody.slice(0, 180)}`;
+        if (!firstModelError) {
+          firstModelError = `HTTP ${resp.status}: ${errBody.slice(0, 220)}`;
+        }
       }
 
       return res.status(200).json({
         success: false,
-        error: `Falha ao validar Gemini (${sanitizedModel}): ${lastErr}`
+        error: `Falha ao validar Gemini (${requestedModel}): ${firstModelError}`
       });
     }
 
@@ -457,7 +490,7 @@ export async function validateLLMConnection(req: Request, res: Response) {
         ? Array.from(new Set([selectedModel, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant']))
         : [selectedModel];
 
-    let lastErrorMsg = '';
+    let firstErrorMsg = '';
     for (const candidate of candidateModels) {
       const resp = await fetch(`${targetBaseUrl}/chat/completions`, {
         method: 'POST',
@@ -483,12 +516,14 @@ export async function validateLLMConnection(req: Request, res: Response) {
         });
       }
       const errText = await resp.text();
-      lastErrorMsg = `HTTP ${resp.status}: ${errText.slice(0, 180)}`;
+      if (!firstErrorMsg) {
+        firstErrorMsg = `HTTP ${resp.status}: ${errText.slice(0, 220)}`;
+      }
     }
 
     return res.status(200).json({
       success: false,
-      error: `Falha na validação (${effectiveProvider.toUpperCase()} - ${selectedModel}): ${lastErrorMsg}`
+      error: `Falha na validação (${effectiveProvider.toUpperCase()} - ${selectedModel}): ${firstErrorMsg}`
     });
   } catch (error: any) {
     return res.status(200).json({
