@@ -230,7 +230,7 @@ export async function saveConnectorConfig(req: Request, res: Response) {
   try {
     await ensureConnectorsTable();
     const body = req.body || {};
-    const provider_key = body.provider_key || body.slug || body.id;
+    const provider_key = body.provider_key || body.slug || body.id || body.name;
     const name = body.name || body.label || provider_key;
 
     if (!provider_key) {
@@ -241,46 +241,77 @@ export async function saveConnectorConfig(req: Request, res: Response) {
     }
 
     const cleanKey = sanitizeKey(provider_key);
+
+    // Lê o registro atual no banco para NUNCA perder endpoint_url ou api_key já salvos
+    const existingRes = await pool
+      .query('SELECT * FROM external_connectors WHERE LOWER(provider_key) = $1 LIMIT 1;', [cleanKey])
+      .catch(() => ({ rows: [] as any[] }));
+    const existingRow = existingRes.rows[0] || {};
+    const existingCfg =
+      typeof existingRow.config === 'string'
+        ? JSON.parse(existingRow.config || '{}')
+        : existingRow.config || {};
+
     const incomingConfig =
       typeof body.config === 'object' && body.config !== null ? body.config : {};
 
-    const category = body.category || incomingConfig.category || 'Custom Tool';
-    const icon = body.icon || incomingConfig.icon || '🔌';
-    const description = body.description || incomingConfig.description || '';
-    const is_enabled = body.is_enabled !== undefined ? Boolean(body.is_enabled) : true;
+    const category = body.category || incomingConfig.category || existingRow.category || 'Custom Tool';
+    const icon = body.icon || incomingConfig.icon || existingRow.icon || '🔌';
+    const description =
+      body.description ?? incomingConfig.description ?? existingRow.description ?? '';
+    const is_enabled =
+      body.is_enabled !== undefined
+        ? Boolean(body.is_enabled)
+        : existingRow.is_enabled !== undefined
+        ? Boolean(existingRow.is_enabled)
+        : true;
+
+    const newEndpoint = (
+      incomingConfig.endpoint_url ??
+      body.endpoint_url ??
+      existingCfg.endpoint_url ??
+      ''
+    ).trim();
+
+    const newToken = (
+      incomingConfig.auth_token ||
+      incomingConfig.api_key ||
+      body.auth_token ||
+      body.api_key ||
+      existingCfg.auth_token ||
+      existingCfg.api_key ||
+      ''
+    ).trim();
 
     const mergedConfig = {
+      ...existingCfg,
       ...incomingConfig,
-      tool_type: incomingConfig.tool_type || body.tool_type || 'http',
+      tool_type: incomingConfig.tool_type || body.tool_type || existingCfg.tool_type || 'http',
       http_method: (
         incomingConfig.http_method ||
         body.http_method ||
+        existingCfg.http_method ||
         'GET'
       ).toUpperCase(),
-      endpoint_url: (incomingConfig.endpoint_url || body.endpoint_url || '').trim(),
-      auth_token: (
-        incomingConfig.auth_token ||
-        incomingConfig.api_key ||
-        body.auth_token ||
-        body.api_key ||
-        ''
-      ).trim(),
-      api_key: (
-        incomingConfig.api_key ||
-        incomingConfig.auth_token ||
-        body.api_key ||
-        body.auth_token ||
-        ''
-      ).trim(),
+      endpoint_url: newEndpoint,
+      auth_token: newToken,
+      api_key: newToken,
       payload_template:
-        incomingConfig.payload_template || body.payload_template || '',
-      code_snippet: incomingConfig.code_snippet || body.code_snippet || '',
+        incomingConfig.payload_template ??
+        body.payload_template ??
+        existingCfg.payload_template ??
+        '',
+      code_snippet:
+        incomingConfig.code_snippet ??
+        body.code_snippet ??
+        existingCfg.code_snippet ??
+        '',
       description
     };
 
     const result = await pool.query(
       `INSERT INTO external_connectors (provider_key, name, category, icon, description, config, is_enabled, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, NOW())
        ON CONFLICT (provider_key) DO UPDATE SET
          name = EXCLUDED.name,
          category = EXCLUDED.category,
@@ -293,7 +324,6 @@ export async function saveConnectorConfig(req: Request, res: Response) {
       [cleanKey, name, category, icon, description, JSON.stringify(mergedConfig), is_enabled]
     );
 
-    // Se a conexão estava na lista de exclusão prévia, remove do bloqueio para permitir seu uso normal
     try {
       const deletedDefaults = await getDeletedDefaultKeys();
       if (deletedDefaults.includes(cleanKey)) {
