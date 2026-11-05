@@ -1,4 +1,4 @@
-//Motor OpenAI/Groq/Gemini/Ollama e Pipeline de Especialistas
+// Motor OpenAI/Groq/Gemini/Ollama e Pipeline de Especialistas
 // src/services/orchestrator/llmAndPipelineRunner.ts
 import { pool } from '../../config/database.js';
 import OpenAI from 'openai';
@@ -183,6 +183,159 @@ export async function callOpenAICompatibleLLM(options: {
   throw lastError || new Error(`Falha ao comunicar com provedor ${provider.toUpperCase()}`);
 }
 
+export async function executeUniversalApiConnector(
+  connectorSlugOrAgent: string | Record<string, any>,
+  taskArgs: Record<string, any>,
+  userPrompt: string,
+  serverBaseUrl: string
+) {
+  let endpointUrl = '';
+  let httpMethod = 'GET';
+  let authToken = '';
+  let authType = 'bearer';
+  let queryParamKey = 'token';
+  let customHeaders: Record<string, string> = {};
+  let payloadTemplate = '';
+  let connectorName = '';
+
+  // 1. Identifica se recebeu o objeto do Agente ou o slug de uma Tool
+  if (typeof connectorSlugOrAgent === 'object' && connectorSlugOrAgent !== null) {
+    connectorName = connectorSlugOrAgent.name || connectorSlugOrAgent.slug;
+    endpointUrl = connectorSlugOrAgent.endpoint_url || '';
+    httpMethod = (connectorSlugOrAgent.http_method || 'GET').toUpperCase();
+    authToken = (connectorSlugOrAgent.auth_token || connectorSlugOrAgent.api_key || '').trim();
+    payloadTemplate = connectorSlugOrAgent.payload_template || connectorSlugOrAgent.code_snippet || '';
+  } else {
+    const cleanSlug = String(connectorSlugOrAgent).toLowerCase().trim();
+    connectorName = cleanSlug;
+
+    // Busca na tabela external_connectors
+    const connRes = await pool
+      .query(`SELECT * FROM external_connectors WHERE LOWER(provider_key) = $1 LIMIT 1;`, [cleanSlug])
+      .catch(() => ({ rows: [] }));
+
+    if (connRes.rows.length > 0) {
+      const row = connRes.rows[0];
+      const cfg = typeof row.config === 'string' ? JSON.parse(row.config || '{}') : row.config || {};
+      connectorName = row.name || cleanSlug;
+      endpointUrl = cfg.endpoint_url || cfg.base_url || cfg.url || cfg.api_url || '';
+      httpMethod = (cfg.http_method || cfg.method || 'GET').toUpperCase();
+      authToken = (cfg.auth_token || cfg.api_key || cfg.token || '').trim();
+      authType = (cfg.auth_type || 'bearer').toLowerCase();
+      queryParamKey = cfg.query_param_key || 'token';
+      payloadTemplate = cfg.payload_template || '';
+      if (cfg.headers && typeof cfg.headers === 'object') {
+        customHeaders = cfg.headers;
+      }
+    } else {
+      // Busca na tabela ai_agents
+      const agRes = await pool
+        .query(`SELECT * FROM ai_agents WHERE LOWER(slug) = $1 LIMIT 1;`, [cleanSlug])
+        .catch(() => ({ rows: [] }));
+      if (agRes.rows.length > 0) {
+        const ag = agRes.rows[0];
+        connectorName = ag.name || cleanSlug;
+        endpointUrl = ag.endpoint_url || '';
+        httpMethod = (ag.http_method || 'GET').toUpperCase();
+        authToken = (ag.auth_token || ag.api_key || '').trim();
+        payloadTemplate = ag.payload_template || ag.code_snippet || '';
+      }
+    }
+  }
+
+  if (!endpointUrl) {
+    return { error: `Conector ou API "${connectorName}" não possui Endpoint URL configurada.` };
+  }
+
+  // 2. Extração dinâmica de variáveis (query, symbol, ticker, prompt, etc.)
+  const cleanBase = (serverBaseUrl || 'http://localhost:3333').replace(/\/+$/, '');
+  const tickerMatch = String(taskArgs?.symbol || taskArgs?.ticker || userPrompt || '')
+    .toUpperCase()
+    .match(/\b([A-Z]{4}\d{1,2})\b/);
+
+  const dynamicVars: Record<string, string> = {
+    BASE_URL: cleanBase,
+    SERVER_IP: cleanBase,
+    prompt: userPrompt,
+    query: String(taskArgs?.query || taskArgs?.task_details || userPrompt || '').trim(),
+    symbol: String(taskArgs?.symbol || taskArgs?.ticker || (tickerMatch ? tickerMatch[1] : '')).trim()
+  };
+
+  for (const [key, val] of Object.entries(taskArgs || {})) {
+    if (typeof val === 'string' || typeof val === 'number') {
+      dynamicVars[key] = String(val).trim();
+    }
+  }
+
+  // 3. Interpolação de variáveis {{chave}} na URL
+  let hadPlaceholderInUrl = false;
+  let finalUrl = endpointUrl.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, varName) => {
+    const key = varName.trim();
+    if (key !== 'BASE_URL' && key !== 'SERVER_IP') hadPlaceholderInUrl = true;
+    const replacement = dynamicVars[key] ?? dynamicVars[key.toLowerCase()] ?? dynamicVars.query ?? '';
+    return key === 'BASE_URL' || key === 'SERVER_IP' ? replacement : encodeURIComponent(replacement);
+  });
+
+  // Se for GET sem parâmetros na rota e tiver ativo/query, anexa no path
+  if (!hadPlaceholderInUrl && httpMethod === 'GET') {
+    const mainParam = dynamicVars.symbol || taskArgs?.id || taskArgs?.param || '';
+    if (mainParam && !finalUrl.endsWith(mainParam) && !finalUrl.includes('?')) {
+      finalUrl = `${finalUrl.replace(/\/+$/, '')}/${encodeURIComponent(mainParam)}`;
+    }
+  }
+
+  // 4. Injeção universal de autenticação (Headers + Query Parameter)
+  const cleanToken = authToken.replace(/^Bearer\s+/i, '').trim();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    ...customHeaders
+  };
+
+  if (cleanToken) {
+    headers['Authorization'] = `Bearer ${cleanToken}`;
+    if (authType === 'api_key') {
+      headers['x-api-key'] = cleanToken;
+    }
+    const hasTokenInQuery = /[?&](token|apikey|api_key|key)=/i.test(finalUrl);
+    if (!hasTokenInQuery && (authType === 'query_token' || finalUrl.includes('brapi.dev') || !finalUrl.includes('?'))) {
+      finalUrl += `${finalUrl.includes('?') ? '&' : '?'}${encodeURIComponent(queryParamKey)}=${encodeURIComponent(cleanToken)}`;
+    }
+  }
+
+  // 5. Montagem do payload de envio para POST/PUT/PATCH
+  let requestBody: string | undefined = undefined;
+  if (httpMethod !== 'GET' && httpMethod !== 'HEAD') {
+    if (payloadTemplate && payloadTemplate.trim().startsWith('{')) {
+      requestBody = payloadTemplate.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, varName) => {
+        return dynamicVars[varName.trim()] ?? dynamicVars.query ?? '';
+      });
+    } else {
+      requestBody = JSON.stringify({
+        ...taskArgs,
+        query: dynamicVars.query,
+        prompt: userPrompt
+      });
+    }
+  }
+
+  const response = await fetch(finalUrl, {
+    method: httpMethod,
+    headers,
+    body: requestBody,
+    signal: AbortSignal.timeout(25000)
+  });
+
+  const rawData = await response.json().catch(async () => ({ rawText: await response.text() }));
+
+  return {
+    connector: connectorName,
+    httpStatus: response.status,
+    authenticatedWithToken: Boolean(cleanToken),
+    data: rawData
+  };
+}
+
 export async function executeBoundTool(
   toolKey: string,
   args: Record<string, any>,
@@ -224,11 +377,19 @@ export async function executeBoundTool(
     return await executeSshCommand(args?.command || queryValue || 'uptime');
   }
 
+  // Execução via Motor Universal caso seja conector de banco ou API
   const customConn = connectorsMap.get(cleanKey);
-  const cfg = customConn?.config || {};
+  if (customConn || cleanKey.startsWith('brapi')) {
+    return await executeUniversalApiConnector(
+      customConn || cleanKey,
+      args,
+      userPrompt,
+      serverBaseUrl
+    );
+  }
 
+  const cfg = customConn?.config || {};
   const isNativeSpecialized =
-    cleanKey.startsWith('brapi') ||
     cleanKey.includes('home_assistant') ||
     cleanKey.includes('hass') ||
     cleanKey.includes('gmail') ||
@@ -261,68 +422,7 @@ export async function executeBoundTool(
     return await executeSshCommand(cfg.endpoint_url || queryValue || 'uptime');
   }
 
-  const rawEndpoint =
-    cfg.endpoint_url ||
-    customConn?.endpoint_url ||
-    (cleanKey === 'http_request_universal' ? args?.endpoint || args?.url || queryValue : '');
-
-  if (rawEndpoint && String(rawEndpoint).startsWith('http')) {
-    let targetUrl = resolveDynamicUrl(String(rawEndpoint), serverBaseUrl);
-    targetUrl = interpolateApiTemplate(targetUrl, userPrompt, { query: queryValue, ...args });
-
-    const method = String(
-      cfg.http_method || customConn?.http_method || args?.method || 'GET'
-    ).toUpperCase();
-    const headers: Record<string, string> = {
-      Accept: 'application/json',
-      'Content-Type': 'application/json'
-    };
-
-    const token =
-      cfg.auth_token || cfg.api_key || cfg.access_token || customConn?.auth_token;
-    if (token) {
-      const cleanToken = String(token).replace(/^Bearer\s+/i, '').trim();
-      headers['Authorization'] = `Bearer ${cleanToken}`;
-    }
-
-    if (cfg.tool_type === 'mcp' || customConn?.agent_type === 'mcp') {
-      const mcpRes = await fetch(targetUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: Date.now(),
-          method: 'tools/call',
-          params: { name: cleanKey, arguments: { query: queryValue, ...args } }
-        }),
-        signal: AbortSignal.timeout(15000)
-      });
-      return await mcpRes.json().catch(() => ({ status: mcpRes.status }));
-    }
-
-    const fetchInit: RequestInit = { method, headers, signal: AbortSignal.timeout(15000) };
-    if (method !== 'GET' && method !== 'HEAD') {
-      if (cfg.payload_template) {
-        fetchInit.body = interpolateApiTemplate(String(cfg.payload_template), userPrompt, {
-          query: queryValue,
-          ...args
-        });
-      } else {
-        fetchInit.body = JSON.stringify({ query: queryValue, ...args });
-      }
-    }
-
-    const res = await fetch(targetUrl, fetchInit);
-    return await res.json().catch(async () => ({ status: res.status, text: await res.text() }));
-  }
-
-  return await executeProtocolOrIntegration(cleanKey, {
-    protocol: (cleanKey as SupportedProtocolOrPlatform) || 'rest_api',
-    endpoint: args?.endpoint,
-    method: args?.method || 'POST',
-    body: { query: queryValue, ...args },
-    prompt: userPrompt
-  }).catch((err: any) => ({ error: err.message, tool: cleanKey }));
+  return await executeUniversalApiConnector(cleanKey, args, userPrompt, serverBaseUrl);
 }
 
 export async function executeSpecialistPipeline(
@@ -384,11 +484,8 @@ export async function executeSpecialistPipeline(
 
     let stepOutput: any = null;
     const agentType = (currentAgent.agent_type || 'llm').toLowerCase();
-    const promptText =
-      typeof currentPayload === 'string'
-        ? currentPayload
-        : currentPayload?.task_details || currentPayload?.query || userPrompt;
 
+    // ROTA 1: Nó de Código Puro (Script JS Determinístico)
     if (
       agentType === 'code' &&
       (currentAgent.code_snippet || currentAgent.script_code)
@@ -404,45 +501,21 @@ export async function executeSpecialistPipeline(
         activePort = 3333;
       }
       stepOutput = await fn(
-        { ...currentPayload, query: promptText, userPrompt },
+        { ...currentPayload, userPrompt },
         { BASE_URL: serverBaseUrl, PORT: activePort }
       );
-    } else if (
+    }
+    // ROTA 2: Nó Direto de API / Integração Externa (Consumo Universal via executeUniversalApiConnector)
+    else if (
       nonLlmTypes.includes(agentType) ||
       (agentType === 'api' && currentAgent.endpoint_url)
     ) {
-      const rawUrl = resolveDynamicUrl(currentAgent.endpoint_url || '', serverBaseUrl);
-      const targetUrl = interpolateApiTemplate(rawUrl, userPrompt, currentPayload);
-      const protocolToUse = (
-        agentType === 'api' ? 'rest_api' : agentType
-      ) as SupportedProtocolOrPlatform;
-
-      let customBodyParams: Record<string, any> = {};
-      const bodyTemplate = currentAgent.payload_template || currentAgent.code_snippet;
-      if (bodyTemplate && String(bodyTemplate).trim().startsWith('{')) {
-        try {
-          const interpolatedJson = interpolateApiTemplate(
-            String(bodyTemplate),
-            userPrompt,
-            currentPayload
-          );
-          customBodyParams = JSON.parse(interpolatedJson);
-        } catch {
-          customBodyParams = { raw_payload: bodyTemplate };
-        }
-      }
-
-      const rawApiResult = await executeProtocolOrIntegration(currentAgent, {
-        protocol: protocolToUse,
-        endpoint: targetUrl,
-        method: currentAgent.http_method || 'GET',
-        body: {
-          ...(currentAgent.protocol_config || {}),
-          ...currentPayload,
-          ...customBodyParams
-        },
-        prompt: userPrompt
-      });
+      const apiResult = await executeUniversalApiConnector(
+        currentAgent,
+        currentPayload,
+        userPrompt,
+        serverBaseUrl
+      );
 
       const formattingInstruction = (
         currentAgent.response_instruction ||
@@ -453,10 +526,12 @@ export async function executeSpecialistPipeline(
       stepOutput = {
         extractionInstruction:
           formattingInstruction ||
-          'Extraia os dados principais do JSON retornado e apresente ao usuário.',
-        apiResponse: rawApiResult
+          'Utilize exclusivamente os dados retornados em apiResponse para responder com precisão.',
+        apiResponse: apiResult
       };
-    } else {
+    }
+    // ROTA 3: Nó Cognitivo (LLM Especialista) com Tools e APIs Vinculadas
+    else {
       let enabledTools: string[] = [];
       if (Array.isArray(currentAgent.tools)) {
         enabledTools = currentAgent.tools;
@@ -467,6 +542,45 @@ export async function executeSpecialistPipeline(
           enabledTools = [];
         }
       }
+
+      // Pré-execução das APIs vinculadas ao Especialista
+      const internalToolsSlugs = [
+        'save_to_database',
+        'dynamicdatabasetool',
+        'vector_rag',
+        'rag_search',
+        'consultar_base_rag',
+        'execute_ssh_command',
+        'ssh_terminal',
+        'executar_comando_ssh'
+      ];
+
+      const externalApiTools = enabledTools.filter(
+        (t) => !internalToolsSlugs.includes(sanitizeToolName(t))
+      );
+
+      const preFetchedApiData: Record<string, any> = {};
+      for (const apiSlug of externalApiTools) {
+        try {
+          preFetchedApiData[apiSlug] = await executeUniversalApiConnector(
+            apiSlug,
+            currentPayload,
+            userPrompt,
+            serverBaseUrl
+          );
+        } catch (err: any) {
+          preFetchedApiData[apiSlug] = { error: err.message };
+        }
+      }
+
+      const apiContextMessage =
+        Object.keys(preFetchedApiData).length > 0
+          ? `\n\n[DADOS RETORNADOS EM TEMPO REAL PELAS SUAS APIS/TOOLS]:\n${JSON.stringify(
+              preFetchedApiData,
+              null,
+              2
+            )}\nATENÇÃO OBRIGATÓRIA: Responda ao usuário utilizando EXCLUSIVAMENTE os dados reais das APIs acima. NUNCA invente cotações ou dados da sua memória de treinamento.`
+          : '';
 
       const specialistTools: OpenAI.Chat.Completions.ChatCompletionTool[] =
         enabledTools.map((tId: string) => {
@@ -487,11 +601,8 @@ export async function executeSpecialistPipeline(
                 properties: {
                   query: { type: 'string', description: 'Consulta, ticker (ex: PETR4) ou comando principal.' },
                   symbol: { type: 'string', description: 'Código do ativo/ticker da B3 (ex: PETR4, VALE3).' },
-                  action: { type: 'string', description: 'Ação a executar (ex: turn_on, turn_off, toggle, states).' },
-                  entity_id: { type: 'string', description: 'ID da entidade no Home Assistant (ex: light.varanda).' },
-                  to: { type: 'string', description: 'Destinatário.' },
-                  subject: { type: 'string', description: 'Assunto.' },
-                  body: { type: 'string', description: 'Conteúdo.' },
+                  action: { type: 'string', description: 'Ação a executar.' },
+                  entity_id: { type: 'string', description: 'ID da entidade se aplicável.' },
                   task_details: { type: 'string', description: 'Detalhes complementares da tarefa.' }
                 }
               }
@@ -504,7 +615,7 @@ export async function executeSpecialistPipeline(
           role: 'system',
           content: `${
             currentAgent.system_prompt || `Você é o especialista ${currentAgent.name}.`
-          }\nFerramentas habilitadas para você: ${
+          }${apiContextMessage}\nFerramentas habilitadas para você: ${
             enabledTools.length > 0 ? enabledTools.join(', ') : 'Nenhuma'
           }.`
         },
@@ -537,10 +648,10 @@ export async function executeSpecialistPipeline(
           try {
             subArgs = JSON.parse((subCall as any).function?.arguments || '{}');
           } catch {
-            subArgs = { query: promptText };
+            subArgs = { query: userPrompt };
           }
 
-          const toolOutput = await executeBoundTool(subFn, subArgs, promptText, map, serverBaseUrl);
+          const toolOutput = await executeBoundTool(subFn, subArgs, userPrompt, map, serverBaseUrl);
           subToolResults.push({ tool: subFn, output: toolOutput });
         }
 
@@ -555,15 +666,21 @@ export async function executeSpecialistPipeline(
               role: 'user',
               content: `Resultado das Tools executadas:\n${JSON.stringify(
                 subToolResults
-              )}\n\nElabore a resposta final objetiva e estruturada para o usuário.`
+              )}\n\nElabore a resposta final objetiva e estruturada para o usuário baseada nestes dados.`
             }
           ]
         });
 
-        stepOutput =
-          followUpRes?.choices?.[0]?.message?.content || JSON.stringify(subToolResults);
+        stepOutput = {
+          specialist_response: followUpRes?.choices?.[0]?.message?.content || JSON.stringify(subToolResults),
+          tools_executed: subToolResults,
+          pre_fetched_apis: preFetchedApiData
+        };
       } else {
-        stepOutput = specChoice?.content || 'Processado pelo especialista.';
+        stepOutput = {
+          specialist_response: specChoice?.content || 'Processado pelo especialista.',
+          pre_fetched_apis: preFetchedApiData
+        };
       }
     }
 
