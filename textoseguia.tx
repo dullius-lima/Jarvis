@@ -1,0 +1,10 @@
+git status
+
+# 3. Adiciona todos os novos componentes, composables e o App.vue
+git add .
+
+# 4. Registra o commit estruturado
+git commit -m "refactor: modularizacao do App.vue em componentes e composables, telemetria de agentes e bolinhas de memoria"
+
+# 5. Envia as alterações para o repositório remoto
+git push origin main
