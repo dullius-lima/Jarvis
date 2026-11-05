@@ -1,4 +1,5 @@
 // src/services/orchestratorService.ts
+import { interceptAndExecuteTextActions } from './jsonActionInterceptor.js';
 import { pool } from '../config/database.js';
 import OpenAI from 'openai';
 import { searchVectorDocuments, ingestDocumentToRag } from './ragService.js';
@@ -2458,6 +2459,22 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
       finalResponseText =
         secondPass?.choices?.[0]?.message?.content ||
         JSON.stringify(toolOutputsForSynthesis);
+    }
+
+      if (!triggeredSlug || triggeredSlug === 'jarvis_core') {
+      const intercepted = await interceptAndExecuteTextActions({
+        llmText: finalResponseText,
+        userPrompt,
+        sessionId,
+        serverBaseUrl: centralConfig.server_base_url
+      });
+
+      if (intercepted && intercepted.intercepted) {
+        finalResponseText = intercepted.finalText;
+        agentTriggered = intercepted.agentName;
+        triggeredSlug = intercepted.agentSlug;
+        subWorkflowData = intercepted.executionData;
+      }
     }
 
     appendShortTermMemory(sessionId, 'user', userPrompt);
