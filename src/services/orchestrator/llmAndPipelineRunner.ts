@@ -198,85 +198,164 @@ export async function executeUniversalApiConnector(
   let payloadTemplate = '';
   let connectorName = '';
 
-  // 1. Identifica se recebeu o objeto do Agente ou o slug de uma Tool
-  if (typeof connectorSlugOrAgent === 'object' && connectorSlugOrAgent !== null) {
-    connectorName = connectorSlugOrAgent.name || connectorSlugOrAgent.slug;
-    endpointUrl = connectorSlugOrAgent.endpoint_url || '';
-    httpMethod = (connectorSlugOrAgent.http_method || 'GET').toUpperCase();
-    authToken = (connectorSlugOrAgent.auth_token || connectorSlugOrAgent.api_key || '').trim();
-    payloadTemplate = connectorSlugOrAgent.payload_template || connectorSlugOrAgent.code_snippet || '';
-  } else {
-    const cleanSlug = String(connectorSlugOrAgent).toLowerCase().trim();
-    connectorName = cleanSlug;
+  const applyConnectorRow = (row: any) => {
+    const cfg =
+      typeof row.config === 'string'
+        ? JSON.parse(row.config || '{}')
+        : row.config || {};
+    connectorName = row.name || row.provider_key || connectorName;
+    endpointUrl = (
+      cfg.endpoint_url ||
+      row.endpoint_url ||
+      cfg.base_url ||
+      cfg.url ||
+      cfg.api_url ||
+      endpointUrl ||
+      ''
+    ).trim();
+    httpMethod = (
+      cfg.http_method ||
+      row.http_method ||
+      cfg.method ||
+      httpMethod ||
+      'GET'
+    ).toUpperCase();
+    authToken = (
+      cfg.auth_token ||
+      cfg.api_key ||
+      row.api_key ||
+      row.auth_token ||
+      cfg.token ||
+      authToken ||
+      ''
+    ).trim();
+    authType = (cfg.auth_type || 'bearer').toLowerCase();
+    queryParamKey = cfg.query_param_key || 'token';
+    payloadTemplate = cfg.payload_template || row.payload_template || payloadTemplate || '';
+    if (cfg.headers && typeof cfg.headers === 'object') {
+      customHeaders = { ...customHeaders, ...cfg.headers };
+    }
+  };
 
-    // Busca na tabela external_connectors
+  // 1. Identifica se recebeu o objeto do Agente/Conector ou o slug de uma Tool
+  if (typeof connectorSlugOrAgent === 'object' && connectorSlugOrAgent !== null) {
+    applyConnectorRow(connectorSlugOrAgent);
+  }
+
+  const rawSlug =
+    typeof connectorSlugOrAgent === 'string'
+      ? connectorSlugOrAgent
+      : connectorSlugOrAgent?.provider_key ||
+        connectorSlugOrAgent?.slug ||
+        connectorSlugOrAgent?.name ||
+        '';
+  const cleanSlug = sanitizeToolName(rawSlug);
+  if (!connectorName) connectorName = cleanSlug;
+
+  // Sempre confere no PostgreSQL se faltar endpointUrl ou authToken no objeto em memória
+  if (!endpointUrl || !authToken) {
     const connRes = await pool
-      .query(`SELECT * FROM external_connectors WHERE LOWER(provider_key) = $1 LIMIT 1;`, [cleanSlug])
-      .catch(() => ({ rows: [] }));
+      .query(
+        `SELECT * FROM external_connectors 
+         WHERE LOWER(provider_key) = $1 
+            OR LOWER(provider_key) = $2
+            OR LOWER(REPLACE(name, ' ', '_')) = $1
+         ORDER BY updated_at DESC LIMIT 1;`,
+        [cleanSlug, String(rawSlug).toLowerCase().trim()]
+      )
+      .catch(() => ({ rows: [] as any[] }));
 
     if (connRes.rows.length > 0) {
-      const row = connRes.rows[0];
-      const cfg = typeof row.config === 'string' ? JSON.parse(row.config || '{}') : row.config || {};
-      connectorName = row.name || cleanSlug;
-      endpointUrl = cfg.endpoint_url || cfg.base_url || cfg.url || cfg.api_url || '';
-      httpMethod = (cfg.http_method || cfg.method || 'GET').toUpperCase();
-      authToken = (cfg.auth_token || cfg.api_key || cfg.token || '').trim();
-      authType = (cfg.auth_type || 'bearer').toLowerCase();
-      queryParamKey = cfg.query_param_key || 'token';
-      payloadTemplate = cfg.payload_template || '';
-      if (cfg.headers && typeof cfg.headers === 'object') {
-        customHeaders = cfg.headers;
-      }
+      applyConnectorRow(connRes.rows[0]);
     } else {
-      // Busca na tabela ai_agents
       const agRes = await pool
-        .query(`SELECT * FROM ai_agents WHERE LOWER(slug) = $1 LIMIT 1;`, [cleanSlug])
-        .catch(() => ({ rows: [] }));
+        .query(
+          `SELECT * FROM ai_agents WHERE LOWER(slug) = $1 OR LOWER(name) = $2 LIMIT 1;`,
+          [cleanSlug, String(rawSlug).toLowerCase().trim()]
+        )
+        .catch(() => ({ rows: [] as any[] }));
       if (agRes.rows.length > 0) {
-        const ag = agRes.rows[0];
-        connectorName = ag.name || cleanSlug;
-        endpointUrl = ag.endpoint_url || '';
-        httpMethod = (ag.http_method || 'GET').toUpperCase();
-        authToken = (ag.auth_token || ag.api_key || '').trim();
-        payloadTemplate = ag.payload_template || ag.code_snippet || '';
+        applyConnectorRow(agRes.rows[0]);
       }
     }
   }
 
-  if (!endpointUrl) {
-    return { error: `Conector ou API "${connectorName}" não possui Endpoint URL configurada.` };
+  // Fallback caso seja uma tool de cotação/Brapi e a URL tenha ficado em branco
+  if (
+    !endpointUrl &&
+    (cleanSlug.includes('brapi') ||
+      cleanSlug.includes('mercado_de_valores') ||
+      cleanSlug.includes('cotac'))
+  ) {
+    endpointUrl = 'https://brapi.dev/api/quote/{{query}}';
   }
 
-  // 2. Extração dinâmica de variáveis (query, symbol, ticker, prompt, etc.)
+  if (!endpointUrl) {
+    return {
+      error: `Conector ou API "${connectorName}" (${cleanSlug}) não possui Endpoint URL configurada no banco.`
+    };
+  }
+
+  // 2. Extração inteligente de variáveis (Garante que {{query}} e {{symbol}} recebam o Ticker limpo se for API financeira ou parâmetro curto)
   const cleanBase = (serverBaseUrl || 'http://localhost:3333').replace(/\/+$/, '');
-  const tickerMatch = String(taskArgs?.symbol || taskArgs?.ticker || userPrompt || '')
-    .toUpperCase()
-    .match(/\b([A-Z]{4}\d{1,2})\b/);
+  const combinedText = `${taskArgs?.symbol || ''} ${taskArgs?.ticker || ''} ${taskArgs?.query || ''} ${taskArgs?.task_details || ''} ${userPrompt || ''}`;
+  const tickerMatch = combinedText.toUpperCase().match(/\b([A-Z]{4}\d{1,2})\b/);
+  const extractedTicker = tickerMatch ? tickerMatch[1] : '';
+
+  const isFinancialOrQuoteApi =
+    endpointUrl.includes('brapi.dev') ||
+    endpointUrl.includes('/quote/') ||
+    cleanSlug.includes('mercado_de_valores') ||
+    cleanSlug.includes('brapi');
+
+  const rawQueryArg = String(
+    taskArgs?.symbol ||
+      taskArgs?.ticker ||
+      taskArgs?.query ||
+      taskArgs?.param ||
+      taskArgs?.id ||
+      taskArgs?.task_details ||
+      userPrompt ||
+      ''
+  ).trim();
+
+  // Se for API de cotação (ex: /quote/{{query}}) e encontrou um ticker (ex: AZUL4, PETR4), usa o ticker limpo no lugar da frase inteira!
+  const smartQueryVal =
+    isFinancialOrQuoteApi && extractedTicker
+      ? extractedTicker
+      : rawQueryArg;
 
   const dynamicVars: Record<string, string> = {
     BASE_URL: cleanBase,
     SERVER_IP: cleanBase,
     prompt: userPrompt,
-    query: String(taskArgs?.query || taskArgs?.task_details || userPrompt || '').trim(),
-    symbol: String(taskArgs?.symbol || taskArgs?.ticker || (tickerMatch ? tickerMatch[1] : '')).trim()
+    query: smartQueryVal,
+    symbol: extractedTicker || smartQueryVal,
+    ticker: extractedTicker || smartQueryVal
   };
 
   for (const [key, val] of Object.entries(taskArgs || {})) {
-    if (typeof val === 'string' || typeof val === 'number') {
+    if ((typeof val === 'string' || typeof val === 'number') && String(val).trim() !== '') {
+      if ((key === 'query' || key === 'task_details') && isFinancialOrQuoteApi && extractedTicker) {
+        continue;
+      }
       dynamicVars[key] = String(val).trim();
     }
   }
 
-  // 3. Interpolação de variáveis {{chave}} na URL
+  // 3. Interpolação de variáveis {{chave}} na URL (suporta {{query}}, {{symbol}}, {{BASE_URL}} ou qualquer {{var}})
   let hadPlaceholderInUrl = false;
   let finalUrl = endpointUrl.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, varName) => {
     const key = varName.trim();
     if (key !== 'BASE_URL' && key !== 'SERVER_IP') hadPlaceholderInUrl = true;
-    const replacement = dynamicVars[key] ?? dynamicVars[key.toLowerCase()] ?? dynamicVars.query ?? '';
-    return key === 'BASE_URL' || key === 'SERVER_IP' ? replacement : encodeURIComponent(replacement);
+    const replacement =
+      dynamicVars[key] ?? dynamicVars[key.toLowerCase()] ?? dynamicVars.query ?? '';
+    return key === 'BASE_URL' || key === 'SERVER_IP'
+      ? replacement
+      : encodeURIComponent(replacement);
   });
 
-  // Se for GET sem parâmetros na rota e tiver ativo/query, anexa no path
+  // Se for GET sem placeholder {{...}} na URL e tiver parâmetro/ticker, anexa no final do path
   if (!hadPlaceholderInUrl && httpMethod === 'GET') {
     const mainParam = dynamicVars.symbol || taskArgs?.id || taskArgs?.param || '';
     if (mainParam && !finalUrl.endsWith(mainParam) && !finalUrl.includes('?')) {
@@ -284,7 +363,7 @@ export async function executeUniversalApiConnector(
     }
   }
 
-  // 4. Injeção universal de autenticação (Headers + Query Parameter)
+  // 4. Injeção universal de autenticação (Funciona tanto para Bearer Header quanto para ?token= na Query)
   const cleanToken = authToken.replace(/^Bearer\s+/i, '').trim();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -294,12 +373,16 @@ export async function executeUniversalApiConnector(
 
   if (cleanToken) {
     headers['Authorization'] = `Bearer ${cleanToken}`;
-    if (authType === 'api_key') {
-      headers['x-api-key'] = cleanToken;
-    }
+    headers['x-api-key'] = cleanToken;
+
     const hasTokenInQuery = /[?&](token|apikey|api_key|key)=/i.test(finalUrl);
-    if (!hasTokenInQuery && (authType === 'query_token' || finalUrl.includes('brapi.dev') || !finalUrl.includes('?'))) {
-      finalUrl += `${finalUrl.includes('?') ? '&' : '?'}${encodeURIComponent(queryParamKey)}=${encodeURIComponent(cleanToken)}`;
+    if (
+      !hasTokenInQuery &&
+      (authType === 'query_token' || finalUrl.includes('brapi.dev') || httpMethod === 'GET')
+    ) {
+      finalUrl += `${finalUrl.includes('?') ? '&' : '?'}${encodeURIComponent(
+        queryParamKey
+      )}=${encodeURIComponent(cleanToken)}`;
     }
   }
 
@@ -314,6 +397,7 @@ export async function executeUniversalApiConnector(
       requestBody = JSON.stringify({
         ...taskArgs,
         query: dynamicVars.query,
+        symbol: dynamicVars.symbol,
         prompt: userPrompt
       });
     }
@@ -329,7 +413,10 @@ export async function executeUniversalApiConnector(
   const rawData = await response.json().catch(async () => ({ rawText: await response.text() }));
 
   return {
+    success: response.ok,
     connector: connectorName,
+    slug: cleanSlug,
+    calledUrl: finalUrl.replace(/token=[^&]+/i, 'token=***'),
     httpStatus: response.status,
     authenticatedWithToken: Boolean(cleanToken),
     data: rawData
