@@ -104,47 +104,6 @@ function sanitizeKey(rawKey: string): string {
     .replace(/^_+|_+$/g, '');
 }
 
-export async function testConnector(req: Request, res: Response) {
-  const startTime = Date.now();
-  try {
-    const { provider, provider_key, endpoint_url, action, params, auth_token, api_key } = req.body || {};
-    const targetProvider = String(provider || provider_key || '').toLowerCase().trim();
-
-    // Se for do ecossistema Google, não exige endpoint_url manual pois o backend usa OAuth2 interno
-    const isGoogle = targetProvider.includes('gmail') || targetProvider.includes('calendar') || targetProvider.includes('drive');
-
-    if (!isGoogle && !endpoint_url) {
-      return res.status(400).json({
-        success: false,
-        latencyMs: Date.now() - startTime,
-        error: 'Informe uma Endpoint URL para testar a conexão externa.'
-      });
-    }
-
-    const result = await executeExternalConnector({
-      providerKey: targetProvider,
-      action: action || (targetProvider.includes('gmail') ? 'read_inbox' : 'execute'),
-      payload: {
-        ...(params || {}),
-        endpoint: endpoint_url,
-        auth_token: auth_token || api_key
-      }
-    });
-
-    return res.status(200).json({
-      success: true,
-      latencyMs: Date.now() - startTime,
-      data: result
-    });
-  } catch (error: any) {
-    return res.status(400).json({
-      success: false,
-      latencyMs: Date.now() - startTime,
-      error: error.message || 'Falha ao testar conector.'
-    });
-  }
-}
-
 async function ensureConnectorsTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS external_connectors (
@@ -168,7 +127,7 @@ async function ensureConnectorsTable() {
 }
 
 /**
- * Recupera do banco a lista de conectores padrão que o usuário optou por excluir
+ * Recupera do banco a lista de conectores padrão excluídos pelo usuário
  */
 async function getDeletedDefaultKeys(): Promise<string[]> {
   try {
@@ -187,7 +146,7 @@ async function getDeletedDefaultKeys(): Promise<string[]> {
 }
 
 // ============================================================================
-// 1. LISTAR CONECTORES (Catálogo Dinâmico sem ressuscitar conexões excluídas)
+// 1. LISTAR CONECTORES
 // ============================================================================
 export async function listConnectors(_req: Request, res: Response) {
   try {
@@ -197,12 +156,11 @@ export async function listConnectors(_req: Request, res: Response) {
     const result = await pool.query('SELECT * FROM external_connectors ORDER BY updated_at DESC;');
     const savedMap = new Map(result.rows.map((r: any) => [sanitizeKey(r.provider_key), r]));
 
-    // Mescla apenas os conectores padrão que NÃO foram excluídos pelo usuário
     const merged: any[] = [];
     for (const def of DEFAULT_CONNECTORS) {
       const defKey = sanitizeKey(def.provider_key);
       if (deletedDefaults.includes(defKey)) {
-        continue; // Ignora conector excluído permanentemente
+        continue;
       }
 
       const saved = savedMap.get(defKey);
@@ -237,7 +195,6 @@ export async function listConnectors(_req: Request, res: Response) {
       }
     }
 
-    // Acrescenta todas as novas conexões e custom tools criadas pelo usuário
     for (const [, custom] of savedMap) {
       const cfg = custom.config || {};
       merged.push({
@@ -263,13 +220,13 @@ export async function listConnectors(_req: Request, res: Response) {
 }
 
 // ============================================================================
-// 2. CRIAR OU ATUALIZAR UMA CONEXÃO / TOOL (Compatível com PUT e POST)
+// 2. CRIAR OU ATUALIZAR UMA CONEXÃO / TOOL
 // ============================================================================
 export async function saveConnectorConfig(req: Request, res: Response) {
   try {
     await ensureConnectorsTable();
     const body = req.body || {};
-    const provider_key = body.provider_key || body.slug || body.id || body.name;
+    const provider_key = body.provider_key || body.provider || body.slug || body.id || body.name;
     const name = body.name || body.label || provider_key;
 
     if (!provider_key) {
@@ -281,7 +238,6 @@ export async function saveConnectorConfig(req: Request, res: Response) {
 
     const cleanKey = sanitizeKey(provider_key);
 
-    // Lê o registro atual no banco para NUNCA perder endpoint_url ou api_key já salvos
     const existingRes = await pool
       .query('SELECT * FROM external_connectors WHERE LOWER(provider_key) = $1 LIMIT 1;', [cleanKey])
       .catch(() => ({ rows: [] as any[] }));
@@ -386,11 +342,10 @@ export async function saveConnectorConfig(req: Request, res: Response) {
   }
 }
 
-// Alias para compatibilidade com rotas que chamam saveConnector
 export const saveConnector = saveConnectorConfig;
 
 // ============================================================================
-// 3. TESTAR CONEXÃO / TOOL EM TEMPO REAL
+// 3. TESTAR CONEXÃO / TOOL EM TEMPO REAL (UNIFICADO)
 // ============================================================================
 export async function testExternalConnector(req: Request, res: Response) {
   const startTime = Date.now();
@@ -399,13 +354,57 @@ export async function testExternalConnector(req: Request, res: Response) {
     const cfg = typeof body.config === 'object' && body.config !== null ? body.config : {};
     const testQuery = String(body.testQuery || body.query || 'PETR4').trim();
 
-    const providerKey = sanitizeKey(body.provider_key || cfg.provider_key || '');
+    // Aceita tanto provider_key quanto provider (enviado por cURL ou frontend)
+    const providerKey = sanitizeKey(body.provider_key || body.provider || cfg.provider_key || '');
     const rawUrl = String(
       cfg.endpoint_url || body.endpoint_url || cfg.base_url || ''
     ).trim();
     const apiKey = String(
       cfg.auth_token || cfg.api_key || body.api_key || body.auth_token || ''
     ).trim();
+
+    // 3.0 Ecossistema Google (Gmail, Calendar, Drive) via OAuth2 Permanente
+    const isGoogle =
+      providerKey.includes('gmail') ||
+      providerKey.includes('calendar') ||
+      providerKey.includes('drive');
+
+    if (isGoogle) {
+      const currentAction =
+        body.action ||
+        (providerKey.includes('gmail')
+          ? 'read_inbox'
+          : providerKey.includes('calendar')
+          ? 'list_events'
+          : 'list_files');
+
+      const result = await executeExternalConnector({
+        providerKey,
+        action: currentAction,
+        payload: {
+          ...(body.params || {}),
+          auth_token: apiKey,
+          endpoint: rawUrl
+        }
+      });
+
+      if (providerKey) {
+        await pool
+          .query(
+            `UPDATE external_connectors SET last_tested_at = NOW() WHERE LOWER(provider_key) = $1;`,
+            [providerKey]
+          )
+          .catch(() => {});
+      }
+
+      return res.status(200).json({
+        success: true,
+        status: 200,
+        latencyMs: Date.now() - startTime,
+        message: `🟢 Google Workspace [${providerKey}] validado com sucesso via OAuth2 permanente!`,
+        data: result
+      });
+    }
 
     // 3.1 Teste específico do Telegram Bot
     if (providerKey === 'telegram' || rawUrl.includes('api.telegram.org')) {
@@ -473,7 +472,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.2-B Teste específico do Home Assistant (GET /api/ com Bearer Token)
+    // 3.2-B Teste específico do Home Assistant
     if (
       providerKey === 'home_assistant' ||
       providerKey.includes('hass') ||
@@ -509,7 +508,7 @@ export async function testExternalConnector(req: Request, res: Response) {
           success: false,
           status: haRes.status,
           latencyMs: Date.now() - startTime,
-          error: `Home Assistant retornou HTTP ${haRes.status} em ${testHaUrl}. Verifique se o IP/Porta está acessível pela VM e se o Token é válido.`
+          error: `Home Assistant retornou HTTP ${haRes.status} em ${testHaUrl}. Verifique o IP/Porta e Token.`
         });
       }
 
@@ -597,6 +596,9 @@ export async function testExternalConnector(req: Request, res: Response) {
   }
 }
 
+// Garante compatibilidade tanto para quem importa testExternalConnector quanto testConnector
+export const testConnector = testExternalConnector;
+
 // ============================================================================
 // 4. EXCLUIR CONEXÃO PERMANENTEMENTE E LIMPAR VÍNCULOS DOS SUBAGENTES
 // ============================================================================
@@ -613,7 +615,6 @@ export async function deleteExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 1. Remove da tabela external_connectors (busca por provider_key)
     const delRes = await pool.query(
       `DELETE FROM external_connectors 
        WHERE LOWER(provider_key) = $1 
@@ -621,7 +622,6 @@ export async function deleteExternalConnector(req: Request, res: Response) {
       [cleanKey]
     );
 
-    // 2. Grava na lista de exclusões permanentes para nunca recriar em DEFAULT_CONNECTORS
     const deletedDefaults = await getDeletedDefaultKeys();
     if (!deletedDefaults.includes(cleanKey)) {
       deletedDefaults.push(cleanKey);
@@ -633,7 +633,6 @@ export async function deleteExternalConnector(req: Request, res: Response) {
       );
     }
 
-    // 3. Remove essa conexão do array JSONB `tools` de todos os subagentes cadastrados
     await pool
       .query(
         `UPDATE ai_agents
@@ -663,7 +662,6 @@ export async function deleteExternalConnector(req: Request, res: Response) {
   }
 }
 
-// Alias para compatibilidade com rotas que chamam deleteConnector
 export const deleteConnector = deleteExternalConnector;
 
 export default {
@@ -671,6 +669,7 @@ export default {
   saveConnectorConfig,
   saveConnector,
   testExternalConnector,
+  testConnector,
   deleteExternalConnector,
   deleteConnector
 };
