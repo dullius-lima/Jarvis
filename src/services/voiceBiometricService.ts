@@ -1,101 +1,154 @@
-import { query } from '../database/databaseSetup.js';
+// src/services/voiceBiometricService.ts
+import { pool } from '../config/database.js';
 
 export interface VoiceProfile {
   id?: number;
   name: string;
   role: 'admin' | 'family' | 'guest';
   pitch_hz: number;
-  energy_pattern: number[];
+  energy_avg: number;
   samples_count: number;
-  created_at?: Date;
 }
 
-// 1. Garante a tabela de perfis de voz no PostgreSQL
+// 1. Cria e alinha a tabela de perfis de voz da família no PostgreSQL
 export async function initVoiceBiometricsSchema(): Promise<void> {
-  await query(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS family_voice_profiles (
       id SERIAL PRIMARY KEY,
       name VARCHAR(100) UNIQUE NOT NULL,
       role VARCHAR(50) DEFAULT 'family',
       pitch_hz NUMERIC(8, 2) NOT NULL,
-      energy_pattern JSONB DEFAULT '[]'::jsonb,
+      energy_avg NUMERIC(8, 4) DEFAULT 0.05,
       samples_count INT DEFAULT 1,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
 }
 
-// 2. Extrai características acústicas fundamentais do áudio Base64
-export function extractAcousticFeatures(audioBase64: string): { pitchHz: number; energy: number } {
+// 2. Extrai frequência (Pitch Hz) e Energia do pacote enviado pelo frontend ou do buffer PCM
+export function extractAcousticFeatures(audioPayload: string): { pitchHz: number; energy: number } {
   try {
-    const buffer = Buffer.from(audioBase64.replace(/^data:audio\/\w+;base64,/, ''), 'base64');
-    let zeroCrossings = 0;
-    let totalEnergy = 0;
-    
-    // Análise rápida nos bytes PCM do buffer
-    const step = 2;
-    for (let i = 0; i < buffer.length - step; i += step) {
-      const val1 = buffer.readInt16LE(i);
-      const val2 = buffer.readInt16LE(i + step);
-      if ((val1 >= 0 && val2 < 0) || (val1 < 0 && val2 >= 0)) {
-        zeroCrossings++;
+    // Se o frontend enviou o cabeçalho de telemetria acústica: "PITCH:125.4|ENERGY:0.08|DATA:..."
+    const pitchMatch = audioPayload.match(/PITCH:([0-9.]+)/);
+    const energyMatch = audioPayload.match(/ENERGY:([0-9.]+)/);
+    if (pitchMatch && pitchMatch[1]) {
+      const p = parseFloat(pitchMatch[1]);
+      const e = energyMatch && energyMatch[1] ? parseFloat(energyMatch[1]) : 0.05;
+      if (p > 60 && p < 450) {
+        return { pitchHz: p, energy: e };
       }
-      totalEnergy += Math.abs(val1);
     }
 
-    const estimatedPitch = Math.max(85, Math.min(300, (zeroCrossings / (buffer.length / 16000)) * 0.5));
-    const normalizedEnergy = totalEnergy / (buffer.length / 2);
+    // Fallback: análise direta nos bytes do buffer de áudio
+    const cleanB64 = audioPayload.replace(/^.*base64,/, '');
+    const buffer = Buffer.from(cleanB64, 'base64');
+    let zeroCrossings = 0;
+    let sumAbs = 0;
 
-    return { pitchHz: estimatedPitch, energy: normalizedEnergy };
+    for (let i = 44; i < buffer.length - 2; i += 2) {
+      const s1 = buffer.readInt16LE(i);
+      const s2 = buffer.readInt16LE(i + 2);
+      if ((s1 >= 0 && s2 < 0) || (s1 < 0 && s2 >= 0)) zeroCrossings++;
+      sumAbs += Math.abs(s1);
+    }
+
+    const durationSec = Math.max(0.5, buffer.length / 32000);
+    const estimatedPitch = Math.max(85, Math.min(340, (zeroCrossings / durationSec) * 0.45));
+    const energy = Math.min(1, sumAbs / Math.max(1, (buffer.length / 2) * 32768));
+
+    return { pitchHz: Number(estimatedPitch.toFixed(2)), energy: Number(energy.toFixed(4)) };
   } catch {
-    return { pitchHz: 130.0, energy: 0.5 };
+    return { pitchHz: 0, energy: 0 };
   }
 }
 
-// 3. Identifica qual membro da família está falando
-export async function identifySpeaker(audioBase64?: string): Promise<{ identified: boolean; name: string; role: string }> {
+// 3. Identifica quem da família está falando
+export async function identifySpeaker(audioPayload?: string): Promise<{
+  identified: boolean;
+  ambiguous?: boolean;
+  candidates?: string[];
+  name: string;
+  role: string;
+  measuredPitchHz?: number;
+}> {
   await initVoiceBiometricsSchema();
-  if (!audioBase64 || audioBase64.length < 500) {
+
+  if (!audioPayload || audioPayload.length < 15) {
     return { identified: false, name: 'Desconhecido', role: 'guest' };
   }
 
-  const { pitchHz } = extractAcousticFeatures(audioBase64);
-  const res = await query('SELECT name, role, pitch_hz FROM family_voice_profiles');
-  
+  const { pitchHz, energy } = extractAcousticFeatures(audioPayload);
+  if (!pitchHz || pitchHz < 65) {
+    return { identified: false, name: 'Desconhecido', role: 'guest' };
+  }
+
+  const res = await pool.query('SELECT name, role, pitch_hz, energy_avg FROM family_voice_profiles;');
   if (!res.rows || res.rows.length === 0) {
-    return { identified: false, name: 'Desconhecido', role: 'guest' };
+    return { identified: false, name: 'Desconhecido', role: 'guest', measuredPitchHz: pitchHz };
   }
 
-  let bestMatch = null;
-  let minDiff = 9999;
+  // Calcula a distância acústica para cada pessoa cadastrada na casa
+  const ranked = res.rows
+    .map((row: any) => {
+      const pitchDiff = Math.abs(Number(row.pitch_hz) - pitchHz);
+      const energyDiff = Math.abs(Number(row.energy_avg || 0.05) - energy) * 120;
+      const score = pitchDiff + energyDiff;
+      return { name: row.name, role: row.role, pitchDiff, score };
+    })
+    .sort((a, b) => a.score - b.score);
 
-  for (const profile of res.rows) {
-    const diff = Math.abs(Number(profile.pitch_hz) - pitchHz);
-    if (diff < minDiff) {
-      minDiff = diff;
-      bestMatch = profile;
-    }
+  const best = ranked[0];
+  const second = ranked[1];
+
+  // Se houver duas pessoas da família com tom de voz muito parecido (ex: esposa e mãe)
+  if (best && second && best.pitchDiff <= 24 && Math.abs(best.score - second.score) < 8) {
+    return {
+      identified: false,
+      ambiguous: true,
+      candidates: [best.name, second.name],
+      name: 'Desconhecido',
+      role: 'family',
+      measuredPitchHz: pitchHz
+    };
   }
 
-  // Tolerância de dispersão de pitch para reconhecimento seguro
-  if (bestMatch && minDiff <= 35) {
-    return { identified: true, name: bestMatch.name, role: bestMatch.role };
+  // Se a diferença de frequência estiver dentro da margem daquela pessoa (<= 26 Hz)
+  if (best && best.pitchDiff <= 26) {
+    return {
+      identified: true,
+      name: best.name,
+      role: best.role,
+      measuredPitchHz: pitchHz
+    };
   }
 
-  return { identified: false, name: 'Desconhecido', role: 'guest' };
+  return { identified: false, name: 'Desconhecido', role: 'guest', measuredPitchHz: pitchHz };
 }
 
-// 4. Cadastra ou atualiza o perfil de voz de uma pessoa da família
-export async function enrollSpeakerVoice(name: string, audioBase64: string, role: 'admin' | 'family' = 'family'): Promise<void> {
+// 4. Salva ou refina a voz da pessoa da família no PostgreSQL
+export async function enrollSpeakerVoice(
+  name: string,
+  audioPayload: string,
+  role: 'admin' | 'family' = 'family'
+): Promise<{ pitchHz: number; samplesCount: number }> {
   await initVoiceBiometricsSchema();
-  const { pitchHz } = extractAcousticFeatures(audioBase64);
+  const { pitchHz, energy } = extractAcousticFeatures(audioPayload);
+  const validPitch = pitchHz > 65 ? pitchHz : 135.0;
 
-  await query(`
-    INSERT INTO family_voice_profiles (name, role, pitch_hz, samples_count)
-    VALUES ($1, $2, $3, 1)
-    ON CONFLICT (name) DO UPDATE SET
-      pitch_hz = ((family_voice_profiles.pitch_hz * family_voice_profiles.samples_count) + EXCLUDED.pitch_hz) / (family_voice_profiles.samples_count + 1),
-      samples_count = family_voice_profiles.samples_count + 1,
-      updated_at = CURRENT_TIMESTAMP;
-  `, [name.trim(), role, pitchHz]);
+  const result = await pool.query(
+    `INSERT INTO family_voice_profiles (name, role, pitch_hz, energy_avg, samples_count)
+     VALUES ($1, $2, $3, $4, 1)
+     ON CONFLICT (name) DO UPDATE SET
+       pitch_hz = ((family_voice_profiles.pitch_hz * family_voice_profiles.samples_count) + EXCLUDED.pitch_hz) / (family_voice_profiles.samples_count + 1),
+       energy_avg = ((family_voice_profiles.energy_avg * family_voice_profiles.samples_count) + EXCLUDED.energy_avg) / (family_voice_profiles.samples_count + 1),
+       samples_count = family_voice_profiles.samples_count + 1,
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING pitch_hz, samples_count;`,
+    [name.trim(), role, validPitch, energy || 0.05]
+  );
+
+  return {
+    pitchHz: Number(result.rows[0]?.pitch_hz || validPitch),
+    samplesCount: Number(result.rows[0]?.samples_count || 1)
+  };
 }
