@@ -193,7 +193,8 @@ export function resolveProviderCredentials(
       : 'gpt-4o-mini';
 
   if (p === 'groq' && (model.includes('gemini') || model.startsWith('gpt-4'))) {
-    model = 'llama-3.3-70b-versatile';
+      model = 'openai/gpt-oss-120b';
+    }
   } else if (
     p === 'gemini' &&
     (!model.startsWith('gemini') || model.includes('argon') || model.includes('3.8'))
