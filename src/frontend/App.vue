@@ -38,7 +38,7 @@
 
     <!-- 2. ECOSSISTEMA PRINCIPAL 3D MINIMALISTA -->
     <template v-else>
-      <!-- TOPO MINIMALISTA COM ÍCONES PEQUENOS DE BORDAS CURVAS -->
+      <!-- TOPO MINIMALISTA COM ÍCONES PEQUENOS E BORDAS CURVAS -->
       <header class="minimal-top-bar">
         <div class="brand-cluster">
           <div class="brand-row">
@@ -208,7 +208,7 @@
               @keydown="handleTextareaKeydown"
               @input="adjustTextareaHeight"
               rows="1"
-              placeholder="Mensagem para o JARVIS..."
+              placeholder="Digite ou fale com JARVIS..."
               class="dock-textarea"
               :disabled="isProcessing"
             ></textarea>
@@ -309,7 +309,6 @@ function adjustTextareaHeight() {
   });
 }
 
-// No PC: Enter envia e Shift+Enter quebra linha. No Celular: Enter quebra linha naturalmente.
 function handleTextareaKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     const isMobileDevice = window.innerWidth < 768 || 'ontouchstart' in window;
@@ -321,7 +320,7 @@ function handleTextareaKeydown(e: KeyboardEvent) {
 }
 
 // ============================================================================
-// 5. MOTOR DE VOZ COMPLETO: RESPOSTA AO CHAMAR "JARVIS" + STT + WHISPER + TTS
+// 5. MOTOR DE VOZ: RESPOSTA VERBAL + STT + WHISPER COM FALLBACK TRANSPARENTE
 // ============================================================================
 const isJarvisAwake = ref<boolean>(false);
 const isJarvisSpeaking = ref<boolean>(false);
@@ -377,8 +376,7 @@ async function ensureMicrophonePermission(): Promise<boolean> {
       return true;
     }
   } catch (err) {
-    console.warn('Permissão de áudio bloqueada:', err);
-    voiceStatusText.value = '⚠️ Abra via Chrome (https) para liberar o microfone';
+    console.warn('Microfone não acessível:', err);
     return false;
   }
   return false;
@@ -396,7 +394,7 @@ async function startWhisperFallbackRecording() {
       isRecordingAudio.value = false;
       if (audioChunks.length === 0 || promptText.value.trim().length > 1) return;
 
-      voiceStatusText.value = '⚡ Processando voz...';
+      voiceStatusText.value = '⚡ Processando áudio...';
       const blob = new Blob(audioChunks, { type: 'audio/webm' });
       const reader = new FileReader();
       reader.readAsDataURL(blob);
@@ -484,7 +482,6 @@ function initSTT() {
         adjustTextareaHeight();
         voiceStatusText.value = `🎙️ "${afterWake}"`;
       } else {
-        // Chamou apenas "Jarvis" ou "Oi Jarvis": responde verbalmente!
         speechAccumulatedBuffer = '';
         promptText.value = '';
         const greeting = 'Sim, senhor? Estou ouvindo.';
@@ -571,9 +568,8 @@ async function onJarvisCoreClick() {
   playJarvisChime('wake');
   const hasPerm = await ensureMicrophonePermission();
   if (!hasPerm) {
-    const msg = 'Sim, senhor? Para usar a voz no celular, abra pelo Chrome em https://163.176.111.18 ou digite abaixo.';
-    lastResponse.value = { agent: 'JARVIS', text: msg, executionTimeMs: 0 };
-    speakJarvisResponse('Sim, senhor? Estou pronto.');
+    voiceStatusText.value = '⚠️ Microfone inacessível no app';
+    speakJarvisResponse('Sim, senhor? Digite sua mensagem abaixo ou abra pelo navegador.');
     return;
   }
 
@@ -600,7 +596,7 @@ async function speakJarvisResponse(rawText: string, onDone?: () => void) {
   isJarvisSpeaking.value = true;
 
   const cleanText = rawText
-    .replace(/```[\s\S]*?```/g, 'bloco de código na tela.')
+    .replace(/```[\s\S]*?```/g, 'bloco de código.')
     .replace(/[*#_`~>|]/g, '')
     .trim();
 
@@ -612,7 +608,6 @@ async function speakJarvisResponse(rawText: string, onDone?: () => void) {
     if (onDone) onDone();
   };
 
-  // 1. Tenta o sintetizador neural do backend (/api/v1/audio/speak)
   try {
     const res = await fetch('/api/v1/audio/speak', {
       method: 'POST',
@@ -629,7 +624,6 @@ async function speakJarvisResponse(rawText: string, onDone?: () => void) {
     }
   } catch {}
 
-  // 2. Fallback para o sintetizador nativo do navegador
   if ('speechSynthesis' in window) {
     window.speechSynthesis.cancel();
     setTimeout(() => {
@@ -656,7 +650,7 @@ function stopAllAudio() {
 }
 
 // ============================================================================
-// 6. GLOBO 3D REALISTA DE ALTA DEFINIÇÃO DO JARVIS + GRAFO DE AGENTES
+// 6. GLOBO 3D REALISTA DO JARVIS + GRAFO DE AGENTES SEM COLISÃO
 // ============================================================================
 const rotationY = ref<number>(0);
 const rotationX = ref<number>(0.22);
@@ -672,7 +666,6 @@ let renderedAgentsHitbox: Array<{ x: number; y: number; r: number; agent: any }>
 let renderedSubNodesHitbox: Array<{ x: number; y: number; r: number; node: any }> = [];
 let renderedMemoriesHitbox: Array<{ x: number; y: number; r: number; mem: any }> = [];
 
-// Malha Geodésica Fibonacci Pré-Calculada para o Globo 3D Realista
 const GLOBE_NODES_COUNT = 110;
 const globeFibonacciNodes: Array<{ x: number; y: number; z: number; pulseOffset: number }> = [];
 const goldenRatio = (1 + Math.sqrt(5)) / 2;
@@ -749,10 +742,9 @@ function startNeuralCanvasLoop() {
 
     const isMobile = width < 768;
     const cx = width * 0.5;
-    const cy = height * (isMobile ? 0.45 : 0.48);
+    const cy = height * (isMobile ? 0.44 : 0.48);
     const fov = isMobile ? 540 : 680;
 
-    // Fundo Espacial Profundo com Iluminação Central
     const bgGrad = ctx.createRadialGradient(cx, cy, 5, cx, cy, Math.max(width, height) * 0.72);
     bgGrad.addColorStop(0, '#0a192f');
     bgGrad.addColorStop(0.5, '#040914');
@@ -762,13 +754,12 @@ function startNeuralCanvasLoop() {
 
     const isActiveState = isJarvisAwake.value || isJarvisSpeaking.value || isProcessing.value;
     time += isActiveState ? 0.036 : 0.014;
-    if (!isDragging) rotationY.value += isActiveState ? 0.006 : 0.0032;
+    if (!isDragging) rotationY.value += isActiveState ? 0.005 : 0.0028;
 
-    const maxSafeRadius = Math.max(95, Math.min(width * 0.5 - (isMobile ? 34 : 65), height * 0.43 - (isMobile ? 38 : 60)));
-    // Globo do JARVIS maior e mais imponente no centro
-    const coreRadius = Math.min(maxSafeRadius * 0.44, isMobile ? 58 : 88);
-    const agentOrbitRadius = Math.min(maxSafeRadius * 0.96, isMobile ? 132 : 240);
-    const sharedNodeOrbitRadius = Math.min(maxSafeRadius * 1.22, isMobile ? 160 : 315);
+    const maxSafeRadius = Math.max(95, Math.min(width * 0.5 - (isMobile ? 30 : 65), height * 0.43 - (isMobile ? 35 : 60)));
+    const coreRadius = Math.min(maxSafeRadius * 0.42, isMobile ? 54 : 85);
+    const agentOrbitRadius = Math.min(maxSafeRadius * 0.98, isMobile ? 138 : 245);
+    const sharedNodeOrbitRadius = Math.min(maxSafeRadius * 1.25, isMobile ? 168 : 325);
 
     const voicePulse = isJarvisSpeaking.value
       ? 1 + Math.sin(time * 8) * 0.09 + Math.cos(time * 13) * 0.05
@@ -779,11 +770,7 @@ function startNeuralCanvasLoop() {
     const effectiveCoreR = coreRadius * voicePulse;
     const screenCoreR = effectiveCoreR * cameraZoom.value;
 
-    // ========================================================================
-    // 1. GLOBO 3D VOLUMÉTRICO REALISTA DO JARVIS (COM PROFUNDIDADE Z-BUFFER)
-    // ========================================================================
-
-    // 1.1 Aura Externa Bioluminescente
+    // GLOBO 3D VOLUMÉTRICO REALISTA
     ctx.save();
     const outerHalo = ctx.createRadialGradient(cx, cy, screenCoreR * 0.1, cx, cy, screenCoreR * 1.85);
     if (isJarvisAwake.value) {
@@ -805,7 +792,7 @@ function startNeuralCanvasLoop() {
     ctx.fill();
     ctx.restore();
 
-    // 1.2 Esfera de Vidro Escuro / Fresnel 3D Base
+    // Esfera 3D Base
     ctx.save();
     const sphereGrad = ctx.createRadialGradient(
       cx - screenCoreR * 0.3,
@@ -825,10 +812,10 @@ function startNeuralCanvasLoop() {
     ctx.fill();
     ctx.restore();
 
-    // 1.3 Anéis Giroscópicos 3D Inclinados ao redor do Globo
+    // Anéis Giroscópicos
     const gyroConfigs = [
-      { tiltX: 0.65, tiltZ: 0.3, radiusMult: 1.26, speed: 0.7, dash: [8, 6], color: '#38bdf8' },
-      { tiltX: -0.55, tiltZ: -0.45, radiusMult: 1.38, speed: -0.5, dash: [18, 10, 4, 10], color: '#0ea5e9' },
+      { tiltX: 0.65, tiltZ: 0.3, radiusMult: 1.25, speed: 0.7, dash: [8, 6], color: '#38bdf8' },
+      { tiltX: -0.55, tiltZ: -0.45, radiusMult: 1.36, speed: -0.5, dash: [18, 10, 4, 10], color: '#0ea5e9' },
       { tiltX: 0.18, tiltZ: 0.85, radiusMult: 1.15, speed: 0.9, dash: [4, 8], color: '#22d3ee' }
     ];
 
@@ -836,7 +823,7 @@ function startNeuralCanvasLoop() {
       ctx.save();
       ctx.strokeStyle = gyro.color;
       ctx.lineWidth = isActiveState ? 1.5 : 1.1;
-      ctx.globalAlpha = isActiveState ? 0.78 : 0.48;
+      ctx.globalAlpha = isActiveState ? 0.75 : 0.45;
       ctx.setLineDash(gyro.dash);
       ctx.beginPath();
       const ringR = effectiveCoreR * gyro.radiusMult;
@@ -853,47 +840,23 @@ function startNeuralCanvasLoop() {
       ctx.restore();
     });
 
-    // 1.4 Onda de Frequência Reativa à Voz ao Redor do Globo
-    ctx.save();
-    ctx.strokeStyle = isJarvisAwake.value ? '#7dd3fc' : '#38bdf8';
-    ctx.lineWidth = isActiveState ? 1.8 : 1.0;
-    ctx.globalAlpha = isActiveState ? 0.85 : 0.35;
-    ctx.beginPath();
-    const waveSegments = 64;
-    for (let s = 0; s <= waveSegments; s++) {
-      const angle = (s / waveSegments) * Math.PI * 2;
-      const waveAmp = isActiveState
-        ? Math.sin(angle * 8 + time * 6) * (screenCoreR * 0.09) + Math.cos(angle * 5 - time * 4) * (screenCoreR * 0.05)
-        : Math.sin(angle * 6 + time * 2) * (screenCoreR * 0.025);
-      const r = screenCoreR * 1.06 + waveAmp;
-      const wx = cx + Math.cos(angle) * r;
-      const wy = cy + Math.sin(angle) * r;
-      if (s === 0) ctx.moveTo(wx, wy);
-      else ctx.lineTo(wx, wy);
-    }
-    ctx.closePath();
-    ctx.stroke();
-    ctx.restore();
-
-    // 1.5 Malha Geodésica Fibonacci 3D (Plexus Esférico com Profundidade Real)
+    // Malha Fibonacci 3D
     const projectedGlobePts = globeFibonacciNodes.map((n) => {
       const p = project3D(n.x * effectiveCoreR, n.y * effectiveCoreR, n.z * effectiveCoreR, cx, cy, fov);
       return { ...p, pulseOffset: n.pulseOffset };
     });
 
-    // Filamentos da superfície esférica
     ctx.save();
     for (let i = 0; i < projectedGlobePts.length; i++) {
       const p1 = projectedGlobePts[i];
-      // Só desenha conexões mais intensas no hemisfério frontal (z < 0 na projeção)
       const depthFactor = Math.max(0.15, Math.min(1, (effectiveCoreR - p1.z) / (effectiveCoreR * 2)));
       for (let j = i + 1; j < projectedGlobePts.length; j++) {
         const p2 = projectedGlobePts[j];
         const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-        if (dist < screenCoreR * 0.36) {
+        if (dist < screenCoreR * 0.35) {
           ctx.strokeStyle = isJarvisAwake.value ? '#7dd3fc' : '#38bdf8';
-          ctx.globalAlpha = depthFactor * (1 - dist / (screenCoreR * 0.36)) * (isActiveState ? 0.72 : 0.45);
-          ctx.lineWidth = depthFactor * 1.15;
+          ctx.globalAlpha = depthFactor * (1 - dist / (screenCoreR * 0.35)) * (isActiveState ? 0.7 : 0.42);
+          ctx.lineWidth = depthFactor * 1.1;
           ctx.beginPath();
           ctx.moveTo(p1.x, p1.y);
           ctx.lineTo(p2.x, p2.y);
@@ -902,11 +865,10 @@ function startNeuralCanvasLoop() {
       }
     }
 
-    // Pontos de luz nodais sobre a superfície do globo
     for (let i = 0; i < projectedGlobePts.length; i++) {
       const pt = projectedGlobePts[i];
       const depthFactor = Math.max(0.2, Math.min(1, (effectiveCoreR - pt.z) / (effectiveCoreR * 2)));
-      const nodeSize = (1.1 + depthFactor * 1.6) * cameraZoom.value;
+      const nodeSize = (1.1 + depthFactor * 1.5) * cameraZoom.value;
       ctx.fillStyle = depthFactor > 0.65 ? '#e0f2fe' : '#38bdf8';
       ctx.globalAlpha = depthFactor * (0.6 + 0.4 * Math.sin(time * 3 + pt.pulseOffset));
       ctx.beginPath();
@@ -915,7 +877,7 @@ function startNeuralCanvasLoop() {
     }
     ctx.restore();
 
-    // 1.6 Núcleo Energético Interno (Coração de Luz do Globo)
+    // Núcleo Central
     ctx.save();
     const innerCoreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, screenCoreR * 0.42);
     innerCoreGrad.addColorStop(0, '#ffffff');
@@ -927,24 +889,24 @@ function startNeuralCanvasLoop() {
     ctx.fill();
     ctx.restore();
 
-    // ========================================================================
-    // 2. BOLINHAS AZUIS DE MEMÓRIA EM ÓRBITA
-    // ========================================================================
+    // Memórias em Órbita
     drawMemoryOrbsOnCanvas(ctx, cx, cy, rotationY.value);
 
-    // ========================================================================
-    // 3. AGENTES ESPECIALISTAS E SUB-NÓS (DESIGN CURVO E MINIMALISTA)
-    // ========================================================================
+    // AGENTES E SUB-NÓS (ESPAÇAMENTO OTIMIZADO CONTRA COLISÃO)
     renderedAgentsHitbox = [];
     renderedSubNodesHitbox = [];
     renderedMemoriesHitbox = [];
 
     const agentPositionsMap = new Map<any, { ag: any; proj: { x: number; y: number; scale: number }; color: string }>();
+    const totalAgents = Math.max(dynamicAgents.value.length, 1);
+
     dynamicAgents.value.forEach((ag, idx) => {
-      const angle = (idx / Math.max(dynamicAgents.value.length, 1)) * Math.PI * 2 + 0.3;
+      // Distribuição angular que evita aglomeração nas laterais
+      const angle = (idx / totalAgents) * Math.PI * 2 + 0.4;
+      const heightOffset = Math.sin(idx * 2.1 + time * 0.45) * (isMobile ? 18 : 30);
       const rawProj = project3D(
         Math.cos(angle) * agentOrbitRadius,
-        Math.sin(idx * 1.7 + time * 0.45) * (isMobile ? 22 : 34),
+        heightOffset,
         Math.sin(angle) * agentOrbitRadius,
         cx,
         cy,
@@ -954,11 +916,11 @@ function startNeuralCanvasLoop() {
       agentPositionsMap.set(ag.id, { ag, proj: { x: rawProj.x, y: rawProj.y, scale: rawProj.scale }, color });
     });
 
-    // Feixes sinápticos entre o Globo JARVIS e os Agentes
+    // Feixes sinápticos
     Array.from(agentPositionsMap.values()).forEach(({ ag, proj: agProj, color }, index) => {
       const isSelected = activeAgentForTools.value?.id === ag.id;
       ctx.save();
-      ctx.globalAlpha = isSelected ? 0.85 : 0.38;
+      ctx.globalAlpha = isSelected ? 0.85 : 0.35;
       ctx.strokeStyle = color;
       ctx.lineWidth = isSelected ? 1.8 : 1.1;
       ctx.setLineDash([3, 5]);
@@ -987,28 +949,28 @@ function startNeuralCanvasLoop() {
       }
     });
 
-    // Sub-Nós / Conectores Externos
+    // Conectores Externos
     const uniqueToolIds = Array.from(
       new Set(dynamicAgents.value.flatMap((ag) => ag.tools || []).map((t: string) => String(t).toLowerCase()))
     );
     uniqueToolIds.forEach((toolId, tIdx) => {
       const meta = getConnectionMeta(toolId);
-      const angle = (tIdx / Math.max(uniqueToolIds.length, 1)) * Math.PI * 2 + 0.85;
+      const angle = (tIdx / Math.max(uniqueToolIds.length, 1)) * Math.PI * 2 + 0.95;
       const tProj = project3D(
         Math.cos(angle) * sharedNodeOrbitRadius,
-        Math.cos(tIdx * 2.1) * (isMobile ? 26 : 44),
+        Math.cos(tIdx * 2.1) * (isMobile ? 24 : 40),
         Math.sin(angle) * sharedNodeOrbitRadius,
         cx,
         cy,
         fov
       );
-      const nodeR = isMobile ? 9 : 11.5;
+      const nodeR = isMobile ? 9 : 11;
 
       getAgentsUsingTool(toolId).forEach((cAg) => {
         const agEntry = agentPositionsMap.get(cAg.id);
         if (agEntry) {
           ctx.save();
-          ctx.globalAlpha = 0.3;
+          ctx.globalAlpha = 0.28;
           ctx.strokeStyle = agEntry.color;
           ctx.lineWidth = 0.9;
           ctx.setLineDash([2, 4]);
@@ -1076,7 +1038,7 @@ function startNeuralCanvasLoop() {
       ctx.font = `500 ${isMobile ? 8.5 : 10}px system-ui, -apple-system, sans-serif`;
       ctx.fillStyle = 'rgba(203, 213, 225, 0.88)';
       const rawName = ag.name || 'Agente';
-      const cleanName = rawName.length > 18 ? rawName.slice(0, 16) + '…' : rawName;
+      const cleanName = rawName.length > 15 ? rawName.slice(0, 13) + '…' : rawName;
       ctx.fillText(cleanName, proj.x, proj.y + orbR + (isMobile ? 9 : 12));
       ctx.restore();
 
@@ -1092,10 +1054,9 @@ function startNeuralCanvasLoop() {
 function handleStageTap(clientX: number, clientY: number) {
   const isMobile = (window.innerWidth || 360) < 768;
   const cx = (window.innerWidth || 360) * 0.5;
-  const cy = (window.innerHeight || 640) * (isMobile ? 0.45 : 0.48);
-  const coreHitRadius = (isMobile ? 58 : 88) * cameraZoom.value * 1.25;
+  const cy = (window.innerHeight || 640) * (isMobile ? 0.44 : 0.48);
+  const coreHitRadius = (isMobile ? 54 : 85) * cameraZoom.value * 1.25;
 
-  // Toque no Globo 3D do JARVIS
   if (Math.hypot(clientX - cx, clientY - cy) <= coreHitRadius) {
     onJarvisCoreClick();
     return;
@@ -1167,7 +1128,7 @@ function onTouchEnd(e: TouchEvent) {
   isDragging = false;
 }
 
-// 8. Envio de Comandos ao Orquestrador
+// 8. Envio de Comandos
 async function sendCommand(overrideText?: string) {
   const textToSend = (typeof overrideText === 'string' ? overrideText : promptText.value).trim();
   if (!textToSend || isProcessing.value) return;
@@ -1273,7 +1234,7 @@ onUnmounted(() => { stopAllEngines(); });
   left: 0;
   right: 0;
   z-index: 45;
-  padding: max(env(safe-area-inset-top, 16px), 34px) 14px 8px;
+  padding: max(env(safe-area-inset-top, 16px), 32px) 14px 8px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1391,7 +1352,7 @@ onUnmounted(() => { stopAllEngines(); });
 .canvas-stage { position: relative; width: 100%; height: 100%; touch-action: none; }
 canvas { display: block; width: 100%; height: 100%; }
 
-/* BADGE DE STATUS ACIMA DO CHAT */
+/* BADGE DE STATUS */
 .hud-status-badge {
   display: inline-flex;
   align-items: center;
@@ -1430,7 +1391,7 @@ canvas { display: block; width: 100%; height: 100%; }
   color: #67e8f9;
 }
 
-/* RODAPÉ E BARRA DE CHAT MULTILINHA COM BORDAS CURVAS */
+/* RODAPÉ E BARRA DE COMANDO */
 .command-dock-wrapper {
   position: fixed;
   bottom: max(env(safe-area-inset-bottom, 10px), 10px);
@@ -1470,13 +1431,13 @@ canvas { display: block; width: 100%; height: 100%; }
   background: rgba(30, 41, 59, 0.65);
   border: 1px solid rgba(51, 65, 85, 0.6);
   color: #f8fafc;
-  width: 30px;
-  height: 30px;
-  border-radius: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12.5px;
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
   flex-shrink: 0;
@@ -1529,10 +1490,10 @@ canvas { display: block; width: 100%; height: 100%; }
   background: linear-gradient(135deg, #0284c7, #2563eb);
   color: #ffffff;
   border: none;
-  width: 32px;
-  height: 30px;
-  border-radius: 10px;
-  font-size: 12px;
+  width: 30px;
+  height: 28px;
+  border-radius: 9px;
+  font-size: 11.5px;
   font-weight: 700;
   display: flex;
   align-items: center;
