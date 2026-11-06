@@ -466,6 +466,120 @@ export async function executeExternalConnector({
       return await res.json().catch(() => ({ success: res.ok }));
     }
 
+    // =========================================================================
+    // GOOGLE DRIVE: LISTAR, BUSCAR, CRIAR PASTAS, UPLOAD E EXCLUSÃO
+    // =========================================================================
+    case 'google_drive': {
+      const accessToken = await getGoogleAccessToken();
+      const currentAction = String(action || payload.action || 'list_files').toLowerCase();
+
+      // 1. CRIAR NOVA PASTA NO DRIVE
+      if (currentAction === 'create_folder') {
+        const folderName = payload.name || payload.folderName || 'Nova Pasta JARVIS';
+        const folderMetadata: Record<string, any> = {
+          name: folderName,
+          mimeType: 'application/vnd.google-apps.folder'
+        };
+        if (payload.parentId) {
+          folderMetadata.parents = [payload.parentId];
+        }
+
+        const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(folderMetadata)
+        });
+
+        const folderData: any = await createRes.json().catch(() => ({}));
+        if (!createRes.ok) throw new Error(folderData.error?.message || 'Falha ao criar pasta no Drive.');
+        return { success: true, provider: 'google_drive', action: 'create_folder', folder: folderData };
+      }
+
+      // 2. UPLOAD DE ARQUIVO (TEXTO / MARKDOWN / JSON / RELATÓRIO)
+      if (currentAction === 'upload_file' || currentAction === 'upload_text_file') {
+        const fileName = payload.name || payload.fileName || `jarvis_log_${Date.now()}.txt`;
+        const fileContent = payload.content || payload.body || payload.text || '';
+        const mimeType = payload.mimeType || 'text/plain; charset=UTF-8';
+
+        const boundary = '-------314159265358979323846';
+        const delimiter = `\r\n--${boundary}\r\n`;
+        const closeDelimiter = `\r\n--${boundary}--`;
+
+        const metadata: Record<string, any> = {
+          name: fileName,
+          mimeType: mimeType.split(';')[0]
+        };
+        if (payload.parentId) {
+          metadata.parents = [payload.parentId];
+        }
+
+        const multipartRequestBody =
+          delimiter +
+          'Content-Type: application/json\r\n\r\n' +
+          JSON.stringify(metadata) +
+          delimiter +
+          `Content-Type: ${mimeType}\r\n\r\n` +
+          fileContent +
+          closeDelimiter;
+
+        const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': `multipart/related; boundary=${boundary}`
+          },
+          body: multipartRequestBody
+        });
+
+        const uploadData: any = await uploadRes.json().catch(() => ({}));
+        if (!uploadRes.ok) throw new Error(uploadData.error?.message || 'Falha ao enviar arquivo para o Drive.');
+        return { success: true, provider: 'google_drive', action: 'upload_file', file: uploadData };
+      }
+
+      // 3. MOVER ARQUIVO PARA A LIXEIRA
+      if (currentAction === 'trash_file' || currentAction === 'delete_file') {
+        const fileId = payload.id || payload.fileId;
+        if (!fileId) throw new Error('Parâmetro fileId ou id é obrigatório para exclusão.');
+
+        const trashRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+
+        if (!trashRes.ok && trashRes.status !== 204) {
+          const errData: any = await trashRes.json().catch(() => ({}));
+          throw new Error(errData.error?.message || 'Falha ao mover arquivo para a lixeira.');
+        }
+        return { success: true, provider: 'google_drive', action: 'trash_file', fileId };
+      }
+
+      // 4. AÇÃO PADRÃO: LISTAGEM E PESQUISA DE ARQUIVOS RECENTES
+      const pageSize = Number(payload.pageSize || payload.maxResults || 10);
+      let queryFilter = "trashed = false";
+      if (payload.query) {
+        queryFilter += ` and name contains '${payload.query.replace(/'/g, "\\'")}'`;
+      }
+
+      const listRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?pageSize=${pageSize}&fields=files(id,name,mimeType,size,modifiedTime,webViewLink)&q=${encodeURIComponent(queryFilter)}&orderBy=modifiedTime desc`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+
+      const listData: any = await listRes.json().catch(() => ({}));
+      if (!listRes.ok) throw new Error(listData.error?.message || 'Falha ao listar arquivos do Google Drive.');
+
+      return {
+        success: true,
+        provider: 'google_drive',
+        action: 'list_files',
+        total: (listData.files || []).length,
+        files: listData.files || []
+      };
+    }
+
     case 'telegram': {
       const botToken = token || process.env.TELEGRAM_BOT_TOKEN || '';
       const chatId =
