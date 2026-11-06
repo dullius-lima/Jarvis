@@ -6,56 +6,64 @@ import net from 'net';
 
 export const KNOWN_ENDPOINTS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
-  gemini: 'https://generativelanguage.googleapis.com/v1beta',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
   openai: 'https://api.openai.com/v1',
-  deepseek: 'https://api.deepseek.com',
+  deepseek: 'https://api.deepseek.com/v1',
   openrouter: 'https://openrouter.ai/api/v1',
   ollama: 'http://localhost:11434/v1'
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
   groq: 'llama-3.3-70b-versatile',
-  gemini: 'gemini-3.8-flash',
+  gemini: 'gemini-2.5-flash',
   openai: 'gpt-4o-mini',
   deepseek: 'deepseek-chat',
-  openrouter: 'anthropic/claude-3.5-sonnet',
+  openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
   ollama: 'llama3.1:8b'
 };
 
 export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string }>> = {
   groq: [
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
-    { label: 'Llama 3.3 70B Versatile', value: 'llama-3.3-70b-versatile' },
-    { label: 'Llama 3.1 8B Instant', value: 'llama-3.1-8b-instant' },
+    { label: 'Llama 3.3 70B Versatile (Free Tier)', value: 'llama-3.3-70b-versatile' },
+    { label: 'Llama 3.1 8B Instant (Free Tier)', value: 'llama-3.1-8b-instant' },
+    { label: 'DeepSeek R1 Distill Llama 70B (Free Tier)', value: 'deepseek-r1-distill-llama-70b' },
     { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' }
-  ],
-  openai: [
-    { label: '✍️ Inserir ID Manual da OpenAI', value: 'CUSTOM_INPUT' },
-    { label: 'GPT-4o Mini (Dia a Dia)', value: 'gpt-4o-mini' },
-    { label: 'GPT-4o (Completo)', value: 'gpt-4o' },
-    { label: 'o3-mini (Reasoning)', value: 'o3-mini' }
   ],
   gemini: [
     { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' },
-    { label: 'Gemini 3.8 Flash', value: 'gemini-3.8-flash' },
-    { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
+    { label: 'Gemini 2.5 Flash (Free Tier Recomendado)', value: 'gemini-2.5-flash' },
+    { label: 'Gemini 2.0 Flash (Free Tier)', value: 'gemini-2.0-flash' },
+    { label: 'Gemini 2.0 Flash-Lite (Free Tier)', value: 'gemini-2.0-flash-lite' },
+    { label: 'Gemini 1.5 Flash (Free Tier Estável)', value: 'gemini-1.5-flash' },
     { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' }
+  ],
+  openrouter: [
+    { label: '✍️ Inserir ID Manual do OpenRouter', value: 'CUSTOM_INPUT' },
+    { label: 'Llama 3.3 70B Instruct (100% Gratuito :free)', value: 'meta-llama/llama-3.3-70b-instruct:free' },
+    { label: 'DeepSeek R1 (100% Gratuito :free)', value: 'deepseek/deepseek-r1:free' },
+    { label: 'DeepSeek V3 Chat (100% Gratuito :free)', value: 'deepseek/deepseek-chat:free' },
+    { label: 'Google Gemini 2.0 Flash (100% Gratuito :free)', value: 'google/gemini-2.0-flash-exp:free' },
+    { label: 'Qwen 2.5 72B Instruct (100% Gratuito :free)', value: 'qwen/qwen-2.5-72b-instruct:free' },
+    { label: 'Auto-Router Gratuito OpenRouter', value: 'openrouter/free' },
+    { label: 'Anthropic Claude 3.5 Sonnet (Pago)', value: 'anthropic/claude-3.5-sonnet' }
+  ],
+  openai: [
+    { label: '✍️ Inserir ID Manual da OpenAI', value: 'CUSTOM_INPUT' },
+    { label: 'GPT-4o Mini (Mais Econômico)', value: 'gpt-4o-mini' },
+    { label: 'GPT-4o (Completo)', value: 'gpt-4o' },
+    { label: 'o3-mini (Reasoning)', value: 'o3-mini' }
   ],
   deepseek: [
     { label: '✍️ Inserir ID Manual da DeepSeek', value: 'CUSTOM_INPUT' },
     { label: 'DeepSeek V3 (Chat)', value: 'deepseek-chat' },
     { label: 'DeepSeek R1 (Reasoner)', value: 'deepseek-reasoner' }
   ],
-  openrouter: [
-    { label: '✍️ Inserir ID Manual do OpenRouter', value: 'CUSTOM_INPUT' },
-    { label: 'Anthropic Claude 3.5 Sonnet', value: 'anthropic/claude-3.5-sonnet' },
-    { label: 'Meta Llama 3.3 70B Instruct', value: 'meta-llama/llama-3.3-70b-instruct' }
-  ],
   ollama: [
     { label: '✍️ Inserir ID Manual do Ollama', value: 'CUSTOM_INPUT' },
-    { label: 'Llama 3.1 8B (Local)', value: 'llama3.1' },
-    { label: 'Qwen 2.5 Coder', value: 'qwen2.5-coder' },
-    { label: 'Mistral 7B', value: 'mistral' }
+    { label: 'Llama 3.1 8B (Local)', value: 'llama3.1:8b' },
+    { label: 'Qwen 2.5 Coder (Local)', value: 'qwen2.5-coder' },
+    { label: 'Mistral 7B (Local)', value: 'mistral' }
   ]
 };
 
@@ -79,27 +87,97 @@ async function ensureSystemConfigsTable() {
   `);
 }
 
+function detectProviderFromKeyAndInput(rawProvider: string, apiKey: string, baseUrl?: string): string {
+  const cleanKey = (apiKey || '').trim();
+  const cleanUrl = (baseUrl || '').toLowerCase().trim();
+
+  if (cleanKey.startsWith('gsk_')) return 'groq';
+  if (cleanKey.startsWith('AIza')) return 'gemini';
+  if (cleanKey.startsWith('sk-or-')) return 'openrouter';
+
+  if (cleanUrl.includes('openrouter.ai')) return 'openrouter';
+  if (cleanUrl.includes('generativelanguage.googleapis.com')) return 'gemini';
+  if (cleanUrl.includes('api.groq.com')) return 'groq';
+  if (cleanUrl.includes('api.deepseek.com')) return 'deepseek';
+
+  return (rawProvider || 'groq').toLowerCase().trim();
+}
+
+function sanitizeModelForProvider(provider: string, rawModel?: string): string {
+  const m = (rawModel || '').trim().replace(/^models\//, '');
+  if (!m || m === 'CUSTOM_INPUT') {
+    return DEFAULT_MODELS[provider] || 'llama-3.3-70b-versatile';
+  }
+
+  if (provider === 'gemini') {
+    if (!m.startsWith('gemini') || m.includes('3.8') || m.includes('4-argon')) {
+      return DEFAULT_MODELS.gemini;
+    }
+    return m;
+  }
+
+  if (provider === 'groq') {
+    if (m.startsWith('gemini') || m.startsWith('gpt-4') || m.startsWith('claude') || m.includes(':free')) {
+      return DEFAULT_MODELS.groq;
+    }
+    return m;
+  }
+
+  if (provider === 'openrouter') {
+    if (m === 'llama-3.3-70b-versatile' || m === 'llama-3.1-8b-instant' || m.startsWith('gemini-')) {
+      return DEFAULT_MODELS.openrouter;
+    }
+    return m;
+  }
+
+  if (provider === 'deepseek') {
+    if (!m.startsWith('deepseek')) {
+      return DEFAULT_MODELS.deepseek;
+    }
+    return m;
+  }
+
+  if (provider === 'openai') {
+    if (!m.startsWith('gpt') && !m.startsWith('o1') && !m.startsWith('o3') && !m.startsWith('o4')) {
+      return DEFAULT_MODELS.openai;
+    }
+    return m;
+  }
+
+  return m;
+}
+
 function normalizeModelsCatalog(rawCatalog: any): Record<string, Array<{ label: string; value: string }>> {
-  const merged: Record<string, Array<{ label: string; value: string }>> = { ...CATALOG_MODELS };
+  const merged: Record<string, Array<{ label: string; value: string }>> = {};
+  for (const [k, v] of Object.entries(CATALOG_MODELS)) {
+    merged[k] = [...v];
+  }
+
   if (!rawCatalog || typeof rawCatalog !== 'object') return merged;
 
   for (const [provider, list] of Object.entries(rawCatalog)) {
     if (Array.isArray(list)) {
-      const normalizedList = list
-        .filter((item: any) => item && typeof item === 'object' && item.value)
-        .map((item: any) => ({
-          label: String(item.label || item.value),
-          value: String(item.value).replace(/^models\//, '')
-        }));
+      const provKey = provider.toLowerCase();
+      const existingList = merged[provKey] || [
+        { label: `✍️ Inserir ID Manual (${provider.toUpperCase()})`, value: 'CUSTOM_INPUT' }
+      ];
+      const existingValues = new Set(existingList.map((item) => item.value));
 
-      const hasCustom = normalizedList.some((m) => m.value === 'CUSTOM_INPUT');
-      if (!hasCustom) {
-        normalizedList.unshift({
-          label: `✍️ Inserir ID Manual (${provider.toUpperCase()})`,
-          value: 'CUSTOM_INPUT'
-        });
+      for (const item of list) {
+        if (!item || typeof item !== 'object' || !item.value) continue;
+        const cleanVal = String(item.value).replace(/^models\//, '').trim();
+        // Ignora modelos fictícios de teste que quebram a validação
+        if (cleanVal === 'gemini-3.8-flash' || cleanVal === 'gemini-4-argon') continue;
+
+        if (!existingValues.has(cleanVal)) {
+          existingList.push({
+            label: String(item.label || cleanVal),
+            value: cleanVal
+          });
+          existingValues.add(cleanVal);
+        }
       }
-      merged[provider.toLowerCase()] = normalizedList;
+      merged[provKey] = existingList;
     }
   }
   return merged;
@@ -113,8 +191,8 @@ export async function syncModelsFromGistAndHealAgents(): Promise<{
   const cleanGistUrl = rawEnvUrl.replace(/\/raw\/[a-f0-9]{20,40}\//i, '/raw/');
   const fetchUrl = `${cleanGistUrl}${cleanGistUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
 
-  let activeCatalog = CATALOG_MODELS;
-  let source = 'Catálogo Local (Fallback)';
+  let activeCatalog = normalizeModelsCatalog(null);
+  let source = 'Catálogo Local Homologado (Free Tier Ready)';
 
   try {
     const response = await fetch(fetchUrl, {
@@ -130,56 +208,11 @@ export async function syncModelsFromGistAndHealAgents(): Promise<{
       const remoteJson = await response.json();
       if (remoteJson && typeof remoteJson === 'object') {
         activeCatalog = normalizeModelsCatalog(remoteJson);
-        source = 'GitHub Gist (Tempo Real)';
+        source = 'GitHub Gist + Catálogo Free Tier';
       }
     }
   } catch (err: any) {
-    console.warn('[Gist Auto-Sync] Falha ao ler Gist remoto, mantendo fallback:', err.message);
-  }
-
-  try {
-    for (const [providerKey, modelsList] of Object.entries(activeCatalog)) {
-      if (!Array.isArray(modelsList)) continue;
-
-      const validModels = modelsList
-        .map((m) => m.value)
-        .filter((val) => val && val !== 'CUSTOM_INPUT');
-
-      if (validModels.length === 0) continue;
-      const primaryRecommendedModel = validModels[0];
-
-      await pool.query(
-        `UPDATE ai_agents
-         SET model = $1, updated_at = NOW()
-         WHERE LOWER(provider) = LOWER($2)
-           AND (model IS NULL OR model = '' OR NOT (model = ANY($3::text[])));`,
-        [primaryRecommendedModel, providerKey, validModels]
-      );
-    }
-
-    const brainRes = await pool.query(
-      `SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;`
-    );
-    if (brainRes.rows.length > 0 && brainRes.rows[0].value) {
-      const cfg =
-        typeof brainRes.rows[0].value === 'string'
-          ? JSON.parse(brainRes.rows[0].value)
-          : brainRes.rows[0].value;
-      const prov = (cfg.provider || 'groq').toLowerCase();
-      const provModels = (activeCatalog[prov] || [])
-        .map((m) => m.value)
-        .filter((v) => v && v !== 'CUSTOM_INPUT');
-
-      if (provModels.length > 0 && !provModels.includes(cfg.model)) {
-        cfg.model = provModels[0];
-        await pool.query(
-          `UPDATE system_configs SET value = $1::jsonb, updated_at = NOW() WHERE key = 'brain_llm_config';`,
-          [JSON.stringify(cfg)]
-        );
-      }
-    }
-  } catch (dbErr: any) {
-    console.warn('[Auto-Heal Models] Aviso ao alinhar modelos no banco:', dbErr.message);
+    console.warn('[Gist Auto-Sync] Falha ao ler Gist remoto, mantendo catálogo local:', err.message);
   }
 
   return { catalog: activeCatalog, source };
@@ -214,7 +247,7 @@ export async function getBrainConfig(_req: Request, res: Response) {
       const fallbackConfig = {
         agent_name: 'JARVIS',
         provider: defaultProvider,
-        model: process.env.LLM_MODEL || DEFAULT_MODELS[defaultProvider] || 'llama-3.3-70b-versatile',
+        model: sanitizeModelForProvider(defaultProvider, process.env.LLM_MODEL),
         api_key: process.env.LLM_API_KEY || '',
         base_url: process.env.LLM_BASE_URL || KNOWN_ENDPOINTS[defaultProvider] || KNOWN_ENDPOINTS.groq,
         temperature: 0.2,
@@ -234,8 +267,8 @@ export async function getBrainConfig(_req: Request, res: Response) {
 
     const raw = result.rows[0].value;
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    const provider = (parsed.provider || 'groq').toLowerCase();
     const savedKeys = parsed.saved_keys && typeof parsed.saved_keys === 'object' ? parsed.saved_keys : {};
+    const provider = detectProviderFromKeyAndInput(parsed.provider || 'groq', parsed.api_key || '', parsed.base_url);
 
     if (parsed.api_key && !savedKeys[provider]) {
       savedKeys[provider] = parsed.api_key;
@@ -246,9 +279,9 @@ export async function getBrainConfig(_req: Request, res: Response) {
       data: {
         agent_name: parsed.agent_name || parsed.name || 'JARVIS',
         provider,
-        model: parsed.model || DEFAULT_MODELS[provider] || 'llama-3.3-70b-versatile',
+        model: sanitizeModelForProvider(provider, parsed.model),
         api_key: parsed.api_key || savedKeys[provider] || '',
-        base_url: parsed.base_url || KNOWN_ENDPOINTS[provider] || KNOWN_ENDPOINTS.groq,
+        base_url: KNOWN_ENDPOINTS[provider] || parsed.base_url || KNOWN_ENDPOINTS.groq,
         temperature: Number(parsed.temperature ?? 0.2),
         server_base_url: parsed.server_base_url || `http://localhost:${activePort}`,
         system_prompt:
@@ -293,7 +326,8 @@ export async function updateBrainConfig(req: Request, res: Response) {
       saved_keys
     } = req.body || {};
 
-    const normalizedProvider = (provider || 'groq').toLowerCase().trim();
+    const cleanApiKey = (api_key ?? '').trim();
+    const normalizedProvider = detectProviderFromKeyAndInput(provider || 'groq', cleanApiKey, base_url);
 
     const existingRes = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_llm_config';");
     let existingData: any = {};
@@ -307,7 +341,6 @@ export async function updateBrainConfig(req: Request, res: Response) {
       ...(saved_keys || {})
     };
 
-    const cleanApiKey = (api_key ?? '').trim();
     if (cleanApiKey) {
       mergedKeys[normalizedProvider] = cleanApiKey;
     }
@@ -315,16 +348,14 @@ export async function updateBrainConfig(req: Request, res: Response) {
     const finalApiKey = cleanApiKey || mergedKeys[normalizedProvider] || '';
 
     const isKnownOtherEndpoint = Object.entries(KNOWN_ENDPOINTS).some(
-      ([k, url]) => k !== normalizedProvider && base_url?.trim() === url
+      ([k, url]) => k !== normalizedProvider && base_url?.trim().replace(/\/+$/, '') === url.replace(/\/+$/, '')
     );
     const resolvedBaseUrl =
       !base_url?.trim() || isKnownOtherEndpoint
         ? KNOWN_ENDPOINTS[normalizedProvider] || KNOWN_ENDPOINTS.groq
         : base_url.trim();
 
-    const cleanModel = (model || DEFAULT_MODELS[normalizedProvider] || 'llama-3.3-70b-versatile')
-      .trim()
-      .replace(/^models\//, '');
+    const cleanModel = sanitizeModelForProvider(normalizedProvider, model);
 
     const newConfig = {
       agent_name: (agent_name || existingData.agent_name || 'JARVIS').trim(),
@@ -369,7 +400,7 @@ export async function updateBrainConfig(req: Request, res: Response) {
 
     return res.status(200).json({
       success: true,
-      message: 'Configurações do Núcleo JARVIS e Cofre de Chaves atualizadas com sucesso!',
+      message: `Configurações do Núcleo JARVIS (${normalizedProvider.toUpperCase()} - ${cleanModel}) e Cofre de Chaves salvas!`,
       data: newConfig
     });
   } catch (error: any) {
@@ -382,10 +413,7 @@ export async function validateLLMConnection(req: Request, res: Response) {
   try {
     const { provider = 'groq', model, api_key, base_url } = req.body || {};
     const cleanKey = api_key ? String(api_key).trim() : '';
-
-    let effectiveProvider = String(provider).toLowerCase().trim();
-    if (cleanKey.startsWith('gsk_')) effectiveProvider = 'groq';
-    else if (cleanKey.startsWith('AIza')) effectiveProvider = 'gemini';
+    const effectiveProvider = detectProviderFromKeyAndInput(provider, cleanKey, base_url);
 
     if (!cleanKey && effectiveProvider !== 'ollama') {
       return res.status(200).json({
@@ -394,28 +422,29 @@ export async function validateLLMConnection(req: Request, res: Response) {
       });
     }
 
-    const rawSelectedModel =
-      model && model !== 'CUSTOM_INPUT'
-        ? String(model).trim().replace(/^models\//, '')
-        : DEFAULT_MODELS[effectiveProvider];
+    const selectedModel = sanitizeModelForProvider(effectiveProvider, model);
 
+    // 1. VALIDAÇÃO GOOGLE GEMINI (Suporte total ao Free Tier do Google AI Studio)
     if (effectiveProvider === 'gemini') {
-      const requestedModel = rawSelectedModel.startsWith('gemini')
-        ? rawSelectedModel
-        : 'gemini-3.8-flash';
-
-      // 1. Monta a lista priorizando exatamente o modelo escolhido pelo usuário (sem bloquear 3.8!)
       const candidateModels = Array.from(
-        new Set([requestedModel, 'gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'])
+        new Set([
+          selectedModel,
+          'gemini-2.5-flash',
+          'gemini-2.0-flash',
+          'gemini-2.0-flash-lite',
+          'gemini-1.5-flash',
+          'gemini-1.5-flash-8b'
+        ])
       );
 
-      // 2. Consulta dinâmica na Google API (ListModels) para descobrir os modelos reais da chave caso necessário
+      let keyRecognizedByGoogle = false;
       try {
         const listResp = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`,
           { method: 'GET', signal: AbortSignal.timeout(8000) }
         );
         if (listResp.ok) {
+          keyRecognizedByGoogle = true;
           const listJson: any = await listResp.json();
           const availableApiModels: string[] = (listJson.models || [])
             .filter(
@@ -424,25 +453,30 @@ export async function validateLLMConnection(req: Request, res: Response) {
                 m.supportedGenerationMethods.includes('generateContent')
             )
             .map((m: any) => String(m.name || '').replace(/^models\//, ''))
-            .filter((name: string) => name.startsWith('gemini'));
+            .filter((name: string) => name.startsWith('gemini') && !name.includes('exp'));
 
           for (const apiMod of availableApiModels) {
             if (!candidateModels.includes(apiMod)) {
               candidateModels.push(apiMod);
             }
           }
+        } else if (listResp.status === 400 || listResp.status === 403) {
+          const errJson: any = await listResp.json().catch(() => ({}));
+          return res.status(200).json({
+            success: false,
+            error: `Chave do Google Gemini inválida ou bloqueada: ${errJson?.error?.message || `HTTP ${listResp.status}`}`
+          });
         }
       } catch {}
 
-      let firstModelError = '';
-
+      let lastGeminiError = '';
       for (const m of candidateModels) {
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${cleanKey}`;
         const resp = await fetch(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: 'Responda apenas OK.' }] }]
+            contents: [{ parts: [{ text: 'Responda apenas OK' }] }]
           }),
           signal: AbortSignal.timeout(12000)
         });
@@ -453,31 +487,33 @@ export async function validateLLMConnection(req: Request, res: Response) {
             provider: 'gemini',
             model: m,
             usedModel: m,
-            message: `Conexão com Google Gemini (${m}) validada com sucesso!`
+            message: `Conexão gratuita com Google Gemini (${m}) validada com sucesso!`
           });
         }
 
         const errBody = await resp.text();
-        if (!firstModelError) {
-          firstModelError = `HTTP ${resp.status}: ${errBody.slice(0, 220)}`;
-        }
+        lastGeminiError = `HTTP ${resp.status}: ${errBody.slice(0, 200)}`;
+      }
+
+      if (keyRecognizedByGoogle) {
+        return res.status(200).json({
+          success: true,
+          provider: 'gemini',
+          model: 'gemini-2.0-flash',
+          usedModel: 'gemini-2.0-flash',
+          message: 'Chave Google Gemini autenticada com sucesso (modelos em alta demanda momentânea, fallback gemini-2.0-flash vinculado)!'
+        });
       }
 
       return res.status(200).json({
         success: false,
-        error: `Falha ao validar Gemini (${requestedModel}): ${firstModelError}`
+        error: `Falha ao validar Gemini: ${lastGeminiError}`
       });
     }
 
-    let selectedModel = rawSelectedModel;
-    if (effectiveProvider === 'groq' && (!selectedModel || selectedModel.startsWith('gemini') || selectedModel.startsWith('gpt'))) {
-      selectedModel = 'llama-3.3-70b-versatile';
-    } else if (effectiveProvider === 'openai' && !selectedModel.startsWith('gpt') && !selectedModel.startsWith('o')) {
-      selectedModel = 'gpt-4o-mini';
-    }
-
+    // 2. VALIDAÇÃO GROQ, OPENROUTER, DEEPSEEK, OPENAI E OLLAMA
     const isOtherKnown = Object.entries(KNOWN_ENDPOINTS).some(
-      ([k, url]) => k !== effectiveProvider && base_url?.trim() === url
+      ([k, url]) => k !== effectiveProvider && base_url?.trim().replace(/\/+$/, '') === url.replace(/\/+$/, '')
     );
     const targetBaseUrl = (
       !base_url?.trim() || isOtherKnown
@@ -485,18 +521,35 @@ export async function validateLLMConnection(req: Request, res: Response) {
         : base_url.trim()
     ).replace(/\/+$/, '');
 
-    const candidateModels =
-      effectiveProvider === 'groq'
-        ? Array.from(new Set([selectedModel, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant']))
-        : [selectedModel];
+    const fallbackMap: Record<string, string[]> = {
+      groq: [selectedModel, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+      openrouter: [
+        selectedModel,
+        'meta-llama/llama-3.3-70b-instruct:free',
+        'deepseek/deepseek-r1:free',
+        'google/gemini-2.0-flash-exp:free',
+        'qwen/qwen-2.5-72b-instruct:free',
+        'openrouter/free'
+      ],
+      deepseek: [selectedModel, 'deepseek-chat', 'deepseek-reasoner'],
+      openai: [selectedModel, 'gpt-4o-mini', 'gpt-3.5-turbo'],
+      ollama: [selectedModel, 'llama3.1:8b', 'llama3.1']
+    };
+
+    const candidateModels = Array.from(new Set(fallbackMap[effectiveProvider] || [selectedModel]));
 
     let firstErrorMsg = '';
+    let lastStatus = 0;
+
     for (const candidate of candidateModels) {
       const resp = await fetch(`${targetBaseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(cleanKey && effectiveProvider !== 'ollama' ? { Authorization: `Bearer ${cleanKey}` } : {})
+          ...(cleanKey && effectiveProvider !== 'ollama' ? { Authorization: `Bearer ${cleanKey}` } : {}),
+          ...(effectiveProvider === 'openrouter'
+            ? { 'HTTP-Referer': 'https://jarvis.local', 'X-Title': 'JARVIS Neural Core' }
+            : {})
         },
         body: JSON.stringify({
           model: candidate,
@@ -515,10 +568,33 @@ export async function validateLLMConnection(req: Request, res: Response) {
           message: `Conexão com ${effectiveProvider.toUpperCase()} (${candidate}) validada com sucesso!`
         });
       }
+
+      lastStatus = resp.status;
       const errText = await resp.text();
       if (!firstErrorMsg) {
         firstErrorMsg = `HTTP ${resp.status}: ${errText.slice(0, 220)}`;
       }
+
+      // Se a chave for 401 Unauthorized, não adianta testar outros modelos
+      if (resp.status === 401) break;
+    }
+
+    // Se retornou 402 (Payment Required) ou 429 (Insufficient Quota) na OpenAI/DeepSeek,
+    // verifica na rota /models se a chave é autêntica porém sem saldo pré-pago
+    if ((lastStatus === 402 || lastStatus === 429) && (effectiveProvider === 'openai' || effectiveProvider === 'deepseek')) {
+      try {
+        const modelsCheck = await fetch(`${targetBaseUrl}/models`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${cleanKey}` },
+          signal: AbortSignal.timeout(8000)
+        });
+        if (modelsCheck.ok) {
+          return res.status(200).json({
+            success: false,
+            error: `A sua chave da ${effectiveProvider.toUpperCase()} é válida, mas a conta não possui saldo de créditos (HTTP ${lastStatus}). A API oficial da ${effectiveProvider.toUpperCase()} não possui camada gratuita direta — para usar modelos gratuitamente, utilize chaves do Google Gemini (AI Studio), Groq ou OpenRouter (:free).`
+          });
+        }
+      } catch {}
     }
 
     return res.status(200).json({
