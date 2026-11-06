@@ -16,6 +16,15 @@ import {
 } from './brainConfigAndUtils.js';
 import { saveToDatabase } from './catalogAndDatabase.js';
 
+function normalizeText(str: string): string {
+  return String(str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, ' ')
+    .trim();
+}
+
 export async function callOpenAICompatibleLLM(options: {
   provider: string;
   model: string;
@@ -198,164 +207,79 @@ export async function executeUniversalApiConnector(
   let payloadTemplate = '';
   let connectorName = '';
 
-  const applyConnectorRow = (row: any) => {
-    const cfg =
-      typeof row.config === 'string'
-        ? JSON.parse(row.config || '{}')
-        : row.config || {};
-    connectorName = row.name || row.provider_key || connectorName;
-    endpointUrl = (
-      cfg.endpoint_url ||
-      row.endpoint_url ||
-      cfg.base_url ||
-      cfg.url ||
-      cfg.api_url ||
-      endpointUrl ||
-      ''
-    ).trim();
-    httpMethod = (
-      cfg.http_method ||
-      row.http_method ||
-      cfg.method ||
-      httpMethod ||
-      'GET'
-    ).toUpperCase();
-    authToken = (
-      cfg.auth_token ||
-      cfg.api_key ||
-      row.api_key ||
-      row.auth_token ||
-      cfg.token ||
-      authToken ||
-      ''
-    ).trim();
-    authType = (cfg.auth_type || 'bearer').toLowerCase();
-    queryParamKey = cfg.query_param_key || 'token';
-    payloadTemplate = cfg.payload_template || row.payload_template || payloadTemplate || '';
-    if (cfg.headers && typeof cfg.headers === 'object') {
-      customHeaders = { ...customHeaders, ...cfg.headers };
-    }
-  };
-
-  // 1. Identifica se recebeu o objeto do Agente/Conector ou o slug de uma Tool
   if (typeof connectorSlugOrAgent === 'object' && connectorSlugOrAgent !== null) {
-    applyConnectorRow(connectorSlugOrAgent);
-  }
+    connectorName = connectorSlugOrAgent.name || connectorSlugOrAgent.slug;
+    endpointUrl = connectorSlugOrAgent.endpoint_url || '';
+    httpMethod = (connectorSlugOrAgent.http_method || 'GET').toUpperCase();
+    authToken = (connectorSlugOrAgent.auth_token || connectorSlugOrAgent.api_key || '').trim();
+    payloadTemplate = connectorSlugOrAgent.payload_template || connectorSlugOrAgent.code_snippet || '';
+  } else {
+    const cleanSlug = String(connectorSlugOrAgent).toLowerCase().trim();
+    connectorName = cleanSlug;
 
-  const rawSlug =
-    typeof connectorSlugOrAgent === 'string'
-      ? connectorSlugOrAgent
-      : connectorSlugOrAgent?.provider_key ||
-        connectorSlugOrAgent?.slug ||
-        connectorSlugOrAgent?.name ||
-        '';
-  const cleanSlug = sanitizeToolName(rawSlug);
-  if (!connectorName) connectorName = cleanSlug;
-
-  // Sempre confere no PostgreSQL se faltar endpointUrl ou authToken no objeto em memória
-  if (!endpointUrl || !authToken) {
     const connRes = await pool
-      .query(
-        `SELECT * FROM external_connectors 
-         WHERE LOWER(provider_key) = $1 
-            OR LOWER(provider_key) = $2
-            OR LOWER(REPLACE(name, ' ', '_')) = $1
-         ORDER BY updated_at DESC LIMIT 1;`,
-        [cleanSlug, String(rawSlug).toLowerCase().trim()]
-      )
-      .catch(() => ({ rows: [] as any[] }));
+      .query(`SELECT * FROM external_connectors WHERE LOWER(provider_key) = $1 LIMIT 1;`, [cleanSlug])
+      .catch(() => ({ rows: [] }));
 
     if (connRes.rows.length > 0) {
-      applyConnectorRow(connRes.rows[0]);
+      const row = connRes.rows[0];
+      const cfg = typeof row.config === 'string' ? JSON.parse(row.config || '{}') : row.config || {};
+      connectorName = row.name || cleanSlug;
+      endpointUrl = cfg.endpoint_url || cfg.base_url || cfg.url || cfg.api_url || '';
+      httpMethod = (cfg.http_method || cfg.method || 'GET').toUpperCase();
+      authToken = (cfg.auth_token || cfg.api_key || cfg.token || '').trim();
+      authType = (cfg.auth_type || 'bearer').toLowerCase();
+      queryParamKey = cfg.query_param_key || 'token';
+      payloadTemplate = cfg.payload_template || '';
+      if (cfg.headers && typeof cfg.headers === 'object') {
+        customHeaders = cfg.headers;
+      }
     } else {
       const agRes = await pool
-        .query(
-          `SELECT * FROM ai_agents WHERE LOWER(slug) = $1 OR LOWER(name) = $2 LIMIT 1;`,
-          [cleanSlug, String(rawSlug).toLowerCase().trim()]
-        )
-        .catch(() => ({ rows: [] as any[] }));
+        .query(`SELECT * FROM ai_agents WHERE LOWER(slug) = $1 LIMIT 1;`, [cleanSlug])
+        .catch(() => ({ rows: [] }));
       if (agRes.rows.length > 0) {
-        applyConnectorRow(agRes.rows[0]);
+        const ag = agRes.rows[0];
+        connectorName = ag.name || cleanSlug;
+        endpointUrl = ag.endpoint_url || '';
+        httpMethod = (ag.http_method || 'GET').toUpperCase();
+        authToken = (ag.auth_token || ag.api_key || '').trim();
+        payloadTemplate = ag.payload_template || ag.code_snippet || '';
       }
     }
   }
 
-  // Fallback caso seja uma tool de cotação/Brapi e a URL tenha ficado em branco
-  if (
-    !endpointUrl &&
-    (cleanSlug.includes('brapi') ||
-      cleanSlug.includes('mercado_de_valores') ||
-      cleanSlug.includes('cotac'))
-  ) {
-    endpointUrl = 'https://brapi.dev/api/quote/{{query}}';
-  }
-
   if (!endpointUrl) {
-    return {
-      error: `Conector ou API "${connectorName}" (${cleanSlug}) não possui Endpoint URL configurada no banco.`
-    };
+    return { error: `Conector ou API "${connectorName}" não possui Endpoint URL configurada.` };
   }
 
-  // 2. Extração inteligente de variáveis (Garante que {{query}} e {{symbol}} recebam o Ticker limpo se for API financeira ou parâmetro curto)
   const cleanBase = (serverBaseUrl || 'http://localhost:3333').replace(/\/+$/, '');
-  const combinedText = `${taskArgs?.symbol || ''} ${taskArgs?.ticker || ''} ${taskArgs?.query || ''} ${taskArgs?.task_details || ''} ${userPrompt || ''}`;
-  const tickerMatch = combinedText.toUpperCase().match(/\b([A-Z]{4}\d{1,2})\b/);
-  const extractedTicker = tickerMatch ? tickerMatch[1] : '';
-
-  const isFinancialOrQuoteApi =
-    endpointUrl.includes('brapi.dev') ||
-    endpointUrl.includes('/quote/') ||
-    cleanSlug.includes('mercado_de_valores') ||
-    cleanSlug.includes('brapi');
-
-  const rawQueryArg = String(
-    taskArgs?.symbol ||
-      taskArgs?.ticker ||
-      taskArgs?.query ||
-      taskArgs?.param ||
-      taskArgs?.id ||
-      taskArgs?.task_details ||
-      userPrompt ||
-      ''
-  ).trim();
-
-  // Se for API de cotação (ex: /quote/{{query}}) e encontrou um ticker (ex: AZUL4, PETR4), usa o ticker limpo no lugar da frase inteira!
-  const smartQueryVal =
-    isFinancialOrQuoteApi && extractedTicker
-      ? extractedTicker
-      : rawQueryArg;
+  const tickerMatch = String(taskArgs?.symbol || taskArgs?.ticker || userPrompt || '')
+    .toUpperCase()
+    .match(/\b([A-Z]{4}\d{1,2})\b/);
 
   const dynamicVars: Record<string, string> = {
     BASE_URL: cleanBase,
     SERVER_IP: cleanBase,
     prompt: userPrompt,
-    query: smartQueryVal,
-    symbol: extractedTicker || smartQueryVal,
-    ticker: extractedTicker || smartQueryVal
+    query: String(taskArgs?.query || taskArgs?.task_details || userPrompt || '').trim(),
+    symbol: String(taskArgs?.symbol || taskArgs?.ticker || (tickerMatch ? tickerMatch[1] : '')).trim()
   };
 
   for (const [key, val] of Object.entries(taskArgs || {})) {
-    if ((typeof val === 'string' || typeof val === 'number') && String(val).trim() !== '') {
-      if ((key === 'query' || key === 'task_details') && isFinancialOrQuoteApi && extractedTicker) {
-        continue;
-      }
+    if (typeof val === 'string' || typeof val === 'number') {
       dynamicVars[key] = String(val).trim();
     }
   }
 
-  // 3. Interpolação de variáveis {{chave}} na URL (suporta {{query}}, {{symbol}}, {{BASE_URL}} ou qualquer {{var}})
   let hadPlaceholderInUrl = false;
   let finalUrl = endpointUrl.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, varName) => {
     const key = varName.trim();
     if (key !== 'BASE_URL' && key !== 'SERVER_IP') hadPlaceholderInUrl = true;
-    const replacement =
-      dynamicVars[key] ?? dynamicVars[key.toLowerCase()] ?? dynamicVars.query ?? '';
-    return key === 'BASE_URL' || key === 'SERVER_IP'
-      ? replacement
-      : encodeURIComponent(replacement);
+    const replacement = dynamicVars[key] ?? dynamicVars[key.toLowerCase()] ?? dynamicVars.query ?? '';
+    return key === 'BASE_URL' || key === 'SERVER_IP' ? replacement : encodeURIComponent(replacement);
   });
 
-  // Se for GET sem placeholder {{...}} na URL e tiver parâmetro/ticker, anexa no final do path
   if (!hadPlaceholderInUrl && httpMethod === 'GET') {
     const mainParam = dynamicVars.symbol || taskArgs?.id || taskArgs?.param || '';
     if (mainParam && !finalUrl.endsWith(mainParam) && !finalUrl.includes('?')) {
@@ -363,7 +287,6 @@ export async function executeUniversalApiConnector(
     }
   }
 
-  // 4. Injeção universal de autenticação (Funciona tanto para Bearer Header quanto para ?token= na Query)
   const cleanToken = authToken.replace(/^Bearer\s+/i, '').trim();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -373,20 +296,15 @@ export async function executeUniversalApiConnector(
 
   if (cleanToken) {
     headers['Authorization'] = `Bearer ${cleanToken}`;
-    headers['x-api-key'] = cleanToken;
-
+    if (authType === 'api_key') {
+      headers['x-api-key'] = cleanToken;
+    }
     const hasTokenInQuery = /[?&](token|apikey|api_key|key)=/i.test(finalUrl);
-    if (
-      !hasTokenInQuery &&
-      (authType === 'query_token' || finalUrl.includes('brapi.dev') || httpMethod === 'GET')
-    ) {
-      finalUrl += `${finalUrl.includes('?') ? '&' : '?'}${encodeURIComponent(
-        queryParamKey
-      )}=${encodeURIComponent(cleanToken)}`;
+    if (!hasTokenInQuery && (authType === 'query_token' || finalUrl.includes('brapi.dev') || !finalUrl.includes('?'))) {
+      finalUrl += `${finalUrl.includes('?') ? '&' : '?'}${encodeURIComponent(queryParamKey)}=${encodeURIComponent(cleanToken)}`;
     }
   }
 
-  // 5. Montagem do payload de envio para POST/PUT/PATCH
   let requestBody: string | undefined = undefined;
   if (httpMethod !== 'GET' && httpMethod !== 'HEAD') {
     if (payloadTemplate && payloadTemplate.trim().startsWith('{')) {
@@ -397,7 +315,6 @@ export async function executeUniversalApiConnector(
       requestBody = JSON.stringify({
         ...taskArgs,
         query: dynamicVars.query,
-        symbol: dynamicVars.symbol,
         prompt: userPrompt
       });
     }
@@ -413,64 +330,88 @@ export async function executeUniversalApiConnector(
   const rawData = await response.json().catch(async () => ({ rawText: await response.text() }));
 
   return {
-    success: response.ok,
     connector: connectorName,
-    slug: cleanSlug,
-    calledUrl: finalUrl.replace(/token=[^&]+/i, 'token=***'),
     httpStatus: response.status,
     authenticatedWithToken: Boolean(cleanToken),
     data: rawData
   };
 }
 
-function normalizeText(str: string): string {
-  return String(str || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]/g, ' ')
-    .trim();
-}
-
-
-export async function executeAutoDiscoveryAndAction(
-  connectorConfig: any,
+export async function executeBoundTool(
+  toolKey: string,
+  args: Record<string, any>,
   userPrompt: string,
-  payload: Record<string, any> = {},
-  serverBaseUrl?: string
-) {
-  const rawEndpoint = String(connectorConfig.endpoint_url || connectorConfig.url || '').trim();
-  const endpointUrl = typeof resolveDynamicUrl === 'function' 
-    ? resolveDynamicUrl(rawEndpoint, serverBaseUrl) 
-    : rawEndpoint;
-
-  const authToken = String(
-    connectorConfig.auth_token ||
-    connectorConfig.api_key ||
-    connectorConfig.token ||
-    ''
-  ).trim();
-
+  connectorsMap: Map<string, any>,
+  serverBaseUrl: string
+): Promise<any> {
+  const cleanKey = sanitizeToolName(toolKey);
+  const queryValue = String(args?.query || args?.task_details || args?.input || userPrompt).trim();
   const promptClean = normalizeText(userPrompt);
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
-  };
-  if (authToken) {
-    headers['Authorization'] = authToken.startsWith('Bearer ') ? authToken : `Bearer ${authToken}`;
+  if (cleanKey === 'save_to_database' || cleanKey === 'dynamicdatabasetool') {
+    return await saveToDatabase({
+      collectionName: sanitizeToolName(args?.collectionName || 'jarvis_records'),
+      documentData:
+        typeof args?.documentData === 'object'
+          ? args.documentData
+          : { query: queryValue, raw: args },
+      decisionReasoning: args?.decisionReasoning || 'Gravado via Tool Calling do Agente'
+    });
   }
 
-  // =========================================================================
-  // 1. HOME ASSISTANT (Multi-Device Discovery, Scoring de Cômodo e Desambiguação)
-  // =========================================================================
   if (
-    endpointUrl.includes(':8123/api') ||
-    endpointUrl.includes('/api/services') ||
-    endpointUrl.includes('/api/states')
+    cleanKey === 'vector_rag' ||
+    cleanKey === 'rag_search' ||
+    cleanKey === 'consultar_base_rag'
   ) {
-    const baseUrl = endpointUrl.split('/api')[0];
+    const docs = await searchVectorDocuments(queryValue, 4).catch(() => []);
+    return { matches: docs };
+  }
 
-    // Busca o snapshot real de todos os dispositivos do Home Assistant
+  if (
+    cleanKey === 'execute_ssh_command' ||
+    cleanKey === 'ssh_terminal' ||
+    cleanKey === 'executar_comando_ssh'
+  ) {
+    if (args?.remoteFilePath) {
+      return await readRemoteFileViaSshToRag({ remoteFilePath: String(args.remoteFilePath) });
+    }
+    return await executeSshCommand(args?.command || queryValue || 'uptime');
+  }
+
+  const customConn = connectorsMap?.get(cleanKey);
+  const cfg = customConn?.config || {};
+
+  // Auto-Discovery e Acionamento Integrado para Home Assistant
+  const isHomeAssistantTool =
+    cleanKey.includes('home_assistant') ||
+    cleanKey.includes('detector') ||
+    cleanKey.includes('sensor') ||
+    cleanKey.includes('dispositivo');
+
+  if (isHomeAssistantTool) {
+    const targetEndpoint =
+      cfg.endpoint_url ||
+      customConn?.endpoint_url ||
+      args?.endpoint ||
+      (cleanKey.includes('detector')
+        ? 'http://163.176.111.18:8123/api/states'
+        : 'http://163.176.111.18:8123/api/services/homeassistant/toggle');
+
+    const token =
+      cfg.auth_token ||
+      cfg.access_token ||
+      cfg.api_key ||
+      customConn?.auth_token ||
+      args?.auth_token ||
+      '';
+
+    const baseUrl = String(targetEndpoint).split('/api')[0];
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = String(token).startsWith('Bearer ') ? String(token) : `Bearer ${token}`;
+    }
+
     let relevantDevices: any[] = [];
     try {
       const statesRes = await fetch(`${baseUrl}/api/states`, {
@@ -498,11 +439,11 @@ export async function executeAutoDiscoveryAndAction(
       console.warn('⚠️ [HomeAssistant Discovery] Falha ao consultar /api/states:', err.message);
     }
 
-    // Leitura pura de sensores sem ação física
     const isAction = /(ligar|ligue|acender|acenda|desligar|desligue|apagar|apague|fechar|feche|abrir|abra|iniciar|ajustar)/i.test(
       promptClean
     );
-    if (endpointUrl.endsWith('/api/states') && !isAction) {
+
+    if (String(targetEndpoint).endsWith('/api/states') && !isAction) {
       return {
         status: 'success',
         mode: 'sensor_reading',
@@ -511,16 +452,12 @@ export async function executeAutoDiscoveryAndAction(
       };
     }
 
-    // Determina a ação (turn_off ou turn_on)
     const isTurnOff = /(desligar|desligue|apagar|apague|fechar|feche|off)/i.test(promptClean);
     const serviceAction = isTurnOff ? 'turn_off' : 'turn_on';
 
-    // Determina a categoria do pedido
     const wantsAC = /(ar|condicionado|clima|split|yarin|ac\b)/i.test(promptClean);
     const wantsLight = /(luz|lampada|iluminacao|led|spot)/i.test(promptClean);
-    const wantsAll = /(todos|todas|geral|tudo)/i.test(promptClean);
 
-    // Filtra candidatos pela categoria solicitada
     let candidates = relevantDevices;
     if (wantsAC) {
       candidates = relevantDevices.filter(
@@ -537,30 +474,8 @@ export async function executeAutoDiscoveryAndAction(
       );
     }
 
-    // Caso de comando coletivo: "desligue todos os aparelhos de ar-condicionado"
-    if (wantsAll && candidates.length > 0) {
-      const results = [];
-      for (const dev of candidates) {
-        await fetch(`${baseUrl}/api/services/homeassistant/${serviceAction}`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ entity_id: dev.entity_id })
-        }).catch(() => {});
-        results.push({ entity_id: dev.entity_id, name: dev.name });
-      }
-      return {
-        status: 'executed_all',
-        action: `homeassistant.${serviceAction}`,
-        message: `Comando executado com sucesso em todos os ${results.length} dispositivos encontrados.`,
-        devices_affected: results
-      };
-    }
-
-    // Identificação do dispositivo específico por pontuação de palavras (Cômodo / Nome)
-    let targetEntity = payload.entity_id;
-
+    let targetEntity = args?.entity_id;
     if (!targetEntity && candidates.length > 0) {
-      // Palavras de parada para isolar os cômodos e identificadores específicos
       const stopWords = new Set([
         'o', 'a', 'os', 'as', 'de', 'do', 'da', 'dos', 'das', 'no', 'na', 'nos', 'nas',
         'em', 'para', 'por', 'com', 'um', 'uma', 'uns', 'umas', 'meu', 'minha',
@@ -582,11 +497,10 @@ export async function executeAutoDiscoveryAndAction(
 
         for (const token of userTokens) {
           if (fullDevText.includes(token)) {
-            score += 15; // Pontua forte palavras do cômodo (ex: quarto, sala, escritorio, suite)
+            score += 15;
           }
         }
 
-        // Bônus se o nome do aparelho ou cômodo bater exatamente com uma parte da frase
         if (promptClean.includes(normalizeText(dev.name))) {
           score += 30;
         }
@@ -597,19 +511,14 @@ export async function executeAutoDiscoveryAndAction(
         }
       }
 
-      // Se só existe 1 ar-condicionado na casa toda, usa ele direto
       if (candidates.length === 1) {
         targetEntity = candidates[0].entity_id;
-      } 
-      // Se encontrou um dispositivo com pontuação de cômodo clara
-      else if (highestScore > 0 && bestMatch) {
+      } else if (highestScore > 0 && bestMatch) {
         targetEntity = bestMatch.entity_id;
-      } 
-      // Se existem múltiplos aparelhos e o usuário não especificou o cômodo (ambiguidade)
-      else if (candidates.length > 1) {
+      } else if (candidates.length > 1) {
         return {
           status: 'ambiguous_device',
-          message: `Identifiquei ${candidates.length} aparelhos de ar-condicionado. Em qual cômodo você deseja acionar?`,
+          message: `Identifiquei ${candidates.length} dispositivos disponíveis. Em qual cômodo deseja acionar?`,
           options: candidates.map((c) => ({
             entity_id: c.entity_id,
             nome: c.name,
@@ -619,164 +528,112 @@ export async function executeAutoDiscoveryAndAction(
       }
     }
 
-    if (!targetEntity) {
+    if (targetEntity) {
+      const actionUrl = `${baseUrl}/api/services/homeassistant/${serviceAction}`;
+      const execRes = await fetch(actionUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ entity_id: targetEntity }),
+        signal: AbortSignal.timeout(10000)
+      });
+      const execData = await execRes.json().catch(() => ({}));
       return {
-        status: 'device_not_found',
-        message: 'Nenhum dispositivo correspondente foi identificado.',
-        available_devices: candidates
+        status: 'executed',
+        action: `homeassistant.${serviceAction}`,
+        entity_id: targetEntity,
+        http_status: execRes.status,
+        result: execData
       };
     }
-
-    // Dispara a requisição HTTP POST para o Home Assistant
-    const actionUrl = `${baseUrl}/api/services/homeassistant/${serviceAction}`;
-    const execRes = await fetch(actionUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ entity_id: targetEntity }),
-      signal: AbortSignal.timeout(10000)
-    });
-
-    const execData = await execRes.json().catch(() => ({}));
-    return {
-      status: 'executed',
-      action: `homeassistant.${serviceAction}`,
-      entity_id: targetEntity,
-      http_status: execRes.status,
-      result: execData
-    };
   }
 
-  // =========================================================================
-  // 2. QUALQUER OUTRA PLATAFORMA (REST, Webhooks, etc.)
-  // =========================================================================
-  const method = String(connectorConfig.http_method || 'POST').toUpperCase();
-  const finalUrl = typeof interpolateApiTemplate === 'function'
-    ? interpolateApiTemplate(endpointUrl, userPrompt, payload)
-    : endpointUrl;
+  const isNativeSpecialized =
+    cleanKey.startsWith('brapi') ||
+    cleanKey.includes('gmail') ||
+    cleanKey.includes('outlook') ||
+    cleanKey.includes('telegram') ||
+    cleanKey.includes('google_sheets');
 
-  const fetchInit: RequestInit = {
-    method,
-    headers,
-    signal: AbortSignal.timeout(15000)
-  };
-
-  if (method !== 'GET' && method !== 'HEAD') {
-    fetchInit.body = JSON.stringify(payload);
-  }
-
-  const res = await fetch(finalUrl, fetchInit);
-  return await res.json().catch(async () => ({ status: res.status, text: await res.text() }));
-}
-
-export async function executeBoundTool(
-  toolKey: string,
-  args: Record<string, any>,
-  userPrompt: string,
-  connectorsMap: Map<string, any>,
-  serverBaseUrl: string
-): Promise<any> {
-  const cleanKey = sanitizeToolName(toolKey);
-  const queryValue = String(args?.query || args?.task_details || args?.input || userPrompt).trim();
-
-  // 1. Gravação em Banco de Dados Autônomo
-  if (cleanKey === 'save_to_database' || cleanKey === 'dynamicdatabasetool') {
-    return await saveToDatabase({
-      collectionName: sanitizeToolName(args?.collectionName || 'jarvis_records'),
-      documentData:
-        typeof args?.documentData === 'object'
-          ? args.documentData
-          : { query: queryValue, raw: args },
-      decisionReasoning: args?.decisionReasoning || 'Gravado via Tool Calling do Agente'
+  if (isNativeSpecialized) {
+    return await executeProtocolOrIntegration(cleanKey, {
+      protocol: cleanKey as SupportedProtocolOrPlatform,
+      endpoint: cfg.endpoint_url || customConn?.endpoint_url || args?.endpoint,
+      method: cfg.http_method || customConn?.http_method || args?.method,
+      body: {
+        query: queryValue,
+        prompt: userPrompt,
+        auth_token: cfg.auth_token || cfg.api_key || customConn?.auth_token,
+        ...args
+      },
+      prompt: userPrompt
     });
   }
 
-  // 2. RAG Vetorial
-  if (
-    cleanKey === 'vector_rag' ||
-    cleanKey === 'rag_search' ||
-    cleanKey === 'consultar_base_rag'
-  ) {
-    const docs = await searchVectorDocuments(queryValue, 4).catch(() => []);
-    return { matches: docs };
-  }
-
-  // 3. Comandos Remotos via SSH
-  if (
-    cleanKey === 'execute_ssh_command' ||
-    cleanKey === 'ssh_terminal' ||
-    cleanKey === 'executar_comando_ssh'
-  ) {
-    if (args?.remoteFilePath) {
-      return await readRemoteFileViaSshToRag({ remoteFilePath: String(args.remoteFilePath) });
-    }
-    return await executeSshCommand(args?.command || queryValue || 'uptime');
-  }
-
-  // 4. Conectores da Tabela external_connectors ou Tools Customizadas do Painel
-  const customConn = connectorsMap?.get(cleanKey);
-  const cfg = customConn?.config || {};
-
-  // Suporte a Tool do tipo Code (Script JavaScript puro)
   if ((cfg.tool_type === 'code' || customConn?.category === 'Code Tool') && cfg.code_snippet) {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const fn = new AsyncFunction('query', 'args', 'env', cfg.code_snippet);
     return await fn(queryValue, args, { BASE_URL: serverBaseUrl });
   }
 
-  // Identificação de Ferramentas HTTP / IoT / Home Assistant / APIs Dinâmicas
-  if (
-    customConn ||
-    cleanKey.includes('home_assistant') ||
-    cleanKey.includes('detector') ||
-    cleanKey.includes('sensor') ||
-    cleanKey.includes('dispositivo')
-  ) {
-    const targetEndpoint =
-      cfg.endpoint_url ||
-      customConn?.endpoint_url ||
-      args?.endpoint ||
-      args?.endpoint_url ||
-      (cleanKey.includes('detector')
-        ? 'http://163.176.111.18:8123/api/states'
-        : 'http://163.176.111.18:8123/api/services/homeassistant/toggle');
-
-    const targetToken =
-      cfg.auth_token ||
-      cfg.access_token ||
-      cfg.api_key ||
-      customConn?.auth_token ||
-      args?.auth_token ||
-      '';
-
-    const targetMethod = cfg.http_method || customConn?.http_method || args?.http_method || 'POST';
-
-    return await executeAutoDiscoveryAndAction(
-      {
-        endpoint_url: targetEndpoint,
-        auth_token: targetToken,
-        http_method: targetMethod
-      },
-      userPrompt,
-      { query: queryValue, ...args },
-      serverBaseUrl
-    );
+  if (cfg.tool_type === 'ssh') {
+    return await executeSshCommand(cfg.endpoint_url || queryValue || 'uptime');
   }
 
-  // 5. Fallback para endpoints HTTP universais diretos
-  if (args?.endpoint && String(args.endpoint).startsWith('http')) {
-    return await executeAutoDiscoveryAndAction(
-      {
-        endpoint_url: args.endpoint,
-        auth_token: args.token || args.auth_token,
-        http_method: args.method || 'POST'
-      },
-      userPrompt,
-      args,
-      serverBaseUrl
-    );
+  const rawEndpoint =
+    cfg.endpoint_url ||
+    customConn?.endpoint_url ||
+    (cleanKey === 'http_request_universal' ? args?.endpoint || args?.url || queryValue : '');
+
+  if (rawEndpoint && String(rawEndpoint).startsWith('http')) {
+    let targetUrl = resolveDynamicUrl(String(rawEndpoint), serverBaseUrl);
+    targetUrl = interpolateApiTemplate(targetUrl, userPrompt, { query: queryValue, ...args });
+
+    const method = String(
+      cfg.http_method || customConn?.http_method || args?.method || 'GET'
+    ).toUpperCase();
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json'
+    };
+
+    const token =
+      cfg.auth_token || cfg.api_key || cfg.access_token || customConn?.auth_token;
+    if (token) {
+      const cleanToken = String(token).replace(/^Bearer\s+/i, '').trim();
+      headers['Authorization'] = `Bearer ${cleanToken}`;
+    }
+
+    if (cfg.tool_type === 'mcp' || customConn?.agent_type === 'mcp') {
+      const mcpRes = await fetch(targetUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'tools/call',
+          params: { name: cleanKey, arguments: { query: queryValue, ...args } }
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+      return await mcpRes.json().catch(() => ({ status: mcpRes.status }));
+    }
+
+    const fetchInit: RequestInit = { method, headers, signal: AbortSignal.timeout(15000) };
+    if (method !== 'GET' && method !== 'HEAD') {
+      if (cfg.payload_template) {
+        fetchInit.body = interpolateApiTemplate(String(cfg.payload_template), userPrompt, {
+          query: queryValue,
+          ...args
+        });
+      } else {
+        fetchInit.body = JSON.stringify({ query: queryValue, ...args });
+      }
+    }
+
+    const res = await fetch(targetUrl, fetchInit);
+    return await res.json().catch(async () => ({ status: res.status, text: await res.text() }));
   }
 
-  // 6. Fallback para Integração de Protocolos Nativos
   return await executeProtocolOrIntegration(cleanKey, {
     protocol: (cleanKey as SupportedProtocolOrPlatform) || 'rest_api',
     endpoint: args?.endpoint,
@@ -845,8 +702,11 @@ export async function executeSpecialistPipeline(
 
     let stepOutput: any = null;
     const agentType = (currentAgent.agent_type || 'llm').toLowerCase();
+    const promptText =
+      typeof currentPayload === 'string'
+        ? currentPayload
+        : currentPayload?.task_details || currentPayload?.query || userPrompt;
 
-    // ROTA 1: Nó de Código Puro (Script JS Determinístico)
     if (
       agentType === 'code' &&
       (currentAgent.code_snippet || currentAgent.script_code)
@@ -862,21 +722,45 @@ export async function executeSpecialistPipeline(
         activePort = 3333;
       }
       stepOutput = await fn(
-        { ...currentPayload, userPrompt },
+        { ...currentPayload, query: promptText, userPrompt },
         { BASE_URL: serverBaseUrl, PORT: activePort }
       );
-    }
-    // ROTA 2: Nó Direto de API / Integração Externa (Consumo Universal via executeUniversalApiConnector)
-    else if (
+    } else if (
       nonLlmTypes.includes(agentType) ||
       (agentType === 'api' && currentAgent.endpoint_url)
     ) {
-      const apiResult = await executeUniversalApiConnector(
-        currentAgent,
-        currentPayload,
-        userPrompt,
-        serverBaseUrl
-      );
+      const rawUrl = resolveDynamicUrl(currentAgent.endpoint_url || '', serverBaseUrl);
+      const targetUrl = interpolateApiTemplate(rawUrl, userPrompt, currentPayload);
+      const protocolToUse = (
+        agentType === 'api' ? 'rest_api' : agentType
+      ) as SupportedProtocolOrPlatform;
+
+      let customBodyParams: Record<string, any> = {};
+      const bodyTemplate = currentAgent.payload_template || currentAgent.code_snippet;
+      if (bodyTemplate && String(bodyTemplate).trim().startsWith('{')) {
+        try {
+          const interpolatedJson = interpolateApiTemplate(
+            String(bodyTemplate),
+            userPrompt,
+            currentPayload
+          );
+          customBodyParams = JSON.parse(interpolatedJson);
+        } catch {
+          customBodyParams = { raw_payload: bodyTemplate };
+        }
+      }
+
+      const rawApiResult = await executeProtocolOrIntegration(currentAgent, {
+        protocol: protocolToUse,
+        endpoint: targetUrl,
+        method: currentAgent.http_method || 'GET',
+        body: {
+          ...(currentAgent.protocol_config || {}),
+          ...currentPayload,
+          ...customBodyParams
+        },
+        prompt: userPrompt
+      });
 
       const formattingInstruction = (
         currentAgent.response_instruction ||
@@ -887,12 +771,10 @@ export async function executeSpecialistPipeline(
       stepOutput = {
         extractionInstruction:
           formattingInstruction ||
-          'Utilize exclusivamente os dados retornados em apiResponse para responder com precisão.',
-        apiResponse: apiResult
+          'Extraia os dados principais do JSON retornado e apresente ao usuário.',
+        apiResponse: rawApiResult
       };
-    }
-    // ROTA 3: Nó Cognitivo (LLM Especialista) com Tools e APIs Vinculadas
-    else {
+    } else {
       let enabledTools: string[] = [];
       if (Array.isArray(currentAgent.tools)) {
         enabledTools = currentAgent.tools;
@@ -903,45 +785,6 @@ export async function executeSpecialistPipeline(
           enabledTools = [];
         }
       }
-
-      // Pré-execução das APIs vinculadas ao Especialista
-      const internalToolsSlugs = [
-        'save_to_database',
-        'dynamicdatabasetool',
-        'vector_rag',
-        'rag_search',
-        'consultar_base_rag',
-        'execute_ssh_command',
-        'ssh_terminal',
-        'executar_comando_ssh'
-      ];
-
-      const externalApiTools = enabledTools.filter(
-        (t) => !internalToolsSlugs.includes(sanitizeToolName(t))
-      );
-
-      const preFetchedApiData: Record<string, any> = {};
-      for (const apiSlug of externalApiTools) {
-        try {
-          preFetchedApiData[apiSlug] = await executeUniversalApiConnector(
-            apiSlug,
-            currentPayload,
-            userPrompt,
-            serverBaseUrl
-          );
-        } catch (err: any) {
-          preFetchedApiData[apiSlug] = { error: err.message };
-        }
-      }
-
-      const apiContextMessage =
-        Object.keys(preFetchedApiData).length > 0
-          ? `\n\n[DADOS RETORNADOS EM TEMPO REAL PELAS SUAS APIS/TOOLS]:\n${JSON.stringify(
-              preFetchedApiData,
-              null,
-              2
-            )}\nATENÇÃO OBRIGATÓRIA: Responda ao usuário utilizando EXCLUSIVAMENTE os dados reais das APIs acima. NUNCA invente cotações ou dados da sua memória de treinamento.`
-          : '';
 
       const specialistTools: OpenAI.Chat.Completions.ChatCompletionTool[] =
         enabledTools.map((tId: string) => {
@@ -962,8 +805,11 @@ export async function executeSpecialistPipeline(
                 properties: {
                   query: { type: 'string', description: 'Consulta, ticker (ex: PETR4) ou comando principal.' },
                   symbol: { type: 'string', description: 'Código do ativo/ticker da B3 (ex: PETR4, VALE3).' },
-                  action: { type: 'string', description: 'Ação a executar.' },
-                  entity_id: { type: 'string', description: 'ID da entidade se aplicável.' },
+                  action: { type: 'string', description: 'Ação a executar (ex: turn_on, turn_off, toggle, states).' },
+                  entity_id: { type: 'string', description: 'ID da entidade no Home Assistant (ex: light.varanda).' },
+                  to: { type: 'string', description: 'Destinatário.' },
+                  subject: { type: 'string', description: 'Assunto.' },
+                  body: { type: 'string', description: 'Conteúdo.' },
                   task_details: { type: 'string', description: 'Detalhes complementares da tarefa.' }
                 }
               }
@@ -976,7 +822,7 @@ export async function executeSpecialistPipeline(
           role: 'system',
           content: `${
             currentAgent.system_prompt || `Você é o especialista ${currentAgent.name}.`
-          }${apiContextMessage}\nFerramentas habilitadas para você: ${
+          }\nFerramentas habilitadas para você: ${
             enabledTools.length > 0 ? enabledTools.join(', ') : 'Nenhuma'
           }.`
         },
@@ -1009,10 +855,10 @@ export async function executeSpecialistPipeline(
           try {
             subArgs = JSON.parse((subCall as any).function?.arguments || '{}');
           } catch {
-            subArgs = { query: userPrompt };
+            subArgs = { query: promptText };
           }
 
-          const toolOutput = await executeBoundTool(subFn, subArgs, userPrompt, map, serverBaseUrl);
+          const toolOutput = await executeBoundTool(subFn, subArgs, promptText, map, serverBaseUrl);
           subToolResults.push({ tool: subFn, output: toolOutput });
         }
 
@@ -1027,68 +873,55 @@ export async function executeSpecialistPipeline(
               role: 'user',
               content: `Resultado das Tools executadas:\n${JSON.stringify(
                 subToolResults
-              )}\n\nElabore a resposta final objetiva e estruturada para o usuário baseada nestes dados.`
+              )}\n\nElabore a resposta final objetiva e estruturada para o usuário.`
             }
           ]
         });
 
-        stepOutput = {
-          specialist_response: followUpRes?.choices?.[0]?.message?.content || JSON.stringify(subToolResults),
-          tools_executed: subToolResults,
-          pre_fetched_apis: preFetchedApiData
-        };
+        stepOutput =
+          followUpRes?.choices?.[0]?.message?.content || JSON.stringify(subToolResults);
       } else {
-      let rawContent = specChoice?.content || 'Processado pelo especialista.';
+        const rawContent = specChoice?.content || 'Processado pelo especialista.';
 
-      // INTERCEPTADOR: Se a LLM do Especialista gerou a Tool em formato de texto JSON:
-      if (rawContent.includes('"action"') || rawContent.includes('invoke_tool') || rawContent.includes('home_')) {
-        try {
-          const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0]);
-            const toolToRun = sanitizeToolName(
-              parsed.parameters?.slug ||
-              parsed.parameters?.tool ||
-              parsed.action ||
-              parsed.tool ||
-              'home_assistant_acionar_dispositivos'
-            );
-            const toolArgs = parsed.parameters || parsed.payload || {};
+        // Intercepta e executa ferramentas caso o modelo retorne JSON cru em texto
+        if (rawContent.includes('"action"') || rawContent.includes('invoke_tool') || rawContent.includes('home_')) {
+          try {
+            const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              const toolToRun = sanitizeToolName(
+                parsed.parameters?.slug ||
+                parsed.parameters?.tool ||
+                parsed.action ||
+                parsed.tool ||
+                'home_assistant_acionar_dispositivos'
+              );
+              const toolArgs = parsed.parameters || parsed.payload || {};
 
-            // Executa imediatamente a ferramenta com auto-discovery
-            const toolOutput = await executeBoundTool(toolToRun, toolArgs, userPrompt, map, serverBaseUrl);
+              const toolOutput = await executeBoundTool(toolToRun, toolArgs, userPrompt, map, serverBaseUrl);
 
-            let friendlyText = '';
-            if (toolOutput?.status === 'executed') {
-              friendlyText = `Dispositivo acionado com sucesso (${toolOutput.entity_id || 'Home Assistant'}).`;
-            } else if (toolOutput?.message) {
-              friendlyText = toolOutput.message;
+              let friendlyText = '';
+              if (toolOutput?.status === 'executed') {
+                friendlyText = `Dispositivo acionado com sucesso (${toolOutput.entity_id || 'Home Assistant'}).`;
+              } else if (toolOutput?.message) {
+                friendlyText = toolOutput.message;
+              } else {
+                friendlyText = `Comando executado com sucesso pelo Assistente Residencial.`;
+              }
+
+              stepOutput = {
+                specialist_response: friendlyText,
+                tools_executed: [{ tool: toolToRun, output: toolOutput }]
+              };
             } else {
-              friendlyText = `Comando executado com sucesso pelo Assistente Residencial.`;
+              stepOutput = rawContent;
             }
-
-            stepOutput = {
-              specialist_response: friendlyText,
-              tools_executed: [{ tool: toolToRun, output: toolOutput }],
-              pre_fetched_apis: preFetchedApiData
-            };
-          } else {
-            stepOutput = {
-              specialist_response: rawContent,
-              pre_fetched_apis: preFetchedApiData
-            };
+          } catch {
+            stepOutput = rawContent;
           }
-        } catch {
-          stepOutput = {
-            specialist_response: rawContent,
-            pre_fetched_apis: preFetchedApiData
-          };
+        } else {
+          stepOutput = rawContent;
         }
-      } else {
-        stepOutput = {
-          specialist_response: rawContent,
-          pre_fetched_apis: preFetchedApiData
-        };
       }
     }
 
