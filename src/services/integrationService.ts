@@ -507,6 +507,35 @@ export async function executeExternalConnector({
   }
 }
 
+// Função para obter Access Token novo a partir do Refresh Token fixo
+async function getGoogleAccessToken(): Promise<string> {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+
+  if (!refreshToken || !clientId || !clientSecret) {
+    throw new Error('Credenciais OAuth2 do Google incompletas no .env');
+  }
+
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token'
+    })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error_description || 'Falha ao renovar Access Token da Google.');
+  }
+
+  return data.access_token;
+}
+
 export async function executeNodeIntegration(
   agentOrSlug: any,
   payload: Record<string, any> = {}
