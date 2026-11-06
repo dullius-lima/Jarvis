@@ -93,6 +93,13 @@ export async function processWorkflowExecution(
     brainConfig = await getCentralBrainConfig();
     const dynamicServerBaseUrl = brainConfig.server_base_url;
 
+    // Geração do contexto temporal em tempo real com fuso horário local
+    const now = new Date();
+    const currentTimestampContext = `\n[CONTEXTO TEMPORAL ACTUAL DO SISTEMA]:
+- Data e Hora Actual do Servidor: ${now.toLocaleString('pt-BR', { timeZone: 'America/Campo_Grande' })}
+- ISO 8601: ${now.toISOString()}
+- Fuso Horário Local: America/Campo_Grande (UTC-4)`;
+
     emitNeuroPulse({
       source_dendrite: 'sensory_input',
       target_dendrite: 'jarvis_core',
@@ -407,6 +414,7 @@ export async function processWorkflowExecution(
       {
         role: 'system',
         content: `${brainConfig.system_prompt}
+${currentTimestampContext}
 Identidade Autenticada: ${identityToken}
 URL Base do Servidor: ${dynamicServerBaseUrl}${visionSystemInstruction}
 
@@ -491,8 +499,12 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
 
           let immediateChainResult: any = null;
           if (parsedArgs.execute_immediately !== false && createdAg.agent) {
+            const immediateAgentWithTime = {
+              ...createdAg.agent,
+              system_prompt: `${createdAg.agent.system_prompt || ''}\n${currentTimestampContext}`
+            };
             immediateChainResult = await executeSpecialistPipeline(
-              createdAg.agent,
+              immediateAgentWithTime,
               parsedArgs,
               sessionId,
               identityToken,
@@ -573,8 +585,14 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           triggeredAgentId = matchedAgent.slug;
           triggeredNodeType = matchedAgent.agent_type || 'llm';
 
+          // Anexa o carimbo de data/hora atual no system prompt do especialista chamado
+          const agentWithTime = {
+            ...matchedAgent,
+            system_prompt: `${matchedAgent.system_prompt || ''}\n${currentTimestampContext}`
+          };
+
           const chainResults = await executeSpecialistPipeline(
-            matchedAgent,
+            agentWithTime,
             parsedArgs,
             sessionId,
             identityToken,
@@ -587,7 +605,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
 
           toolOutputsForSynthesis.push({
             toolName: matchedAgent.slug,
-            responseInstruction: matchedAgent.system_prompt || undefined,
+            responseInstruction: agentWithTime.system_prompt || undefined,
             result: chainResults
           });
           continue;
@@ -615,7 +633,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
             toolOutputsForSynthesis,
             null,
             2
-          )}\n\nRespeite eventuais instruções em 'extractionInstruction' ou 'responseInstruction' e elabore a resposta final de forma clara, completa e direta ao usuário.`
+          )}\n\n[CONTEXTO TEMPORAL ACTUAL]: ${now.toLocaleString('pt-BR', { timeZone: 'America/Campo_Grande' })}\nRespeite eventuais instruções em 'extractionInstruction' ou 'responseInstruction' e elabore a resposta final de forma clara, completa e direta ao usuário.`
         }
       ];
 
