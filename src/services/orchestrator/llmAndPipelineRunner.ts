@@ -423,16 +423,6 @@ export async function executeUniversalApiConnector(
   };
 }
 
-/**
- * Motor Universal com Auto-Discovery para Home Assistant e Conectores REST/IoT
- */
-// ============================================================================
-// MOTOR UNIVERSAL DE AUTO-DESCOBERTA E ACIONAMENTO IOT / REST
-// ============================================================================
-
-/**
- * Normaliza strings removendo diacríticos, acentos, hífens e pontuações
- */
 function normalizeText(str: string): string {
   return String(str || '')
     .toLowerCase()
@@ -442,9 +432,7 @@ function normalizeText(str: string): string {
     .trim();
 }
 
-/**
- * Executa Descoberta Automática de Dispositivos e Disparo Sem Depender de entity_id
- */
+
 export async function executeAutoDiscoveryAndAction(
   connectorConfig: any,
   userPrompt: string,
@@ -452,7 +440,10 @@ export async function executeAutoDiscoveryAndAction(
   serverBaseUrl?: string
 ) {
   const rawEndpoint = String(connectorConfig.endpoint_url || connectorConfig.url || '').trim();
-  const endpointUrl = resolveDynamicUrl(rawEndpoint, serverBaseUrl);
+  const endpointUrl = typeof resolveDynamicUrl === 'function' 
+    ? resolveDynamicUrl(rawEndpoint, serverBaseUrl) 
+    : rawEndpoint;
+
   const authToken = String(
     connectorConfig.auth_token ||
     connectorConfig.api_key ||
@@ -469,6 +460,9 @@ export async function executeAutoDiscoveryAndAction(
     headers['Authorization'] = authToken.startsWith('Bearer ') ? authToken : `Bearer ${authToken}`;
   }
 
+  // =========================================================================
+  // 1. HOME ASSISTANT (Multi-Device Discovery, Scoring de Cômodo e Desambiguação)
+  // =========================================================================
   if (
     endpointUrl.includes(':8123/api') ||
     endpointUrl.includes('/api/services') ||
@@ -476,7 +470,7 @@ export async function executeAutoDiscoveryAndAction(
   ) {
     const baseUrl = endpointUrl.split('/api')[0];
 
-    // Busca os dispositivos reais cadastrados no Home Assistant
+    // Busca o snapshot real de todos os dispositivos do Home Assistant
     let relevantDevices: any[] = [];
     try {
       const statesRes = await fetch(`${baseUrl}/api/states`, {
@@ -504,10 +498,10 @@ export async function executeAutoDiscoveryAndAction(
       console.warn('⚠️ [HomeAssistant Discovery] Falha ao consultar /api/states:', err.message);
     }
 
+    // Leitura pura de sensores sem ação física
     const isAction = /(ligar|ligue|acender|acenda|desligar|desligue|apagar|apague|fechar|feche|abrir|abra|iniciar|ajustar)/i.test(
       promptClean
     );
-
     if (endpointUrl.endsWith('/api/states') && !isAction) {
       return {
         status: 'success',
@@ -517,54 +511,123 @@ export async function executeAutoDiscoveryAndAction(
       };
     }
 
-    // Define ação: desligar ou ligar
+    // Determina a ação (turn_off ou turn_on)
     const isTurnOff = /(desligar|desligue|apagar|apague|fechar|feche|off)/i.test(promptClean);
     const serviceAction = isTurnOff ? 'turn_off' : 'turn_on';
 
-    // Auto-Discovery: encontra a entidade correta sem perguntar ao usuário
+    // Determina a categoria do pedido
+    const wantsAC = /(ar|condicionado|clima|split|yarin|ac\b)/i.test(promptClean);
+    const wantsLight = /(luz|lampada|iluminacao|led|spot)/i.test(promptClean);
+    const wantsAll = /(todos|todas|geral|tudo)/i.test(promptClean);
+
+    // Filtra candidatos pela categoria solicitada
+    let candidates = relevantDevices;
+    if (wantsAC) {
+      candidates = relevantDevices.filter(
+        (d) =>
+          d.entity_id.startsWith('climate.') ||
+          (d.entity_id.startsWith('switch.') && normalizeText(d.name).includes('ar'))
+      );
+    } else if (wantsLight) {
+      candidates = relevantDevices.filter(
+        (d) =>
+          d.entity_id.startsWith('light.') ||
+          (d.entity_id.startsWith('switch.') &&
+            (normalizeText(d.name).includes('luz') || normalizeText(d.name).includes('lampada')))
+      );
+    }
+
+    // Caso de comando coletivo: "desligue todos os aparelhos de ar-condicionado"
+    if (wantsAll && candidates.length > 0) {
+      const results = [];
+      for (const dev of candidates) {
+        await fetch(`${baseUrl}/api/services/homeassistant/${serviceAction}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ entity_id: dev.entity_id })
+        }).catch(() => {});
+        results.push({ entity_id: dev.entity_id, name: dev.name });
+      }
+      return {
+        status: 'executed_all',
+        action: `homeassistant.${serviceAction}`,
+        message: `Comando executado com sucesso em todos os ${results.length} dispositivos encontrados.`,
+        devices_affected: results
+      };
+    }
+
+    // Identificação do dispositivo específico por pontuação de palavras (Cômodo / Nome)
     let targetEntity = payload.entity_id;
 
-    if (!targetEntity && relevantDevices.length > 0) {
-      const wantsAC = /(ar|condicionado|clima|split|yarin|ac\b)/i.test(promptClean);
-      const wantsLight = /(luz|lampada|iluminacao|led|spot|quarto|sala|cozinha|banheiro|corredor)/i.test(
-        promptClean
-      );
+    if (!targetEntity && candidates.length > 0) {
+      // Palavras de parada para isolar os cômodos e identificadores específicos
+      const stopWords = new Set([
+        'o', 'a', 'os', 'as', 'de', 'do', 'da', 'dos', 'das', 'no', 'na', 'nos', 'nas',
+        'em', 'para', 'por', 'com', 'um', 'uma', 'uns', 'umas', 'meu', 'minha',
+        'ar', 'condicionado', 'clima', 'split', 'luz', 'lampada', 'aparelho', 'dispositivo',
+        'ligar', 'ligue', 'desligar', 'desligue', 'acender', 'acenda', 'apagar', 'apague',
+        'jarvis', 'favor', 'por'
+      ]);
 
-      // 1ª Tentativa: Encontrar correspondência direta pelo nome amigável ou entity_id
-      const matched = relevantDevices.find((dev) => {
-        const idNorm = normalizeText(dev.entity_id);
-        const nameNorm = normalizeText(dev.name);
+      const userTokens = promptClean
+        .split(/\s+/)
+        .filter((token) => token.length > 1 && !stopWords.has(token));
 
-        if (promptClean.includes('yarin') && (idNorm.includes('yarin') || nameNorm.includes('yarin'))) {
-          return true;
+      let bestMatch: any = null;
+      let highestScore = 0;
+
+      for (const dev of candidates) {
+        const fullDevText = `${normalizeText(dev.entity_id)} ${normalizeText(dev.name)}`;
+        let score = 0;
+
+        for (const token of userTokens) {
+          if (fullDevText.includes(token)) {
+            score += 15; // Pontua forte palavras do cômodo (ex: quarto, sala, escritorio, suite)
+          }
         }
-        if (wantsAC && (idNorm.startsWith('climate') || idNorm.includes('ar') || nameNorm.includes('ar'))) {
-          return true;
-        }
-        if (wantsLight && (idNorm.startsWith('light') || idNorm.startsWith('switch') || nameNorm.includes('luz'))) {
-          return true;
-        }
-        return false;
-      });
 
-      targetEntity = matched?.entity_id;
+        // Bônus se o nome do aparelho ou cômodo bater exatamente com uma parte da frase
+        if (promptClean.includes(normalizeText(dev.name))) {
+          score += 30;
+        }
 
-      // 2ª Tentativa (Fallback Inteligente): Se pediu ar e não achou nome exato, pega a primeira entidade climate disponível
-      if (!targetEntity && wantsAC) {
-        const climateFallback = relevantDevices.find((dev) => dev.entity_id.startsWith('climate.'));
-        if (climateFallback) targetEntity = climateFallback.entity_id;
+        if (score > highestScore) {
+          highestScore = score;
+          bestMatch = dev;
+        }
+      }
+
+      // Se só existe 1 ar-condicionado na casa toda, usa ele direto
+      if (candidates.length === 1) {
+        targetEntity = candidates[0].entity_id;
+      } 
+      // Se encontrou um dispositivo com pontuação de cômodo clara
+      else if (highestScore > 0 && bestMatch) {
+        targetEntity = bestMatch.entity_id;
+      } 
+      // Se existem múltiplos aparelhos e o usuário não especificou o cômodo (ambiguidade)
+      else if (candidates.length > 1) {
+        return {
+          status: 'ambiguous_device',
+          message: `Identifiquei ${candidates.length} aparelhos de ar-condicionado. Em qual cômodo você deseja acionar?`,
+          options: candidates.map((c) => ({
+            entity_id: c.entity_id,
+            nome: c.name,
+            estado_atual: c.state
+          }))
+        };
       }
     }
 
     if (!targetEntity) {
       return {
         status: 'device_not_found',
-        message: 'Nenhum dispositivo correspondente foi identificado. Entidades disponíveis no Home Assistant:',
-        devices: relevantDevices
+        message: 'Nenhum dispositivo correspondente foi identificado.',
+        available_devices: candidates
       };
     }
 
-    // Executa a chamada POST no serviço do Home Assistant
+    // Dispara a requisição HTTP POST para o Home Assistant
     const actionUrl = `${baseUrl}/api/services/homeassistant/${serviceAction}`;
     const execRes = await fetch(actionUrl, {
       method: 'POST',
@@ -583,8 +646,13 @@ export async function executeAutoDiscoveryAndAction(
     };
   }
 
-    const method = String(connectorConfig.http_method || 'POST').toUpperCase();
-  const finalUrl = interpolateApiTemplate(endpointUrl, userPrompt, payload);
+  // =========================================================================
+  // 2. QUALQUER OUTRA PLATAFORMA (REST, Webhooks, etc.)
+  // =========================================================================
+  const method = String(connectorConfig.http_method || 'POST').toUpperCase();
+  const finalUrl = typeof interpolateApiTemplate === 'function'
+    ? interpolateApiTemplate(endpointUrl, userPrompt, payload)
+    : endpointUrl;
 
   const fetchInit: RequestInit = {
     method,
