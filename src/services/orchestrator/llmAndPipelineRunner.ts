@@ -44,7 +44,12 @@ export async function callOpenAICompatibleLLM(options: {
   let provider = creds.provider;
   let apiKey = creds.apiKey;
 
-  if (provider === 'gemini') {
+  const hasMultimodalImage = options.messages.some(
+    (m) => Array.isArray(m.content) && m.content.some((p: any) => p.type === 'image_url')
+  );
+
+  // Para Gemini com Visão (ou sem tools), usa a API nativa rápida; com tools, usa o endpoint compatível OpenAI do Gemini
+  if (provider === 'gemini' && (hasMultimodalImage || !options.tools || options.tools.length === 0)) {
     const requestedModel = (creds.model || 'gemini-2.5-flash').trim();
     const cleanPrimary =
       requestedModel.includes('argon') ||
@@ -53,9 +58,7 @@ export async function callOpenAICompatibleLLM(options: {
         ? 'gemini-2.5-flash'
         : requestedModel;
 
-    const geminiModelsToTry = Array.from(
-      new Set([cleanPrimary, 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'])
-    );
+    const geminiModelsToTry = Array.from(new Set([cleanPrimary, 'gemini-2.5-flash', 'gemini-2.0-flash']));
 
     const formattedParts: any[] = [];
     for (const msg of options.messages) {
@@ -75,7 +78,6 @@ export async function callOpenAICompatibleLLM(options: {
       }
     }
 
-    let lastGeminiError = '';
     for (const gemModel of geminiModelsToTry) {
       try {
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${gemModel}:generateContent?key=${apiKey}`;
@@ -86,7 +88,7 @@ export async function callOpenAICompatibleLLM(options: {
             contents: [{ parts: formattedParts }],
             generationConfig: { temperature: options.temperature ?? 0.2 }
           }),
-          signal: AbortSignal.timeout(25000)
+          signal: AbortSignal.timeout(15000)
         });
 
         if (resp.ok) {
@@ -96,35 +98,30 @@ export async function callOpenAICompatibleLLM(options: {
             choices: [{ message: { content: contentText, role: 'assistant' } }]
           };
         }
-
-        lastGeminiError = await resp.text();
-      } catch (err: any) {
-        lastGeminiError = err.message;
-      }
-    }
-
-    const fallbackGroqKey = (
-      process.env.GROQ_API_KEY ||
-      (process.env.LLM_API_KEY?.startsWith('gsk_') ? process.env.LLM_API_KEY : '') ||
-      ''
-    ).trim();
-    if (fallbackGroqKey) {
-      provider = 'groq';
-      apiKey = fallbackGroqKey;
-    } else {
-      throw new Error(`Gemini indisponível no momento: ${lastGeminiError.slice(0, 200)}`);
+      } catch {}
     }
   }
+
+  // Se o modelo configurado na Groq for o reasoning lento (gpt-oss-120b) e houver tools, prioriza llama-3.3-70b-versatile para resposta < 2s
+  const primaryModel =
+    provider === 'groq' &&
+    options.tools &&
+    options.tools.length > 0 &&
+    creds.model.includes('gpt-oss')
+      ? 'llama-3.3-70b-versatile'
+      : creds.model;
 
   const client = new OpenAI({
     apiKey: apiKey || 'ollama',
     baseURL: creds.baseURL,
-    timeout: 30000
+    timeout: 18000
   });
 
   const candidateModels =
     provider === 'groq'
-      ? Array.from(new Set([creds.model, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant']))
+      ? Array.from(new Set([primaryModel, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant']))
+      : provider === 'gemini'
+      ? Array.from(new Set([creds.model, 'gemini-2.5-flash', 'gemini-2.0-flash']))
       : [creds.model];
 
   let lastError: any = null;
@@ -145,49 +142,26 @@ export async function callOpenAICompatibleLLM(options: {
       return await client.chat.completions.create(payload);
     } catch (err: any) {
       lastError = err;
-      const errMsg = String(err?.message || '');
-      if (
-        options.tools &&
-        options.tools.length > 0 &&
-        !errMsg.includes('404') &&
-        !errMsg.includes('does not exist')
-      ) {
-        try {
-          return await client.chat.completions.create({
-            model: modelToUse,
-            messages: options.messages,
-            temperature: options.temperature ?? 0.2
-          });
-        } catch (innerErr: any) {
-          lastError = innerErr;
-        }
-      }
+      const errStatus = Number(err?.status || 0);
+      // Se for erro 401 (chave inválida), interrompe imediatamente sem repetir tentativas lentas
+      if (errStatus === 401) break;
     }
   }
 
-  try {
-    const modelsResp = await fetch(`${creds.baseURL}/models`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(8000)
-    });
-    if (modelsResp.ok) {
-      const modelsData: any = await modelsResp.json();
-      const availableList: string[] = (modelsData?.data || [])
-        .map((m: any) => String(m.id || ''))
-        .filter(
-          (id: string) =>
-            id && !id.includes('whisper') && !id.includes('tts') && !id.includes('guard')
-        );
-
-      if (availableList.length > 0) {
-        return await client.chat.completions.create({
-          model: availableList[0],
-          messages: options.messages,
-          temperature: options.temperature ?? 0.2
-        });
-      }
+  // Fallback rápido sem tools apenas no modelo mais leve caso tool_use_failed ocorra em todos
+  if (options.tools && options.tools.length > 0) {
+    try {
+      const fastFallbackModel =
+        provider === 'groq' ? 'llama-3.1-8b-instant' : candidateModels[0];
+      return await client.chat.completions.create({
+        model: fastFallbackModel,
+        messages: options.messages,
+        temperature: options.temperature ?? 0.2
+      });
+    } catch (fallbackErr: any) {
+      lastError = fallbackErr;
     }
-  } catch {}
+  }
 
   throw lastError || new Error(`Falha ao comunicar com provedor ${provider.toUpperCase()}`);
 }
@@ -254,16 +228,19 @@ export async function executeUniversalApiConnector(
   }
 
   const cleanBase = (serverBaseUrl || 'http://localhost:3333').replace(/\/+$/, '');
-  const tickerMatch = String(taskArgs?.symbol || taskArgs?.ticker || userPrompt || '')
-    .toUpperCase()
-    .match(/\b([A-Z]{4}\d{1,2})\b/);
+  const tickerCandidateSource = String(
+    taskArgs?.symbol || taskArgs?.ticker || taskArgs?.query || userPrompt || ''
+  ).toUpperCase();
+  const tickerMatch = tickerCandidateSource.match(/\b([A-Z]{4}\d{1,2})\b/);
 
   const dynamicVars: Record<string, string> = {
     BASE_URL: cleanBase,
     SERVER_IP: cleanBase,
     prompt: userPrompt,
-    query: String(taskArgs?.query || taskArgs?.task_details || userPrompt || '').trim(),
-    symbol: String(taskArgs?.symbol || taskArgs?.ticker || (tickerMatch ? tickerMatch[1] : '')).trim()
+    query: String(taskArgs?.query || taskArgs?.symbol || taskArgs?.task_details || userPrompt || '').trim(),
+    symbol: String(
+      taskArgs?.symbol || taskArgs?.ticker || (tickerMatch ? tickerMatch[1] : taskArgs?.query || '')
+    ).trim()
   };
 
   for (const [key, val] of Object.entries(taskArgs || {})) {
@@ -324,7 +301,7 @@ export async function executeUniversalApiConnector(
     method: httpMethod,
     headers,
     body: requestBody,
-    signal: AbortSignal.timeout(25000)
+    signal: AbortSignal.timeout(15000)
   });
 
   const rawData = await response.json().catch(async () => ({ rawText: await response.text() }));
@@ -345,7 +322,9 @@ export async function executeBoundTool(
   serverBaseUrl: string
 ): Promise<any> {
   const cleanKey = sanitizeToolName(toolKey);
-  const queryValue = String(args?.query || args?.task_details || args?.input || userPrompt).trim();
+  const queryValue = String(
+    args?.query || args?.symbol || args?.task_details || args?.input || userPrompt
+  ).trim();
   const promptClean = normalizeText(userPrompt);
 
   if (cleanKey === 'save_to_database' || cleanKey === 'dynamicdatabasetool') {
@@ -417,7 +396,7 @@ export async function executeBoundTool(
       const statesRes = await fetch(`${baseUrl}/api/states`, {
         method: 'GET',
         headers,
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(8000)
       });
       const allStates: any[] = await statesRes.json().catch(() => []);
 
@@ -534,7 +513,7 @@ export async function executeBoundTool(
         method: 'POST',
         headers,
         body: JSON.stringify({ entity_id: targetEntity }),
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(8000)
       });
       const execData = await execRes.json().catch(() => ({}));
       return {
@@ -547,16 +526,43 @@ export async function executeBoundTool(
     }
   }
 
+  // Conectores customizados com endpoint configurado (ex: consultar_mercado_de_valores / Brapi)
+  const rawEndpoint =
+    cfg.endpoint_url ||
+    customConn?.endpoint_url ||
+    (cleanKey === 'http_request_universal' ? args?.endpoint || args?.url || queryValue : '');
+
+  if (rawEndpoint && String(rawEndpoint).startsWith('http')) {
+    return await executeUniversalApiConnector(
+      cleanKey,
+      { query: queryValue, ...args },
+      userPrompt,
+      serverBaseUrl
+    );
+  }
+
+  // Integrações nativas Google Workspace / Brapi / Outlook / Telegram
   const isNativeSpecialized =
     cleanKey.startsWith('brapi') ||
+    cleanKey.includes('mercado') ||
     cleanKey.includes('gmail') ||
+    cleanKey.includes('google_calendar') ||
+    cleanKey.includes('calendar') ||
+    cleanKey.includes('agenda') ||
+    cleanKey.includes('google_drive') ||
     cleanKey.includes('outlook') ||
     cleanKey.includes('telegram') ||
     cleanKey.includes('google_sheets');
 
   if (isNativeSpecialized) {
-    return await executeProtocolOrIntegration(cleanKey, {
-      protocol: cleanKey as SupportedProtocolOrPlatform,
+    const resolvedProtocol = cleanKey.includes('calendar') || cleanKey.includes('agenda')
+      ? 'google_calendar'
+      : cleanKey.includes('mercado')
+      ? 'brapi'
+      : (cleanKey as SupportedProtocolOrPlatform);
+
+    return await executeProtocolOrIntegration(resolvedProtocol, {
+      protocol: resolvedProtocol,
       endpoint: cfg.endpoint_url || customConn?.endpoint_url || args?.endpoint,
       method: cfg.http_method || customConn?.http_method || args?.method,
       body: {
@@ -577,61 +583,6 @@ export async function executeBoundTool(
 
   if (cfg.tool_type === 'ssh') {
     return await executeSshCommand(cfg.endpoint_url || queryValue || 'uptime');
-  }
-
-  const rawEndpoint =
-    cfg.endpoint_url ||
-    customConn?.endpoint_url ||
-    (cleanKey === 'http_request_universal' ? args?.endpoint || args?.url || queryValue : '');
-
-  if (rawEndpoint && String(rawEndpoint).startsWith('http')) {
-    let targetUrl = resolveDynamicUrl(String(rawEndpoint), serverBaseUrl);
-    targetUrl = interpolateApiTemplate(targetUrl, userPrompt, { query: queryValue, ...args });
-
-    const method = String(
-      cfg.http_method || customConn?.http_method || args?.method || 'GET'
-    ).toUpperCase();
-    const headers: Record<string, string> = {
-      Accept: 'application/json',
-      'Content-Type': 'application/json'
-    };
-
-    const token =
-      cfg.auth_token || cfg.api_key || cfg.access_token || customConn?.auth_token;
-    if (token) {
-      const cleanToken = String(token).replace(/^Bearer\s+/i, '').trim();
-      headers['Authorization'] = `Bearer ${cleanToken}`;
-    }
-
-    if (cfg.tool_type === 'mcp' || customConn?.agent_type === 'mcp') {
-      const mcpRes = await fetch(targetUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: Date.now(),
-          method: 'tools/call',
-          params: { name: cleanKey, arguments: { query: queryValue, ...args } }
-        }),
-        signal: AbortSignal.timeout(15000)
-      });
-      return await mcpRes.json().catch(() => ({ status: mcpRes.status }));
-    }
-
-    const fetchInit: RequestInit = { method, headers, signal: AbortSignal.timeout(15000) };
-    if (method !== 'GET' && method !== 'HEAD') {
-      if (cfg.payload_template) {
-        fetchInit.body = interpolateApiTemplate(String(cfg.payload_template), userPrompt, {
-          query: queryValue,
-          ...args
-        });
-      } else {
-        fetchInit.body = JSON.stringify({ query: queryValue, ...args });
-      }
-    }
-
-    const res = await fetch(targetUrl, fetchInit);
-    return await res.json().catch(async () => ({ status: res.status, text: await res.text() }));
   }
 
   return await executeProtocolOrIntegration(cleanKey, {
@@ -803,10 +754,13 @@ export async function executeSpecialistPipeline(
               parameters: {
                 type: 'object',
                 properties: {
-                  query: { type: 'string', description: 'Consulta, ticker (ex: PETR4) ou comando principal.' },
-                  symbol: { type: 'string', description: 'Código do ativo/ticker da B3 (ex: PETR4, VALE3).' },
+                  query: { type: 'string', description: 'Consulta, ticker (ex: PETR4, AZUL4) ou comando principal.' },
+                  symbol: { type: 'string', description: 'Código do ativo/ticker da B3 (ex: PETR4, VALE3, AZUL4).' },
                   action: { type: 'string', description: 'Ação a executar (ex: turn_on, turn_off, toggle, states).' },
                   entity_id: { type: 'string', description: 'ID da entidade no Home Assistant (ex: light.varanda).' },
+                  summary: { type: 'string', description: 'Título de evento/reunião.' },
+                  start: { type: 'string', description: 'Data/hora de início ISO 8601.' },
+                  end: { type: 'string', description: 'Data/hora de término ISO 8601.' },
                   to: { type: 'string', description: 'Destinatário.' },
                   subject: { type: 'string', description: 'Assunto.' },
                   body: { type: 'string', description: 'Conteúdo.' },
@@ -824,9 +778,9 @@ export async function executeSpecialistPipeline(
             currentAgent.system_prompt || `Você é o especialista ${currentAgent.name}.`
           }\nFerramentas habilitadas para você: ${
             enabledTools.length > 0 ? enabledTools.join(', ') : 'Nenhuma'
-          }.`
+          }.\nREGRA OBRIGATÓRIA: Use Tool Calling nativo. NUNCA responda ao usuário exibindo código JSON ou objetos {"toolName": ...}.`
         },
-        ...conversationThread.slice(-6),
+        ...conversationThread.slice(-4),
         {
           role: 'user',
           content: `Pedido do Usuário: "${userPrompt}"\nContexto e Parâmetros: ${JSON.stringify(
@@ -842,7 +796,7 @@ export async function executeSpecialistPipeline(
         baseUrl: currentAgent.base_url || brainConfig?.base_url || '',
         messages: specialistMessages,
         tools: specialistTools.length > 0 ? specialistTools : undefined,
-        temperature: Number(currentAgent.temperature ?? 0.3)
+        temperature: Number(currentAgent.temperature ?? 0.2)
       });
 
       const specChoice = llmRes?.choices?.[0]?.message;
@@ -873,7 +827,7 @@ export async function executeSpecialistPipeline(
               role: 'user',
               content: `Resultado das Tools executadas:\n${JSON.stringify(
                 subToolResults
-              )}\n\nElabore a resposta final objetiva e estruturada para o usuário.`
+              )}\n\nElabore a resposta final objetiva, completa e em linguagem natural para o usuário (proibido responder com JSON).`
             }
           ]
         });
@@ -883,36 +837,79 @@ export async function executeSpecialistPipeline(
       } else {
         const rawContent = specChoice?.content || 'Processado pelo especialista.';
 
-        // Intercepta e executa ferramentas caso o modelo retorne JSON cru em texto
-        if (rawContent.includes('"action"') || rawContent.includes('invoke_tool') || rawContent.includes('home_')) {
+        // Intercepta qualquer JSON de ferramenta gerado em texto pelo especialista ("toolName", "action", "tool", "slug")
+        const looksLikeJsonToolCall =
+          rawContent.includes('"toolName"') ||
+          rawContent.includes('"tool_name"') ||
+          rawContent.includes('"action"') ||
+          rawContent.includes('"tool"') ||
+          rawContent.includes('"parameters"') ||
+          rawContent.includes('invoke_tool') ||
+          rawContent.includes('home_');
+
+        if (looksLikeJsonToolCall) {
           try {
-            const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+            const cleanedRaw = rawContent.replace(/```(?:json)?|```/gi, '').trim();
+            const jsonMatch = cleanedRaw.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
               const parsed = JSON.parse(jsonMatch[0]);
+              const fallbackTool =
+                enabledTools.length > 0
+                  ? sanitizeToolName(enabledTools[0])
+                  : 'home_assistant_acionar_dispositivos';
+
               const toolToRun = sanitizeToolName(
-                parsed.parameters?.slug ||
-                parsed.parameters?.tool ||
-                parsed.action ||
-                parsed.tool ||
-                'home_assistant_acionar_dispositivos'
+                parsed.toolName ||
+                  parsed.tool_name ||
+                  parsed.parameters?.slug ||
+                  parsed.parameters?.tool ||
+                  parsed.action ||
+                  parsed.tool ||
+                  parsed.slug ||
+                  fallbackTool
               );
-              const toolArgs = parsed.parameters || parsed.payload || {};
+              const toolArgs = parsed.parameters || parsed.arguments || parsed.payload || parsed;
 
-              const toolOutput = await executeBoundTool(toolToRun, toolArgs, userPrompt, map, serverBaseUrl);
+              const toolOutput = await executeBoundTool(
+                toolToRun,
+                toolArgs,
+                userPrompt,
+                map,
+                serverBaseUrl
+              );
 
-              let friendlyText = '';
-              if (toolOutput?.status === 'executed') {
-                friendlyText = `Dispositivo acionado com sucesso (${toolOutput.entity_id || 'Home Assistant'}).`;
-              } else if (toolOutput?.message) {
-                friendlyText = toolOutput.message;
+              // Sintetiza o resultado real da ferramenta (ex: cotação AZUL4, evento da agenda ou Home Assistant)
+              if (toolOutput?.status === 'executed' && toolOutput?.entity_id) {
+                stepOutput = `Dispositivo acionado com sucesso (${toolOutput.entity_id}).`;
               } else {
-                friendlyText = `Comando executado com sucesso pelo Assistente Residencial.`;
-              }
+                const synthFollowUp: any = await callOpenAICompatibleLLM({
+                  provider: currentAgent.provider || brainConfig?.provider || 'groq',
+                  model: currentAgent.model || brainConfig?.model || 'llama-3.3-70b-versatile',
+                  apiKey: currentAgent.api_key || brainConfig?.api_key || '',
+                  baseUrl: currentAgent.base_url || brainConfig?.base_url || '',
+                  messages: [
+                    {
+                      role: 'system',
+                      content: `${
+                        currentAgent.system_prompt || `Você é o especialista ${currentAgent.name}.`
+                      }\nApresente os dados reais abaixo em português de forma clara e direta. NUNCA responda com blocos JSON.`
+                    },
+                    {
+                      role: 'user',
+                      content: `Pedido do usuário: "${userPrompt}"\nDados retornados pela ferramenta (${toolToRun}):\n${JSON.stringify(
+                        toolOutput,
+                        null,
+                        2
+                      )}`
+                    }
+                  ],
+                  temperature: 0.2
+                });
 
-              stepOutput = {
-                specialist_response: friendlyText,
-                tools_executed: [{ tool: toolToRun, output: toolOutput }]
-              };
+                stepOutput =
+                  synthFollowUp?.choices?.[0]?.message?.content ||
+                  `Comando executado com sucesso (${toolToRun}).`;
+              }
             } else {
               stepOutput = rawContent;
             }
@@ -925,19 +922,8 @@ export async function executeSpecialistPipeline(
       }
     }
 
-    await pool
-      .query(
-        `CREATE TABLE IF NOT EXISTS specialist_context_memory (
-          id SERIAL PRIMARY KEY,
-          session_id VARCHAR(120) NOT NULL,
-          specialist_slug VARCHAR(100) NOT NULL,
-          context_data JSONB DEFAULT '{}'::jsonb,
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        );`
-      )
-      .catch(() => {});
-
-    await pool
+    // Grava memória de contexto do especialista em background sem atrasar a resposta
+    pool
       .query(
         `INSERT INTO specialist_context_memory (session_id, specialist_slug, context_data)
          VALUES ($1, $2, $3);`,
