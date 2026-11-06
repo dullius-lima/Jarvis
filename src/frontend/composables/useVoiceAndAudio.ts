@@ -1,25 +1,27 @@
-// Wake word ("Jarvis"), STT contínuo, bipe e TTS local/API
-
+// src/frontend/composables/useVoiceAndAudio.ts
 import { ref } from 'vue';
 
-export function useVoiceAndAudio(onVoiceCommand: (text: string) => void) {
-  const isAlwaysListening = ref<boolean>(false);
+export function useVoiceAndAudio(
+  onCommandDetected: (text: string, audioBase64?: string) => void
+) {
   const isJarvisAwake = ref<boolean>(false);
   const isJarvisSpeaking = ref<boolean>(false);
+  const isRecordingAudio = ref<boolean>(false);
+  const voiceStatusText = ref<string>('Toque no Globo ou diga "Jarvis"');
   const isVoiceMuted = ref<boolean>(false);
-  const isRecognitionActive = ref<boolean>(false);
-  const voiceStatusText = ref<string>('🎙️ Clique no microfone para falar');
 
-  let wakeRecognition: any = null;
-  let wakeTimeoutId: any = null;
-  let lastChimeTime = 0;
-  let consecutiveNoSpeechCount = 0;
-  let currentAudioElement: HTMLAudioElement | null = null;
+  let recognition: any = null;
+  let speechSilenceTimer: any = null;
+  let speechAccumulatedBuffer = '';
+  let lastChimeTimestamp = 0;
+  let mediaRecorder: MediaRecorder | null = null;
+  let audioChunks: Blob[] = [];
+  let localAudioStream: MediaStream | null = null;
 
   function playJarvisChime(type: 'wake' | 'send' = 'wake') {
     const now = Date.now();
-    if (type === 'wake' && now - lastChimeTime < 3000) return;
-    lastChimeTime = now;
+    if (now - lastChimeTimestamp < 1200 && type === 'wake') return;
+    lastChimeTimestamp = now;
 
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -30,314 +32,317 @@ export function useVoiceAndAudio(onVoiceCommand: (text: string) => void) {
 
       osc.type = 'sine';
       if (type === 'wake') {
-        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.08);
+        osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+        osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.09);
       } else {
         osc.frequency.setValueAtTime(659.25, ctx.currentTime);
-        osc.frequency.setValueAtTime(523.25, ctx.currentTime + 0.08);
+        osc.frequency.setValueAtTime(523.25, ctx.currentTime + 0.09);
       }
 
-      gain.gain.setValueAtTime(0.08, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
-
+      gain.gain.setValueAtTime(0.09, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
-      osc.stop(ctx.currentTime + 0.2);
+      osc.stop(ctx.currentTime + 0.22);
       setTimeout(() => ctx.close().catch(() => {}), 300);
     } catch {}
   }
 
-  function initWakeWordListener(singleShotCommand = false) {
-    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRec) {
-      voiceStatusText.value = '⚠️ Reconhecimento de voz requer Chrome ou Edge.';
-      return;
+  async function ensureMicrophonePermission(): Promise<boolean> {
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        if (!localAudioStream || !localAudioStream.active) {
+          localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        }
+        return true;
+      }
+    } catch (err) {
+      console.warn('Microfone não acessível:', err);
+      return false;
     }
-    if (isRecognitionActive.value && wakeRecognition) return;
+    return false;
+  }
 
-    if (!wakeRecognition) {
-      wakeRecognition = new SpeechRec();
-      wakeRecognition.lang = 'pt-BR';
-      wakeRecognition.interimResults = false;
+  async function startWhisperFallbackRecording(onFallbackText?: (text: string) => void) {
+    if (!localAudioStream) return;
+    try {
+      audioChunks = [];
+      mediaRecorder = new MediaRecorder(localAudioStream);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.push(e.data);
+      };
+      mediaRecorder.onstop = async () => {
+        isRecordingAudio.value = false;
+        if (audioChunks.length === 0) return;
+
+        voiceStatusText.value = '⚡ Processando áudio...';
+        const blob = new Blob(audioChunks, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.readAsDataURL(blob);
+        reader.onloadend = async () => {
+          const base64Audio = (reader.result as string).split(',')[1];
+          if (!base64Audio) return;
+
+          try {
+            const res = await fetch('/api/v1/audio/transcribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ audioBase64: base64Audio })
+            });
+            const data = await res.json();
+            if (data.success && data.text && data.text.trim().length > 1) {
+              const spoken = data.text.trim();
+              if (onFallbackText) onFallbackText(spoken);
+
+              if (/^(oi\s+|ol[aá]\s+)?(jarvis|j[aá]vis)[.!?,\s]*$/i.test(spoken)) {
+                speakJarvisResponse('Sim, senhor? Estou ouvindo.', () => activateDirectListening());
+              } else {
+                onCommandDetected(spoken, base64Audio);
+              }
+            } else {
+              voiceStatusText.value = 'Toque no Globo ou diga "Jarvis"';
+            }
+          } catch {
+            voiceStatusText.value = 'Toque no Globo ou diga "Jarvis"';
+          }
+        };
+      };
+      mediaRecorder.start();
+      isRecordingAudio.value = true;
+    } catch {}
+  }
+
+  function stopWhisperFallbackRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      try { mediaRecorder.stop(); } catch {}
     }
+    isRecordingAudio.value = false;
+  }
 
-    wakeRecognition.continuous = !singleShotCommand && isAlwaysListening.value;
+  function initSTT(onTextChange?: (text: string) => void) {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-    wakeRecognition.onstart = () => {
-      isRecognitionActive.value = true;
-      voiceStatusText.value = isJarvisAwake.value
-        ? '🎙️ Ouvindo seu comando...'
-        : isAlwaysListening.value
-        ? '🟢 Vigília ativa: diga "Jarvis"...'
-        : '🎙️ Pronto para ouvir comando';
-    };
+    if (!SpeechRecognition) return null;
 
-    wakeRecognition.onresult = (event: any) => {
+    const rec = new SpeechRecognition();
+    rec.lang = 'pt-BR';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    rec.onresult = (event: any) => {
       if (isJarvisSpeaking.value) return;
-      consecutiveNoSpeechCount = 0;
+      if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
 
-      const lastIdx = event.results.length - 1;
-      const result = event.results[lastIdx];
-      if (!result || !result[0]) return;
+      let currentInterim = '';
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        const part = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          speechAccumulatedBuffer += ' ' + part;
+        } else {
+          currentInterim += part;
+        }
+      }
 
-      const transcript = String(result[0].transcript || '').trim();
-      const lower = transcript.toLowerCase();
+      const liveText = (speechAccumulatedBuffer + ' ' + currentInterim).trim();
+      const lower = liveText.toLowerCase();
+      const wakeWordPattern = /(?:oi|ol[aá]|ei|ok|fala|al[oô])?\s*(jarvis|j[aá]vis|jarves|iarvis|jarbas)/i;
 
-      if (isJarvisAwake.value && transcript.length > 1) {
-        const cleanCmd = transcript.replace(/^(jarvis|jávis|jarves)[,.\s!?-]*/i, '').trim();
-        if (cleanCmd.length > 1) {
-          isJarvisAwake.value = false;
-          if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
-          playJarvisChime('send');
-          voiceStatusText.value = `⚡ Processando: "${cleanCmd}"`;
-          onVoiceCommand(cleanCmd);
+      // Detecção de Wake Word
+      if (!isJarvisAwake.value && wakeWordPattern.test(lower)) {
+        isJarvisAwake.value = true;
+        playJarvisChime('wake');
+
+        const parts = liveText.split(wakeWordPattern);
+        const afterWake = parts.pop()?.replace(/^[,.\s!?-]+/, '').trim() || '';
+
+        if (afterWake.length > 2) {
+          speechAccumulatedBuffer = afterWake;
+          if (onTextChange) onTextChange(afterWake);
+          voiceStatusText.value = `🎙️ "${afterWake}"`;
+        } else {
+          speechAccumulatedBuffer = '';
+          if (onTextChange) onTextChange('');
+          voiceStatusText.value = '🔊 "Sim, senhor? Estou ouvindo..."';
+          speakJarvisResponse('Sim, senhor? Estou ouvindo.', () => {
+            activateDirectListening(onTextChange);
+          });
           return;
         }
       }
 
-      if (lower.includes('jarvis') || lower.includes('jávis') || lower.includes('jarves')) {
-        const afterWake = transcript
-          .split(/jarvis|jávis|jarves/i)
-          .pop()
-          ?.replace(/^[,.\s!?-]+/, '')
-          .trim() || '';
+      // Escuta ativa
+      if (isJarvisAwake.value && liveText.length > 1) {
+        const cleaned = liveText.replace(wakeWordPattern, '').replace(/^[,.\s!?-]+/, '').trim();
+        if (!cleaned) return;
 
-        if (afterWake.length > 3) {
-          playJarvisChime('wake');
-          voiceStatusText.value = `⚡ Comando: "${afterWake}"`;
-          onVoiceCommand(afterWake);
-        } else {
-          isJarvisAwake.value = true;
-          playJarvisChime('wake');
-          voiceStatusText.value = '🎙️ Sim, senhor? Diga seu comando...';
-          speakJarvisResponse('Sim, senhor? Estou ouvindo.', () => {
-            if (wakeTimeoutId) clearTimeout(wakeTimeoutId);
-            wakeTimeoutId = setTimeout(() => {
-              if (isJarvisAwake.value) {
-                isJarvisAwake.value = false;
-                voiceStatusText.value = isAlwaysListening.value
-                  ? '🟢 Vigília ativa: diga "Jarvis"...'
-                  : '🎙️ Clique no microfone para falar';
-              }
-            }, 8000);
-          });
-        }
-      }
-    };
+        if (onTextChange) onTextChange(cleaned);
+        voiceStatusText.value = `🎙️ "${cleaned}"`;
 
-    wakeRecognition.onerror = (ev: any) => {
-      isRecognitionActive.value = false;
-      if (ev.error === 'no-speech') {
-        consecutiveNoSpeechCount++;
-        if (consecutiveNoSpeechCount >= 3) {
-          isAlwaysListening.value = false;
-          isJarvisAwake.value = false;
-          voiceStatusText.value = '🎙️ Microfone em pausa (clique para falar)';
-        }
-        return;
-      }
-      if (['not-allowed', 'service-not-allowed', 'audio-capture', 'aborted', 'network'].includes(ev.error)) {
-        isAlwaysListening.value = false;
-        isJarvisAwake.value = false;
-        voiceStatusText.value = '🔴 Microfone pausado (clique no 🎙️ para falar)';
-      }
-    };
-
-    wakeRecognition.onend = () => {
-      isRecognitionActive.value = false;
-      if (isAlwaysListening.value && !isJarvisSpeaking.value && consecutiveNoSpeechCount < 3) {
-        setTimeout(() => {
-          if (isAlwaysListening.value && !isJarvisSpeaking.value && !isRecognitionActive.value) {
-            try {
-              wakeRecognition.start();
-            } catch {}
+        speechSilenceTimer = setTimeout(() => {
+          if (cleaned.length > 1) {
+            playJarvisChime('send');
+            voiceStatusText.value = '⚡ Processando comando...';
+            stopMicrophoneSession();
+            onCommandDetected(cleaned);
           }
-        }, 1500);
-      } else {
-        isJarvisAwake.value = false;
-        if (!isJarvisSpeaking.value) {
-          voiceStatusText.value = isAlwaysListening.value
-            ? '🟢 Vigília ativa: diga "Jarvis"...'
-            : '🎙️ Clique no microfone para falar';
+        }, 2100);
+      }
+    };
+
+    rec.onerror = (event: any) => {
+      if (['service-not-allowed', 'network'].includes(event.error)) {
+        if (isJarvisAwake.value && !isRecordingAudio.value) {
+          startWhisperFallbackRecording(onTextChange);
         }
       }
     };
 
-    try {
-      wakeRecognition.start();
-    } catch {}
+    rec.onend = () => {
+      if (isJarvisAwake.value && !isJarvisSpeaking.value) {
+        try { rec.start(); } catch {}
+      }
+    };
+
+    return rec;
   }
 
-  function toggleMicrophone() {
-    consecutiveNoSpeechCount = 0;
-    if (isRecognitionActive.value || isJarvisAwake.value) {
-      isAlwaysListening.value = false;
-      isJarvisAwake.value = false;
-      isRecognitionActive.value = false;
-      if (wakeRecognition) {
-        try {
-          wakeRecognition.stop();
-        } catch {}
-      }
-      voiceStatusText.value = '🎙️ Microfone desligado.';
-      return;
-    }
+  function activateDirectListening(onTextChange?: (text: string) => void) {
+    speechAccumulatedBuffer = '';
     isJarvisAwake.value = true;
-    playJarvisChime('wake');
-    initWakeWordListener(true);
-  }
+    voiceStatusText.value = '🎙️ Ouvindo você... Pode falar';
 
-  function manualRestartWakeWord() {
-    consecutiveNoSpeechCount = 0;
-    isAlwaysListening.value = !isAlwaysListening.value;
-    if (isAlwaysListening.value) {
-      initWakeWordListener(false);
-    } else {
-      if (wakeRecognition) {
-        try {
-          wakeRecognition.stop();
-        } catch {}
+    if (!recognition) recognition = initSTT(onTextChange);
+    try { recognition?.start(); } catch {}
+    startWhisperFallbackRecording(onTextChange);
+
+    if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
+    speechSilenceTimer = setTimeout(() => {
+      if (isJarvisAwake.value) {
+        stopMicrophoneSession();
+        voiceStatusText.value = 'Toque no Globo ou diga "Jarvis"';
       }
-      voiceStatusText.value = '🎙️ Vigília desativada (clique para falar)';
-    }
+    }, 5500);
   }
 
-  async function speakJarvisResponse(rawText: string, onDoneCallback?: () => void) {
-    if (isVoiceMuted.value || !rawText) {
-      if (onDoneCallback) onDoneCallback();
+  async function onJarvisCoreClick(onTextChange?: (text: string) => void) {
+    if (isJarvisAwake.value || isJarvisSpeaking.value) {
+      stopMicrophoneSession();
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      isJarvisSpeaking.value = false;
+      voiceStatusText.value = 'Toque no Globo ou diga "Jarvis"';
       return;
     }
-    if (currentAudioElement) {
-      try {
-        currentAudioElement.pause();
-        currentAudioElement = null;
-      } catch {}
-    }
-    if ('speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {}
+
+    playJarvisChime('wake');
+    const hasPerm = await ensureMicrophonePermission();
+    if (!hasPerm) {
+      voiceStatusText.value = '⚠️ Microfone inacessível no app';
+      speakJarvisResponse('Sim, senhor? Digite sua mensagem abaixo ou abra pelo navegador.');
+      return;
     }
 
+    activateDirectListening(onTextChange);
+  }
+
+  function stopMicrophoneSession() {
+    if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
+    isJarvisAwake.value = false;
+    speechAccumulatedBuffer = '';
+    stopWhisperFallbackRecording();
+    if (recognition) {
+      try { recognition.stop(); } catch {}
+    }
+  }
+
+  async function speakJarvisResponse(rawText: string, onDone?: () => void) {
+    if (isVoiceMuted.value || !rawText) {
+      if (onDone) onDone();
+      return;
+    }
+
+    stopMicrophoneSession();
     isJarvisSpeaking.value = true;
-    if (wakeRecognition && isRecognitionActive.value) {
-      try {
-        wakeRecognition.stop();
-      } catch {}
-    }
-
-    const finishSpeaking = () => {
-      isJarvisSpeaking.value = false;
-      if (onDoneCallback) onDoneCallback();
-      if (isAlwaysListening.value) {
-        setTimeout(() => {
-          if (!isJarvisSpeaking.value && !isRecognitionActive.value) {
-            try {
-              initWakeWordListener(false);
-            } catch {}
-          }
-        }, 800);
-      }
-    };
 
     const cleanText = rawText
-      .replace(/```[\s\S]*?```/g, 'bloco de código exibido na tela.')
+      .replace(/```[\s\S]*?```/g, 'bloco de código.')
       .replace(/[*#_`~>|]/g, '')
-      .replace(/https?:\/\/\S+/g, 'link na tela')
-      .replace(/\s+/g, ' ')
       .trim();
 
-    if (!cleanText) {
-      finishSpeaking();
-      return;
-    }
+    const finish = () => {
+      isJarvisSpeaking.value = false;
+      if (!isJarvisAwake.value) {
+        voiceStatusText.value = 'Toque no Globo ou diga "Jarvis"';
+      }
+      if (onDone) onDone();
+    };
 
+    // 1. Tenta sintetizador backend
     try {
-      const response = await fetch('/api/v1/audio/speak', {
+      const res = await fetch('/api/v1/audio/speak', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: cleanText, mode: 'auto' })
       });
-      if (response.ok) {
-        const audioData = await response.json().catch(() => null);
-        if (audioData?.success && audioData?.audioBase64) {
-          const audio = new Audio(`data:${audioData.mimeType || 'audio/mpeg'};base64,${audioData.audioBase64}`);
-          currentAudioElement = audio;
-          audio.onended = () => {
-            currentAudioElement = null;
-            finishSpeaking();
-          };
-          audio.onerror = () => {
-            currentAudioElement = null;
-            fallbackSpeechSynthesis(cleanText, finishSpeaking);
-          };
-          await audio.play();
-          return;
-        }
+      const data = await res.json();
+      if (data.success && data.audioBase64) {
+        const audio = new Audio(`data:${data.mimeType || 'audio/mpeg'};base64,${data.audioBase64}`);
+        audio.onended = finish;
+        audio.onerror = finish;
+        await audio.play();
+        return;
       }
     } catch {}
 
-    fallbackSpeechSynthesis(cleanText, finishSpeaking);
-  }
-
-  function fallbackSpeechSynthesis(text: string, onComplete: () => void) {
-    if (!('speechSynthesis' in window)) {
-      onComplete();
-      return;
-    }
-    try {
+    // 2. Fallback navegador
+    if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
-      window.speechSynthesis.resume();
-
       setTimeout(() => {
-        const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
-        const voices = window.speechSynthesis.getVoices();
-        const ptVoice =
-          voices.find(
-            (v) =>
-              v.lang.toLowerCase().includes('pt') &&
-              (v.name.includes('Antonio') || v.name.includes('Francisca') || v.name.includes('Google'))
-          ) || voices.find((v) => v.lang.toLowerCase().startsWith('pt'));
-
-        sentences.forEach((sentence, idx) => {
-          const trimmed = sentence.trim();
-          if (!trimmed) return;
-          const utterance = new SpeechSynthesisUtterance(trimmed);
-          utterance.lang = 'pt-BR';
-          utterance.rate = 1.08;
-          utterance.pitch = 0.95;
-          if (ptVoice) utterance.voice = ptVoice;
-          if (idx === sentences.length - 1) {
-            utterance.onend = () => onComplete();
-            utterance.onerror = () => onComplete();
-          }
-          window.speechSynthesis.speak(utterance);
-        });
+        const utterance = new SpeechSynthesisUtterance(cleanText);
+        utterance.lang = 'pt-BR';
+        utterance.rate = 1.06;
+        utterance.pitch = 0.95;
+        utterance.onend = finish;
+        utterance.onerror = finish;
+        window.speechSynthesis.speak(utterance);
       }, 80);
-    } catch {
-      onComplete();
+    } else {
+      finish();
     }
   }
 
   function stopAllAudio() {
-    if (wakeRecognition) {
-      try {
-        wakeRecognition.stop();
-      } catch {}
+    stopMicrophoneSession();
+    if (localAudioStream) {
+      localAudioStream.getTracks().forEach((t) => t.stop());
+      localAudioStream = null;
     }
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  }
+
+  function setupAudioUnlockListener() {
+    const unlock = async () => {
+      if (!recognition) recognition = initSTT();
+      try { recognition?.start(); } catch {}
+      window.removeEventListener('click', unlock);
+      window.removeEventListener('touchstart', unlock);
+    };
+    window.addEventListener('click', unlock, { once: true });
+    window.addEventListener('touchstart', unlock, { once: true });
   }
 
   return {
-    isAlwaysListening,
     isJarvisAwake,
     isJarvisSpeaking,
-    isVoiceMuted,
-    isRecognitionActive,
+    isRecordingAudio,
     voiceStatusText,
-    toggleMicrophone,
-    manualRestartWakeWord,
+    isVoiceMuted,
+    onJarvisCoreClick,
+    stopMicrophoneSession,
     speakJarvisResponse,
-    stopAllAudio
+    stopAllAudio,
+    setupAudioUnlockListener
   };
 }

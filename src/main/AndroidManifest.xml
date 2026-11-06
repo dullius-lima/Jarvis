@@ -1,21 +1,87 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- 1. Permissões de Segundo Plano, Rede e Energia -->
+    <!-- ================================================================= -->
+    <!-- 1. REDE, INTERNET E CONEXÕES LOCAIS                              -->
+    <!-- ================================================================= -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+
+    <!-- ================================================================= -->
+    <!-- 2. VOZ, MICROFONE E ÁUDIO                                         -->
+    <!-- ================================================================= -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
-    <!-- 2. Compatibilidade com TV, Relógio e Celular -->
+    <!-- ================================================================= -->
+    <!-- 3. CÂMERA, RECONHECIMENTO FACIAL E BIOMETRIA                      -->
+    <!-- ================================================================= -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- ================================================================= -->
+    <!-- 4. LOCALIZAÇÃO E GPS (PRIMEIRO E SEGUNDO PLANO)                   -->
+    <!-- ================================================================= -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- ================================================================= -->
+    <!-- 5. VISUALIZAÇÃO, SOBREPOSIÇÃO E CONTROLE DE TELA                 -->
+    <!-- ================================================================= -->
+    <!-- Permite desenhar sobre outros aplicativos (Widget flutuante/controle) -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
+
+    <!-- ================================================================= -->
+    <!-- 6. OPERAÇÃO EM SEGUNDO PLANO, ENERGIA E BOOT                      -->
+    <!-- ================================================================= -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Foreground Service Types Obrigatórios para Android 14+ (API 34) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+    <!-- ================================================================= -->
+    <!-- 7. BLUETOOTH, IOT E DISPOSITIVOS POR PERTO (BLE)                 -->
+    <!-- ================================================================= -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+
+    <!-- ================================================================= -->
+    <!-- 8. ARMAZENAMENTO E LEITURA DE ARQUIVOS/MÍDIAS                    -->
+    <!-- ================================================================= -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
+    <!-- ================================================================= -->
+    <!-- 9. COMPATIBILIDADE DE HARDWARE (Celular, Tablet, Android TV, Watch)-->
+    <!-- ================================================================= -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.type.watch" android:required="false" />
-    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -24,17 +90,18 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
 
-        <!-- Declaração do Foreground Service para Android 14+ -->
+        <!-- Foreground Service Tipado para Android 14+ -->
         <service
             android:name="io.capawesome.capacitorjs.plugins.foregroundservice.ForegroundService"
-            android:foregroundServiceType="dataSync|microphone"
+            android:foregroundServiceType="dataSync|microphone|camera|location|mediaProjection"
             android:exported="false" />
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:theme="@style/AppTheme.NoActionBarLaunch">
-            
+
+            <!-- Lançador Padrão (Smartphones, Tablets e Relógios) -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

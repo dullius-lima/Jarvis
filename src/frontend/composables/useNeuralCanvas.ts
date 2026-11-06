@@ -1,30 +1,28 @@
-// Projeção 3D, rotação orbital, hitboxes e gestos do canvas
+// src/frontend/composables/useNeuralCanvas.ts
+import { ref, Ref } from 'vue';
+import { AGENT_PALETTE } from './useEcosystem';
 
-import { ref, onMounted, onUnmounted } from 'vue';
-
-export interface NeuralCanvasContext {
-  getAgents: () => any[];
-  getSavedConnections: () => any[];
-  getMemoryDots: () => any[];
+interface CanvasOptions {
+  neuralCanvas: Ref<HTMLCanvasElement | null>;
+  dynamicAgents: Ref<any[]>;
+  memoryDots: Ref<any[]>;
   getConnectionMeta: (toolId: string) => any;
   getAgentsUsingTool: (toolId: string) => any[];
-  getIsSpeaking: () => boolean;
-  getIsProcessing: () => boolean;
-  getActiveAgentId: () => any;
-  getHighlightedAgentSlug?: () => string | null;
-  getHighlightedStatusColor?: () => string;
-  drawMemoryOrbs?: (ctx: CanvasRenderingContext2D, cx: number, cy: number, rotY: number) => void;
-  onSelectAgent?: (agent: any) => void;
-  onSelectSubNode?: (node: any) => void;
-  onSelectMemory?: (mem: any) => void;
+  drawMemoryOrbsOnCanvas: (ctx: CanvasRenderingContext2D, cx: number, cy: number, rotY: number) => void;
+  highlightedAgentSlug: Ref<string | null>;
+  highlightedStatusColor: Ref<string>;
+  isJarvisAwake: Ref<boolean>;
+  isJarvisSpeaking: Ref<boolean>;
+  isProcessing: Ref<boolean>;
+  onSelectAgent: (agent: any) => void;
+  onSelectSubNode: (node: any) => void;
+  onSelectMemory: (mem: any) => void;
+  onCoreTap: () => void;
 }
 
-export function useNeuralCanvas(ctxOptions: NeuralCanvasContext) {
-  const neuralCanvas = ref<HTMLCanvasElement | null>(null);
-
-  // Controles de Câmera Orbital 3D
+export function useNeuralCanvas(opts: CanvasOptions) {
   const rotationY = ref<number>(0);
-  const rotationX = ref<number>(0.18);
+  const rotationX = ref<number>(0.22);
   const cameraZoom = ref<number>(1.0);
 
   let isDragging = false;
@@ -37,15 +35,24 @@ export function useNeuralCanvas(ctxOptions: NeuralCanvasContext) {
   let renderedSubNodesHitbox: Array<{ x: number; y: number; r: number; node: any }> = [];
   let renderedMemoriesHitbox: Array<{ x: number; y: number; r: number; mem: any }> = [];
 
-  const AGENT_PALETTE = [
-    '#38bdf8', '#10b981', '#d946ef', '#f59e0b',
-    '#8b5cf6', '#ec4899', '#14b8a6', '#f43f5e'
-  ];
+  // Malha Fibonacci 3D
+  const GLOBE_NODES_COUNT = 110;
+  const globeFibonacciNodes: Array<{ x: number; y: number; z: number; pulseOffset: number }> = [];
+  const goldenRatio = (1 + Math.sqrt(5)) / 2;
+  for (let i = 0; i < GLOBE_NODES_COUNT; i++) {
+    const theta = (2 * Math.PI * i) / goldenRatio;
+    const phi = Math.acos(1 - (2 * (i + 0.5)) / GLOBE_NODES_COUNT);
+    globeFibonacciNodes.push({
+      x: Math.sin(phi) * Math.cos(theta),
+      y: Math.cos(phi),
+      z: Math.sin(phi) * Math.sin(theta),
+      pulseOffset: Math.random() * Math.PI * 2
+    });
+  }
 
-  function resetCamera() {
+  function resetView() {
     cameraZoom.value = 1.0;
-    rotationX.value = 0.18;
-    rotationY.value = 0;
+    rotationX.value = 0.22;
   }
 
   function project3D(x: number, y: number, z: number, cx: number, cy: number, fov: number) {
@@ -64,82 +71,6 @@ export function useNeuralCanvas(ctxOptions: NeuralCanvasContext) {
     return { x: cx + x1 * scale, y: cy + y2 * scale, z: z2, scale };
   }
 
-  function handleStageTap(clientX: number, clientY: number) {
-    for (const item of renderedAgentsHitbox) {
-      if (Math.hypot(clientX - item.x, clientY - item.y) <= item.r) {
-        if (ctxOptions.onSelectAgent) ctxOptions.onSelectAgent(item.agent);
-        return;
-      }
-    }
-    for (const sub of renderedSubNodesHitbox) {
-      if (Math.hypot(clientX - sub.x, clientY - sub.y) <= sub.r) {
-        if (ctxOptions.onSelectSubNode) ctxOptions.onSelectSubNode(sub.node);
-        return;
-      }
-    }
-    for (const mem of renderedMemoriesHitbox) {
-      if (Math.hypot(clientX - mem.x, clientY - mem.y) <= mem.r) {
-        if (ctxOptions.onSelectMemory) ctxOptions.onSelectMemory(mem.mem);
-        return;
-      }
-    }
-  }
-
-  function onMouseDown(e: MouseEvent) {
-    isDragging = true;
-    dragMoved = false;
-    lastMouseX = e.clientX;
-    lastMouseY = e.clientY;
-  }
-
-  function onMouseMove(e: MouseEvent) {
-    if (!isDragging) return;
-    const dx = e.clientX - lastMouseX;
-    const dy = e.clientY - lastMouseY;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
-    rotationY.value += dx * 0.005;
-    rotationX.value = Math.max(-0.8, Math.min(0.8, rotationX.value + dy * 0.005));
-    lastMouseX = e.clientX;
-    lastMouseY = e.clientY;
-  }
-
-  function onMouseUp(e: MouseEvent) {
-    if (isDragging && !dragMoved) handleStageTap(e.clientX, e.clientY);
-    isDragging = false;
-  }
-
-  function onWheel(e: WheelEvent) {
-    const delta = e.deltaY > 0 ? -0.08 : 0.08;
-    cameraZoom.value = Math.max(0.65, Math.min(1.65, cameraZoom.value + delta));
-  }
-
-  function onTouchStart(e: TouchEvent) {
-    if (e.touches.length === 1) {
-      isDragging = true;
-      dragMoved = false;
-      lastMouseX = e.touches[0].clientX;
-      lastMouseY = e.touches[0].clientY;
-    }
-  }
-
-  function onTouchMove(e: TouchEvent) {
-    if (!isDragging || e.touches.length !== 1) return;
-    const dx = e.touches[0].clientX - lastMouseX;
-    const dy = e.touches[0].clientY - lastMouseY;
-    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragMoved = true;
-    rotationY.value += dx * 0.006;
-    rotationX.value = Math.max(-0.8, Math.min(0.8, rotationX.value + dy * 0.006));
-    lastMouseX = e.touches[0].clientX;
-    lastMouseY = e.touches[0].clientY;
-  }
-
-  function onTouchEnd(e: TouchEvent) {
-    if (isDragging && !dragMoved && e.changedTouches.length > 0) {
-      handleStageTap(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
-    }
-    isDragging = false;
-  }
-
   function stopAnimationLoop() {
     if (animationFrameId !== null) {
       cancelAnimationFrame(animationFrameId);
@@ -152,7 +83,7 @@ export function useNeuralCanvas(ctxOptions: NeuralCanvasContext) {
     let time = 0;
 
     const renderFrame = () => {
-      const canvas = neuralCanvas.value;
+      const canvas = opts.neuralCanvas.value;
       if (!canvas) {
         animationFrameId = requestAnimationFrame(renderFrame);
         return;
@@ -176,167 +107,206 @@ export function useNeuralCanvas(ctxOptions: NeuralCanvasContext) {
       ctx.globalAlpha = 1.0;
       ctx.clearRect(0, 0, width, height);
 
-      const bgGrad = ctx.createRadialGradient(
-        width * 0.5, height * 0.48, 10,
-        width * 0.5, height * 0.48, Math.max(width, height) * 0.75
-      );
-      bgGrad.addColorStop(0, '#09192c');
-      bgGrad.addColorStop(0.55, '#050b16');
-      bgGrad.addColorStop(1, '#020409');
+      const isMobile = width < 768;
+      const cx = width * 0.5;
+      const cy = height * (isMobile ? 0.44 : 0.48);
+      const fov = isMobile ? 540 : 680;
+
+      // Fundo Espacial
+      const bgGrad = ctx.createRadialGradient(cx, cy, 5, cx, cy, Math.max(width, height) * 0.72);
+      bgGrad.addColorStop(0, '#0a192f');
+      bgGrad.addColorStop(0.5, '#040914');
+      bgGrad.addColorStop(1, '#010307');
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, width, height);
 
-      const isSpeaking = ctxOptions.getIsSpeaking();
-      const isProcessing = ctxOptions.getIsProcessing();
-      time += isSpeaking || isProcessing ? 0.032 : 0.012;
-      if (!isDragging) rotationY.value += 0.0028;
+      const isActiveState = opts.isJarvisAwake.value || opts.isJarvisSpeaking.value || opts.isProcessing.value;
+      time += isActiveState ? 0.036 : 0.014;
+      if (!isDragging) rotationY.value += isActiveState ? 0.005 : 0.0028;
 
-      const isMobile = width < 768;
-      const cx = width * 0.5;
-      const cy = height * (isMobile ? 0.48 : 0.5);
-      const fov = isMobile ? 520 : 680;
-      const maxSafeRadius = Math.max(95, Math.min(width * 0.5 - (isMobile ? 48 : 80), height * 0.5 - (isMobile ? 115 : 130)));
-      const coreRadius = Math.min(maxSafeRadius * 0.36, isMobile ? 56 : 82);
-      const agentOrbitRadius = Math.min(maxSafeRadius * 0.88, isMobile ? 132 : 245);
-      const sharedNodeOrbitRadius = Math.min(maxSafeRadius * 1.15, isMobile ? 162 : 330);
+      const maxSafeRadius = Math.max(95, Math.min(width * 0.5 - (isMobile ? 30 : 65), height * 0.43 - (isMobile ? 35 : 60)));
+      const coreRadius = Math.min(maxSafeRadius * 0.42, isMobile ? 54 : 85);
+      const agentOrbitRadius = Math.min(maxSafeRadius * 0.98, isMobile ? 138 : 245);
+      const sharedNodeOrbitRadius = Math.min(maxSafeRadius * 1.25, isMobile ? 168 : 325);
 
-      // 1. Anel orbital central
+      const voicePulse = opts.isJarvisSpeaking.value
+        ? 1 + Math.sin(time * 8) * 0.09 + Math.cos(time * 13) * 0.05
+        : opts.isJarvisAwake.value
+        ? 1 + Math.sin(time * 5) * 0.06
+        : 1 + Math.sin(time * 2) * 0.02;
+
+      const effectiveCoreR = coreRadius * voicePulse;
+      const screenCoreR = effectiveCoreR * cameraZoom.value;
+
+      // Halo
       ctx.save();
-      ctx.globalAlpha = 0.55;
-      ctx.strokeStyle = '#0ea5e9';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([6, 8]);
+      const outerHalo = ctx.createRadialGradient(cx, cy, screenCoreR * 0.1, cx, cy, screenCoreR * 1.85);
+      outerHalo.addColorStop(0, opts.isJarvisAwake.value ? 'rgba(56, 189, 248, 0.55)' : opts.isJarvisSpeaking.value ? 'rgba(34, 211, 238, 0.65)' : 'rgba(14, 165, 233, 0.34)');
+      outerHalo.addColorStop(0.5, 'rgba(2, 132, 199, 0.12)');
+      outerHalo.addColorStop(1, 'rgba(2, 6, 23, 0)');
+      ctx.fillStyle = outerHalo;
       ctx.beginPath();
-      ctx.arc(cx, cy, coreRadius * 1.32 * cameraZoom.value, time * 0.4, time * 0.4 + Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-
-      // 2. Wireframe Esférico Central
-      const pulseScale = 1 + (isSpeaking || isProcessing ? Math.sin(time * 5) * 0.07 : Math.sin(time * 2) * 0.02);
-      const effectiveCoreR = coreRadius * pulseScale;
-
-      ctx.save();
-      ctx.strokeStyle = isSpeaking ? '#38bdf8' : '#22d3ee';
-      ctx.lineWidth = 1.1;
-      for (let i = 1; i < 7; i++) {
-        const theta = (i * Math.PI) / 7;
-        ctx.beginPath();
-        for (let j = 0; j <= 12; j++) {
-          const phi = (j * 2 * Math.PI) / 12;
-          const p = project3D(
-            effectiveCoreR * Math.sin(theta) * Math.cos(phi),
-            effectiveCoreR * Math.cos(theta),
-            effectiveCoreR * Math.sin(theta) * Math.sin(phi),
-            cx, cy, fov
-          );
-          if (j === 0) ctx.moveTo(p.x, p.y);
-          else ctx.lineTo(p.x, p.y);
-        }
-        ctx.globalAlpha = 0.42;
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      // 3. Brilho do Núcleo
-      ctx.save();
-      const coreGlow = ctx.createRadialGradient(cx, cy, 4, cx, cy, effectiveCoreR * 1.2 * cameraZoom.value);
-      coreGlow.addColorStop(0, 'rgba(56, 189, 248, 0.42)');
-      coreGlow.addColorStop(0.6, 'rgba(14, 165, 233, 0.12)');
-      coreGlow.addColorStop(1, 'rgba(14, 165, 233, 0)');
-      ctx.fillStyle = coreGlow;
-      ctx.beginPath();
-      ctx.arc(cx, cy, effectiveCoreR * 1.2 * cameraZoom.value, 0, Math.PI * 2);
+      ctx.arc(cx, cy, screenCoreR * 1.85, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
 
-      // 4. Desenha as bolinhas azuis orbitais de memória
-      if (ctxOptions.drawMemoryOrbs) {
-        ctxOptions.drawMemoryOrbs(ctx, cx, cy, rotationY.value);
+      // Esfera 3D
+      ctx.save();
+      const sphereGrad = ctx.createRadialGradient(cx - screenCoreR * 0.3, cy - screenCoreR * 0.3, screenCoreR * 0.08, cx, cy, screenCoreR);
+      sphereGrad.addColorStop(0, 'rgba(186, 230, 253, 0.42)');
+      sphereGrad.addColorStop(0.35, 'rgba(14, 165, 233, 0.22)');
+      sphereGrad.addColorStop(0.78, 'rgba(3, 105, 161, 0.32)');
+      sphereGrad.addColorStop(1, 'rgba(125, 211, 252, 0.65)');
+      ctx.fillStyle = sphereGrad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, screenCoreR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Anéis Giroscópicos
+      const gyroConfigs = [
+        { tiltX: 0.65, tiltZ: 0.3, radiusMult: 1.25, speed: 0.7, dash: [8, 6], color: '#38bdf8' },
+        { tiltX: -0.55, tiltZ: -0.45, radiusMult: 1.36, speed: -0.5, dash: [18, 10, 4, 10], color: '#0ea5e9' },
+        { tiltX: 0.18, tiltZ: 0.85, radiusMult: 1.15, speed: 0.9, dash: [4, 8], color: '#22d3ee' }
+      ];
+
+      gyroConfigs.forEach((gyro) => {
+        ctx.save();
+        ctx.strokeStyle = gyro.color;
+        ctx.lineWidth = isActiveState ? 1.5 : 1.1;
+        ctx.globalAlpha = isActiveState ? 0.75 : 0.45;
+        ctx.setLineDash(gyro.dash);
+        ctx.beginPath();
+        const ringR = effectiveCoreR * gyro.radiusMult;
+        for (let s = 0; s <= 40; s++) {
+          const a = (s / 40) * Math.PI * 2 + time * gyro.speed;
+          const rx = Math.cos(a) * ringR;
+          const ry = Math.sin(a) * ringR * Math.sin(gyro.tiltX);
+          const rz = Math.sin(a) * ringR * Math.cos(gyro.tiltZ);
+          const p = project3D(rx, ry, rz, cx, cy, fov);
+          if (s === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+      });
+
+      // Malha Fibonacci 3D
+      const projectedGlobePts = globeFibonacciNodes.map((n) => {
+        const p = project3D(n.x * effectiveCoreR, n.y * effectiveCoreR, n.z * effectiveCoreR, cx, cy, fov);
+        return { ...p, pulseOffset: n.pulseOffset };
+      });
+
+      ctx.save();
+      for (let i = 0; i < projectedGlobePts.length; i++) {
+        const p1 = projectedGlobePts[i];
+        const depthFactor = Math.max(0.15, Math.min(1, (effectiveCoreR - p1.z) / (effectiveCoreR * 2)));
+        for (let j = i + 1; j < projectedGlobePts.length; j++) {
+          const p2 = projectedGlobePts[j];
+          const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+          if (dist < screenCoreR * 0.35) {
+            ctx.strokeStyle = opts.isJarvisAwake.value ? '#7dd3fc' : '#38bdf8';
+            ctx.globalAlpha = depthFactor * (1 - dist / (screenCoreR * 0.35)) * (isActiveState ? 0.7 : 0.42);
+            ctx.lineWidth = depthFactor * 1.1;
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+          }
+        }
       }
 
-      // 5. Orbes dos Agentes e Conectores
+      for (let i = 0; i < projectedGlobePts.length; i++) {
+        const pt = projectedGlobePts[i];
+        const depthFactor = Math.max(0.2, Math.min(1, (effectiveCoreR - pt.z) / (effectiveCoreR * 2)));
+        const nodeSize = (1.1 + depthFactor * 1.5) * cameraZoom.value;
+        ctx.fillStyle = depthFactor > 0.65 ? '#e0f2fe' : '#38bdf8';
+        ctx.globalAlpha = depthFactor * (0.6 + 0.4 * Math.sin(time * 3 + pt.pulseOffset));
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, nodeSize, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Núcleo
+      ctx.save();
+      const innerCoreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, screenCoreR * 0.42);
+      innerCoreGrad.addColorStop(0, '#ffffff');
+      innerCoreGrad.addColorStop(0.4, opts.isJarvisAwake.value ? '#7dd3fc' : '#38bdf8');
+      innerCoreGrad.addColorStop(1, 'rgba(2, 132, 199, 0)');
+      ctx.fillStyle = innerCoreGrad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, screenCoreR * 0.42, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Memórias em Órbita
+      opts.drawMemoryOrbsOnCanvas(ctx, cx, cy, rotationY.value);
+
+      // Agentes e Subnós
       renderedAgentsHitbox = [];
       renderedSubNodesHitbox = [];
       renderedMemoriesHitbox = [];
 
-      const agentsList = ctxOptions.getAgents();
       const agentPositionsMap = new Map<any, { ag: any; proj: { x: number; y: number; scale: number }; color: string }>();
+      const totalAgents = Math.max(opts.dynamicAgents.value.length, 1);
 
-      agentsList.forEach((ag, idx) => {
-        const angle = (idx / Math.max(agentsList.length, 1)) * Math.PI * 2 + 0.3;
-        const rawProj = project3D(
-          Math.cos(angle) * agentOrbitRadius,
-          Math.sin(idx * 1.7 + time * 0.5) * (isMobile ? 28 : 42),
-          Math.sin(angle) * agentOrbitRadius,
-          cx, cy, fov
-        );
+      opts.dynamicAgents.value.forEach((ag, idx) => {
+        const angle = (idx / totalAgents) * Math.PI * 2 + 0.4;
+        const heightOffset = Math.sin(idx * 2.1 + time * 0.45) * (isMobile ? 18 : 30);
+        const rawProj = project3D(Math.cos(angle) * agentOrbitRadius, heightOffset, Math.sin(angle) * agentOrbitRadius, cx, cy, fov);
         const color = ag.color || AGENT_PALETTE[idx % AGENT_PALETTE.length];
         agentPositionsMap.set(ag.id, { ag, proj: { x: rawProj.x, y: rawProj.y, scale: rawProj.scale }, color });
       });
 
-      // Feixes sinápticos e memórias em trânsito
-      const activeId = ctxOptions.getActiveAgentId();
-      const memoryDotsList = ctxOptions.getMemoryDots();
-
+      // Feixes sinápticos
       Array.from(agentPositionsMap.values()).forEach(({ ag, proj: agProj, color }, index) => {
-        const isSelected = activeId === ag.id;
         ctx.save();
-        ctx.globalAlpha = isSelected ? 0.95 : 0.55;
+        ctx.globalAlpha = 0.35;
         ctx.strokeStyle = color;
-        ctx.lineWidth = isSelected ? 2.4 : 1.5;
-        ctx.setLineDash([4, 6]);
+        ctx.lineWidth = 1.1;
+        ctx.setLineDash([3, 5]);
         ctx.beginPath();
         ctx.moveTo(cx, cy);
         const ctrlX = (cx + agProj.x) * 0.5;
-        const ctrlY = (cy + agProj.y) * 0.5 - 18;
+        const ctrlY = (cy + agProj.y) * 0.5 - 14;
         ctx.quadraticCurveTo(ctrlX, ctrlY, agProj.x, agProj.y);
         ctx.stroke();
         ctx.restore();
 
-        const agentMems = memoryDotsList.filter((m) => m.agentId === ag.id || m.agentName === ag.name);
-        const count = Math.min(Math.max(agentMems.length, 2), 5);
-        for (let d = 0; d < count; d++) {
-          const t = (time * 0.22 + d * 0.2 + index * 0.17) % 1;
+        const agentMemories = opts.memoryDots.value.filter((m) => m.agentId === ag.id || m.agentName === ag.name);
+        for (let d = 0; d < Math.min(Math.max(agentMemories.length, 2), 3); d++) {
+          const t = (time * 0.18 + d * 0.25 + index * 0.17) % 1;
           const invT = 1 - t;
           const mx = invT * invT * cx + 2 * invT * t * ctrlX + t * t * agProj.x;
           const my = invT * invT * cy + 2 * invT * t * ctrlY + t * t * agProj.y;
-
           ctx.save();
-          ctx.globalAlpha = 0.9;
+          ctx.globalAlpha = 0.85;
           ctx.fillStyle = color;
           ctx.beginPath();
-          ctx.arc(mx, my, isMobile ? 3 : 3.8, 0, Math.PI * 2);
+          ctx.arc(mx, my, isMobile ? 2.3 : 3.0, 0, Math.PI * 2);
           ctx.fill();
           ctx.restore();
-
-          if (agentMems[d]) renderedMemoriesHitbox.push({ x: mx, y: my, r: 10, mem: agentMems[d] });
+          if (agentMemories[d]) renderedMemoriesHitbox.push({ x: mx, y: my, r: 8, mem: agentMemories[d] });
         }
       });
 
-      // Conectores externos (Nós Fixos)
-      const uniqueToolIds = Array.from(
-        new Set(agentsList.flatMap((ag) => ag.tools || []).map((t: string) => String(t).toLowerCase()))
-      );
-
+      // Conectores Externos
+      const uniqueToolIds = Array.from(new Set(opts.dynamicAgents.value.flatMap((ag) => ag.tools || []).map((t: string) => String(t).toLowerCase())));
       uniqueToolIds.forEach((toolId, tIdx) => {
-        const meta = ctxOptions.getConnectionMeta(toolId);
-        const angle = (tIdx / Math.max(uniqueToolIds.length, 1)) * Math.PI * 2 + 0.85;
-        const tProj = project3D(
-          Math.cos(angle) * sharedNodeOrbitRadius,
-          Math.cos(tIdx * 2.1) * (isMobile ? 35 : 55),
-          Math.sin(angle) * sharedNodeOrbitRadius,
-          cx, cy, fov
-        );
-        const nodeR = isMobile ? 12 : 15;
+        const meta = opts.getConnectionMeta(toolId);
+        const angle = (tIdx / Math.max(uniqueToolIds.length, 1)) * Math.PI * 2 + 0.95;
+        const tProj = project3D(Math.cos(angle) * sharedNodeOrbitRadius, Math.cos(tIdx * 2.1) * (isMobile ? 24 : 40), Math.sin(angle) * sharedNodeOrbitRadius, cx, cy, fov);
+        const nodeR = isMobile ? 9 : 11;
 
-        ctxOptions.getAgentsUsingTool(toolId).forEach((cAg) => {
+        opts.getAgentsUsingTool(toolId).forEach((cAg) => {
           const agEntry = agentPositionsMap.get(cAg.id);
           if (agEntry) {
             ctx.save();
-            ctx.globalAlpha = 0.45;
+            ctx.globalAlpha = 0.28;
             ctx.strokeStyle = agEntry.color;
-            ctx.lineWidth = 1.2;
-            ctx.setLineDash([3, 4]);
+            ctx.lineWidth = 0.9;
+            ctx.setLineDash([2, 4]);
             ctx.beginPath();
             ctx.moveTo(agEntry.proj.x, agEntry.proj.y);
             ctx.lineTo(tProj.x, tProj.y);
@@ -346,38 +316,34 @@ export function useNeuralCanvas(ctxOptions: NeuralCanvasContext) {
         });
 
         ctx.save();
-        ctx.fillStyle = '#0f172a';
-        ctx.strokeStyle = '#38bdf8';
-        ctx.lineWidth = 1.5;
+        ctx.fillStyle = 'rgba(11, 19, 41, 0.92)';
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.7)';
+        ctx.lineWidth = 1.1;
         ctx.beginPath();
         ctx.arc(tProj.x, tProj.y, nodeR, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
-        ctx.font = `${isMobile ? 11 : 13}px system-ui`;
+        ctx.font = `${isMobile ? 9 : 11}px system-ui`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#f8fafc';
         ctx.fillText(meta.icon || '🔌', tProj.x, tProj.y);
         ctx.restore();
 
-        renderedSubNodesHitbox.push({ x: tProj.x, y: tProj.y, r: nodeR + 6, node: { ...meta, toolId } });
+        renderedSubNodesHitbox.push({ x: tProj.x, y: tProj.y, r: nodeR + 5, node: { ...meta, toolId } });
       });
 
-      // Orbes dos Agentes Especialistas
-      const highlightedSlug = ctxOptions.getHighlightedAgentSlug ? ctxOptions.getHighlightedAgentSlug() : null;
-      const highlightColor = ctxOptions.getHighlightedStatusColor ? ctxOptions.getHighlightedStatusColor() : '#22c55e';
-
+      // Agentes
       Array.from(agentPositionsMap.values()).forEach(({ ag, proj, color }) => {
-        const orbR = isMobile ? 22 : 28;
-        const isSelected = activeId === ag.id;
-        const isTriggered = highlightedSlug === ag.slug;
+        const orbR = isMobile ? 16 : 20;
+        const isHighlighted = opts.highlightedAgentSlug.value === ag.slug;
 
         ctx.save();
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
-        ctx.strokeStyle = isTriggered ? highlightColor : color;
-        ctx.lineWidth = isTriggered || isSelected ? 3 : 2;
-        ctx.shadowColor = isTriggered ? highlightColor : color;
-        ctx.shadowBlur = isTriggered ? 22 : isSelected ? 16 : 8;
+        ctx.fillStyle = 'rgba(11, 18, 34, 0.92)';
+        ctx.strokeStyle = isHighlighted ? opts.highlightedStatusColor.value : color;
+        ctx.lineWidth = isHighlighted ? 2.2 : 1.4;
+        ctx.shadowColor = isHighlighted ? opts.highlightedStatusColor.value : color;
+        ctx.shadowBlur = isHighlighted ? 14 : 5;
 
         ctx.beginPath();
         ctx.arc(proj.x, proj.y, orbR, 0, Math.PI * 2);
@@ -385,7 +351,7 @@ export function useNeuralCanvas(ctxOptions: NeuralCanvasContext) {
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        ctx.font = `${isMobile ? 16 : 20}px system-ui`;
+        ctx.font = `${isMobile ? 12.5 : 15}px system-ui`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#ffffff';
@@ -394,45 +360,112 @@ export function useNeuralCanvas(ctxOptions: NeuralCanvasContext) {
         if ((ag.tools || []).length > 0) {
           ctx.fillStyle = '#0284c7';
           ctx.beginPath();
-          ctx.arc(proj.x + orbR * 0.72, proj.y - orbR * 0.72, isMobile ? 8 : 9, 0, Math.PI * 2);
+          ctx.arc(proj.x + orbR * 0.72, proj.y - orbR * 0.72, isMobile ? 5.5 : 6.5, 0, Math.PI * 2);
           ctx.fill();
           ctx.fillStyle = '#ffffff';
-          ctx.font = `bold ${isMobile ? 9 : 10}px system-ui`;
+          ctx.font = `bold ${isMobile ? 7 : 8}px system-ui`;
           ctx.fillText(String(ag.tools.length), proj.x + orbR * 0.72, proj.y - orbR * 0.72);
         }
 
-        ctx.font = `600 ${isMobile ? 11 : 12.5}px system-ui, sans-serif`;
-        ctx.fillStyle = '#f1f5f9';
-        ctx.fillText(ag.name || 'Agente', proj.x, proj.y + orbR + (isMobile ? 13 : 16));
+        ctx.font = `500 ${isMobile ? 8.5 : 10}px system-ui, -apple-system, sans-serif`;
+        ctx.fillStyle = 'rgba(203, 213, 225, 0.88)';
+        const rawName = ag.name || 'Agente';
+        const cleanName = rawName.length > 15 ? rawName.slice(0, 13) + '…' : rawName;
+        ctx.fillText(cleanName, proj.x, proj.y + orbR + (isMobile ? 9 : 12));
         ctx.restore();
 
-        renderedAgentsHitbox.push({ x: proj.x, y: proj.y, r: orbR + 8, agent: ag });
+        renderedAgentsHitbox.push({ x: proj.x, y: proj.y, r: orbR + 6, agent: ag });
       });
 
       animationFrameId = requestAnimationFrame(renderFrame);
     };
-
     animationFrameId = requestAnimationFrame(renderFrame);
   }
 
-  onUnmounted(() => {
-    stopAnimationLoop();
-  });
+  function handleStageTap(clientX: number, clientY: number) {
+    const isMobile = (window.innerWidth || 360) < 768;
+    const cx = (window.innerWidth || 360) * 0.5;
+    const cy = (window.innerHeight || 640) * (isMobile ? 0.44 : 0.48);
+    const coreHitRadius = (isMobile ? 54 : 85) * cameraZoom.value * 1.25;
+
+    if (Math.hypot(clientX - cx, clientY - cy) <= coreHitRadius) {
+      opts.onCoreTap();
+      return;
+    }
+
+    for (const item of renderedAgentsHitbox) {
+      if (Math.hypot(clientX - item.x, clientY - item.y) <= item.r) {
+        opts.onSelectAgent(item.agent);
+        return;
+      }
+    }
+
+    for (const sub of renderedSubNodesHitbox) {
+      if (Math.hypot(clientX - sub.x, clientY - sub.y) <= sub.r) {
+        opts.onSelectSubNode(sub.node);
+        return;
+      }
+    }
+
+    for (const mem of renderedMemoriesHitbox) {
+      if (Math.hypot(clientX - mem.x, clientY - mem.y) <= mem.r) {
+        opts.onSelectMemory(mem.mem);
+        return;
+      }
+    }
+  }
+
+  function onMouseDown(e: MouseEvent) {
+    isDragging = true; dragMoved = false; lastMouseX = e.clientX; lastMouseY = e.clientY;
+  }
+  function onMouseMove(e: MouseEvent) {
+    if (!isDragging) return;
+    const dx = e.clientX - lastMouseX; const dy = e.clientY - lastMouseY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
+    rotationY.value += dx * 0.005;
+    rotationX.value = Math.max(-0.8, Math.min(0.8, rotationX.value + dy * 0.005));
+    lastMouseX = e.clientX; lastMouseY = e.clientY;
+  }
+  function onMouseUp(e: MouseEvent) {
+    if (isDragging && !dragMoved) handleStageTap(e.clientX, e.clientY);
+    isDragging = false;
+  }
+  function onWheel(e: WheelEvent) {
+    cameraZoom.value = Math.max(0.65, Math.min(1.65, cameraZoom.value + (e.deltaY > 0 ? -0.08 : 0.08)));
+  }
+  function onTouchStart(e: TouchEvent) {
+    if (e.touches.length === 1) {
+      isDragging = true; dragMoved = false; lastMouseX = e.touches[0].clientX; lastMouseY = e.touches[0].clientY;
+    }
+  }
+  function onTouchMove(e: TouchEvent) {
+    if (!isDragging || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - lastMouseX; const dy = e.touches[0].clientY - lastMouseY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragMoved = true;
+    rotationY.value += dx * 0.006;
+    rotationX.value = Math.max(-0.8, Math.min(0.8, rotationX.value + dy * 0.006));
+    lastMouseX = e.touches[0].clientX; lastMouseY = e.touches[0].clientY;
+  }
+  function onTouchEnd(e: TouchEvent) {
+    if (isDragging && !dragMoved && e.changedTouches.length > 0) {
+      handleStageTap(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+    }
+    isDragging = false;
+  }
 
   return {
-    neuralCanvas,
-    rotationY,
     rotationX,
+    rotationY,
     cameraZoom,
-    resetCamera,
+    resetView,
+    startNeuralCanvasLoop,
+    stopAnimationLoop,
     onMouseDown,
     onMouseMove,
     onMouseUp,
     onWheel,
     onTouchStart,
     onTouchMove,
-    onTouchEnd,
-    startNeuralCanvasLoop,
-    stopAnimationLoop
+    onTouchEnd
   };
 }
