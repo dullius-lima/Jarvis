@@ -280,140 +280,139 @@ export async function executeExternalConnector({
       return { success: res.ok, provider: 'outlook', status: res.status };
     }
 
+    // =========================================================================
+    // 2. GMAIL: LER, ENVIAR E EXCLUIR
+    // =========================================================================
     case 'gmail': {
-      const accessToken = token || process.env.GMAIL_ACCESS_TOKEN || '';
-      if (!accessToken) {
-        throw new Error('Token OAuth2 do Gmail não configurado no Hub de Conexões.');
+      const accessToken = await getGoogleAccessToken();
+
+      // Ler mensagens da caixa de entrada
+      if (action === 'read_inbox' || action === 'list_messages') {
+        const max = payload.maxResults || 5;
+        const q = payload.query ? `&q=${encodeURIComponent(payload.query)}` : '';
+        const listRes = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${max}${q}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        const listData: any = await listRes.json();
+        if (!listRes.ok) throw new Error(listData.error?.message || 'Erro ao consultar Gmail.');
+
+        const messages = listData.messages || [];
+        const details = await Promise.all(
+          messages.map(async (msg: any) => {
+            const itemRes = await fetch(
+              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
+              { headers: { Authorization: `Bearer ${accessToken}` } }
+            );
+            const itemData: any = await itemRes.json();
+            const headers = itemData.payload?.headers || [];
+            const getHeader = (name: string) =>
+              headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+
+            return {
+              id: msg.id,
+              threadId: msg.threadId,
+              subject: getHeader('Subject') || '(Sem assunto)',
+              from: getHeader('From'),
+              date: getHeader('Date'),
+              snippet: itemData.snippet || ''
+            };
+          })
+        );
+        return { success: true, provider: 'gmail', action: 'read_inbox', total: details.length, messages: details };
       }
 
-      const effectiveAction = payload.action || action;
+      // Enviar e-mail
+      if (action === 'send_email') {
+        const rawMessage = Buffer.from(
+          `To: ${payload.to}\r\nSubject: =?utf-8?B?${Buffer.from(payload.subject || 'JARVIS').toString('base64')}?=\r\nContent-Type: text/plain; charset="UTF-8"\r\nMIME-Version: 1.0\r\n\r\n${payload.body || payload.text || ''}`
+        )
+          .toString('base64')
+          .replace(/\+/g, '-')
+          .replace(/\//g, '_')
+          .replace(/=+$/, '');
 
-      if (
-        effectiveAction === 'delete_message' ||
-        effectiveAction === 'trash_message' ||
-        effectiveAction === 'delete_email'
-      ) {
-        let targetId = payload.id || payload.messageId;
-        if (!targetId) {
-          const listRes = await fetch(
-            'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=1',
-            { headers: { Authorization: `Bearer ${accessToken}` } }
-          );
-          const listData: any = await listRes.json().catch(() => ({}));
-          targetId = listData.messages?.[0]?.id;
-        }
-        if (!targetId) {
-          return {
-            success: false,
-            provider: 'gmail',
-            message: 'Nenhuma mensagem encontrada para excluir.'
-          };
-        }
+        const sendRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ raw: rawMessage })
+        });
+        const sendData: any = await sendRes.json();
+        if (!sendRes.ok) throw new Error(sendData.error?.message || 'Erro ao enviar e-mail.');
+        return { success: true, provider: 'gmail', action: 'send_email', data: sendData };
+      }
 
+      // Excluir / Mover para lixeira
+      if (action === 'trash_message' || action === 'delete_message') {
+        const msgId = payload.id || payload.messageId;
         const trashRes = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${targetId}/trash`,
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/trash`,
           {
             method: 'POST',
             headers: { Authorization: `Bearer ${accessToken}` }
           }
         );
-        const trashData: any = await trashRes.json().catch(() => ({}));
-        if (!trashRes.ok) {
-          throw new Error(
-            trashData.error?.message || `Erro ao mover mensagem ${targetId} para a lixeira.`
-          );
-        }
-        return {
-          success: true,
-          provider: 'gmail',
-          action: 'trash_message',
-          messageId: targetId,
-          message: `Mensagem ${targetId} movida para a lixeira com sucesso.`
-        };
+        if (!trashRes.ok) throw new Error('Falha ao mover mensagem para a lixeira.');
+        return { success: true, provider: 'gmail', action: 'trash_message', messageId: msgId };
       }
+      break;
+    }
 
-      if (
-        effectiveAction === 'read_inbox' ||
-        effectiveAction === 'list_messages' ||
-        effectiveAction === 'get_messages' ||
-        !payload.to
-      ) {
-        const maxResults = payload.maxResults || 5;
-        const q = payload.query ? `&q=${encodeURIComponent(payload.query)}` : '';
-        const listRes = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}${q}`,
+    // =========================================================================
+    // 3. GOOGLE CALENDAR: LISTAR E CRIAR EVENTOS
+    // =========================================================================
+    case 'google_calendar': {
+      const accessToken = await getGoogleAccessToken();
+
+      if (action === 'list_events') {
+        const timeMin = new Date().toISOString();
+        const res = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=10&orderBy=startTime&singleEvents=true&timeMin=${encodeURIComponent(timeMin)}`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
-        const listData: any = await listRes.json().catch(() => ({}));
-        if (!listRes.ok) {
-          throw new Error(listData.error?.message || `Erro HTTP ${listRes.status} ao listar Gmail.`);
-        }
-
-        const messages = listData.messages || [];
-        if (messages.length === 0) {
-          return {
-            success: true,
-            provider: 'gmail',
-            count: 0,
-            messages: [],
-            message: 'Caixa de entrada vazia.'
-          };
-        }
-
-        const details = await Promise.all(
-          messages.slice(0, maxResults).map(async (msgItem: any) => {
-            const detailRes = await fetch(
-              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgItem.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
-              { headers: { Authorization: `Bearer ${accessToken}` } }
-            );
-            const detailData: any = await detailRes.json().catch(() => ({}));
-            const headers = detailData.payload?.headers || [];
-            const getH = (name: string) =>
-              headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
-
-            return {
-              id: msgItem.id,
-              threadId: msgItem.threadId,
-              subject: getH('Subject') || '(Sem Assunto)',
-              from: getH('From'),
-              date: getH('Date'),
-              snippet: detailData.snippet || ''
-            };
-          })
-        );
-
-        return {
-          success: true,
-          provider: 'gmail',
-          action: 'read_inbox',
-          total: details.length,
-          messages: details
-        };
+        const data: any = await res.json();
+        return { success: true, provider: 'google_calendar', events: data.items || [] };
       }
 
-      const rawEmail = Buffer.from(
-        `To: ${payload.to}\r\nSubject: =?utf-8?B?${Buffer.from(
-          payload.subject || 'JARVIS'
-        ).toString('base64')}?=\r\nContent-Type: text/plain; charset="UTF-8"\r\nMIME-Version: 1.0\r\n\r\n${
-          payload.body || payload.text || ''
-        }`
-      )
-        .toString('base64')
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
+      if (action === 'create_event') {
+        const res = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            summary: payload.summary || payload.title,
+            description: payload.description || 'Criado via JARVIS',
+            start: { dateTime: payload.startTime },
+            end: { dateTime: payload.endTime }
+          })
+        });
+        const data: any = await res.json();
+        return { success: true, provider: 'google_calendar', event: data };
+      }
+      break;
+    }
 
-      const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ raw: rawEmail })
-      });
-      const data: any = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error?.message || 'Falha ao enviar e-mail via Gmail API.');
-      return { success: true, provider: 'gmail', action: 'send_email', data };
+    // =========================================================================
+    // 4. GOOGLE DRIVE: LISTAR E BUSCAR ARQUIVOS
+    // =========================================================================
+    case 'google_drive': {
+      const accessToken = await getGoogleAccessToken();
+
+      if (action === 'list_files') {
+        const q = payload.query ? `&q=${encodeURIComponent(payload.query)}` : '';
+        const res = await fetch(
+          `https://www.googleapis.com/drive/v3/files?pageSize=10&fields=files(id,name,mimeType,modifiedTime)${q}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        const data: any = await res.json();
+        return { success: true, provider: 'google_drive', files: data.files || [] };
+      }
+      break;
     }
 
     case 'google_sheets': {
@@ -508,13 +507,13 @@ export async function executeExternalConnector({
 }
 
 // Função para obter Access Token novo a partir do Refresh Token fixo
-async function getGoogleAccessToken(): Promise<string> {
+export async function getGoogleAccessToken(): Promise<string> {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
 
   if (!refreshToken || !clientId || !clientSecret) {
-    throw new Error('Credenciais OAuth2 do Google incompletas no .env');
+    throw new Error('Credenciais Google OAuth2 incompletas no arquivo .env');
   }
 
   const response = await fetch('https://oauth2.googleapis.com/token', {
@@ -528,9 +527,9 @@ async function getGoogleAccessToken(): Promise<string> {
     })
   });
 
-  const data = await response.json();
+  const data: any = await response.json();
   if (!response.ok) {
-    throw new Error(data.error_description || 'Falha ao renovar Access Token da Google.');
+    throw new Error(data.error_description || 'Falha ao renovar o Access Token do Google.');
   }
 
   return data.access_token;
