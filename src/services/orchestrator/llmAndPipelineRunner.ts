@@ -426,14 +426,41 @@ export async function executeUniversalApiConnector(
 /**
  * Motor Universal com Auto-Discovery para Home Assistant e Conectores REST/IoT
  */
+// ============================================================================
+// MOTOR UNIVERSAL DE AUTO-DESCOBERTA E ACIONAMENTO IOT / REST
+// ============================================================================
+
+/**
+ * Normaliza strings removendo diacríticos, acentos, hífens e pontuações
+ */
+function normalizeText(str: string): string {
+  return String(str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, ' ')
+    .trim();
+}
+
+/**
+ * Executa Descoberta Automática de Dispositivos e Disparo Sem Depender de entity_id
+ */
 export async function executeAutoDiscoveryAndAction(
   connectorConfig: any,
   userPrompt: string,
-  payload: Record<string, any> = {}
+  payload: Record<string, any> = {},
+  serverBaseUrl?: string
 ) {
-  const endpointUrl = String(connectorConfig.endpoint_url || connectorConfig.url || '').trim();
-  const authToken = String(connectorConfig.auth_token || connectorConfig.api_key || connectorConfig.token || '').trim();
-  const promptLower = (userPrompt || '').toLowerCase();
+  const rawEndpoint = String(connectorConfig.endpoint_url || connectorConfig.url || '').trim();
+  const endpointUrl = resolveDynamicUrl(rawEndpoint, serverBaseUrl);
+  const authToken = String(
+    connectorConfig.auth_token ||
+    connectorConfig.api_key ||
+    connectorConfig.token ||
+    ''
+  ).trim();
+
+  const promptClean = normalizeText(userPrompt);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
@@ -442,13 +469,14 @@ export async function executeAutoDiscoveryAndAction(
     headers['Authorization'] = authToken.startsWith('Bearer ') ? authToken : `Bearer ${authToken}`;
   }
 
-  // =========================================================================
-  // 1. HOME ASSISTANT (Auto-Discovery e Acionamento Sem Perguntar entity_id)
-  // =========================================================================
-  if (endpointUrl.includes(':8123/api') || endpointUrl.includes('/api/services') || endpointUrl.includes('/api/states')) {
+  if (
+    endpointUrl.includes(':8123/api') ||
+    endpointUrl.includes('/api/services') ||
+    endpointUrl.includes('/api/states')
+  ) {
     const baseUrl = endpointUrl.split('/api')[0];
 
-    // Consulta os estados atuais de todos os dispositivos
+    // Busca os dispositivos reais cadastrados no Home Assistant
     let relevantDevices: any[] = [];
     try {
       const statesRes = await fetch(`${baseUrl}/api/states`, {
@@ -461,7 +489,7 @@ export async function executeAutoDiscoveryAndAction(
       if (Array.isArray(allStates)) {
         relevantDevices = allStates
           .filter((st) =>
-            /^(light|switch|climate|fan|cover|media_player|sensor|binary_sensor|input_boolean)\./.test(
+            /^(climate|light|switch|fan|cover|remote|media_player|sensor|binary_sensor|input_boolean)\./.test(
               st.entity_id || ''
             )
           )
@@ -476,8 +504,10 @@ export async function executeAutoDiscoveryAndAction(
       console.warn('⚠️ [HomeAssistant Discovery] Falha ao consultar /api/states:', err.message);
     }
 
-    // Se a chamada for especificamente de leitura de sensores e não for comando de ligar/desligar
-    const isAction = /(ligar|ligue|acender|acenda|desligar|desligue|apagar|apague|fechar|feche|abrir|abra|iniciar)/i.test(promptLower);
+    const isAction = /(ligar|ligue|acender|acenda|desligar|desligue|apagar|apague|fechar|feche|abrir|abra|iniciar|ajustar)/i.test(
+      promptClean
+    );
+
     if (endpointUrl.endsWith('/api/states') && !isAction) {
       return {
         status: 'success',
@@ -487,40 +517,54 @@ export async function executeAutoDiscoveryAndAction(
       };
     }
 
-    // Define a ação (turn_off ou turn_on)
-    const isTurnOff = /(desligar|desligue|apagar|apague|fechar|feche|off)/i.test(promptLower);
+    // Define ação: desligar ou ligar
+    const isTurnOff = /(desligar|desligue|apagar|apague|fechar|feche|off)/i.test(promptClean);
     const serviceAction = isTurnOff ? 'turn_off' : 'turn_on';
 
-    // Auto-Discovery: localiza o entity_id pelo que o usuário falou
+    // Auto-Discovery: encontra a entidade correta sem perguntar ao usuário
     let targetEntity = payload.entity_id;
 
     if (!targetEntity && relevantDevices.length > 0) {
-      const wantsAC = /(ar-condicionado|ar condicionado|clima|split|yarin|ac\b)/i.test(promptLower);
-      const wantsLight = /(luz|l[aâ]mpada|ilumina[cç][aã]o|led|spot|quarto|sala|cozinha|banheiro)/i.test(promptLower);
+      const wantsAC = /(ar|condicionado|clima|split|yarin|ac\b)/i.test(promptClean);
+      const wantsLight = /(luz|lampada|iluminacao|led|spot|quarto|sala|cozinha|banheiro|corredor)/i.test(
+        promptClean
+      );
 
+      // 1ª Tentativa: Encontrar correspondência direta pelo nome amigável ou entity_id
       const matched = relevantDevices.find((dev) => {
-        const idAndName = `${dev.entity_id} ${dev.name}`.toLowerCase();
-        if (wantsAC && (idAndName.includes('climate.') || idAndName.includes('ar') || idAndName.includes('yarin') || idAndName.includes('ac'))) {
+        const idNorm = normalizeText(dev.entity_id);
+        const nameNorm = normalizeText(dev.name);
+
+        if (promptClean.includes('yarin') && (idNorm.includes('yarin') || nameNorm.includes('yarin'))) {
           return true;
         }
-        if (wantsLight && (idAndName.includes('light.') || idAndName.includes('switch.') || idAndName.includes('luz') || idAndName.includes('lampada'))) {
+        if (wantsAC && (idNorm.startsWith('climate') || idNorm.includes('ar') || nameNorm.includes('ar'))) {
+          return true;
+        }
+        if (wantsLight && (idNorm.startsWith('light') || idNorm.startsWith('switch') || nameNorm.includes('luz'))) {
           return true;
         }
         return false;
       });
 
       targetEntity = matched?.entity_id;
+
+      // 2ª Tentativa (Fallback Inteligente): Se pediu ar e não achou nome exato, pega a primeira entidade climate disponível
+      if (!targetEntity && wantsAC) {
+        const climateFallback = relevantDevices.find((dev) => dev.entity_id.startsWith('climate.'));
+        if (climateFallback) targetEntity = climateFallback.entity_id;
+      }
     }
 
     if (!targetEntity) {
       return {
         status: 'device_not_found',
-        message: 'Dispositivo não encontrado automaticamente. Entidades disponíveis:',
+        message: 'Nenhum dispositivo correspondente foi identificado. Entidades disponíveis no Home Assistant:',
         devices: relevantDevices
       };
     }
 
-    // Dispara POST no serviço correspondente do Home Assistant
+    // Executa a chamada POST no serviço do Home Assistant
     const actionUrl = `${baseUrl}/api/services/homeassistant/${serviceAction}`;
     const execRes = await fetch(actionUrl, {
       method: 'POST',
@@ -539,27 +583,23 @@ export async function executeAutoDiscoveryAndAction(
     };
   }
 
-  // =========================================================================
-  // 2. QUALQUER OUTRA PLATAFORMA (Webhooks, Tuya, Node-RED, REST genérica)
-  // =========================================================================
-  const method = (connectorConfig.http_method || 'POST').toUpperCase();
-  const finalUrl = endpointUrl
-    .replace(/\{\{query\}\}/g, encodeURIComponent(userPrompt))
-    .replace(/\{\{BASE_URL\}\}/g, 'http://localhost:3333');
+    const method = String(connectorConfig.http_method || 'POST').toUpperCase();
+  const finalUrl = interpolateApiTemplate(endpointUrl, userPrompt, payload);
 
-  const res = await fetch(finalUrl, {
+  const fetchInit: RequestInit = {
     method,
     headers,
-    body: method !== 'GET' ? JSON.stringify(payload) : undefined,
     signal: AbortSignal.timeout(15000)
-  });
+  };
 
+  if (method !== 'GET' && method !== 'HEAD') {
+    fetchInit.body = JSON.stringify(payload);
+  }
+
+  const res = await fetch(finalUrl, fetchInit);
   return await res.json().catch(async () => ({ status: res.status, text: await res.text() }));
 }
 
-/**
- * Executor Central de Ferramentas Vinculadas (executeBoundTool)
- */
 export async function executeBoundTool(
   toolKey: string,
   args: Record<string, any>,
@@ -570,7 +610,7 @@ export async function executeBoundTool(
   const cleanKey = sanitizeToolName(toolKey);
   const queryValue = String(args?.query || args?.task_details || args?.input || userPrompt).trim();
 
-  // 1. Gravação em Banco de Dados
+  // 1. Gravação em Banco de Dados Autônomo
   if (cleanKey === 'save_to_database' || cleanKey === 'dynamicdatabasetool') {
     return await saveToDatabase({
       collectionName: sanitizeToolName(args?.collectionName || 'jarvis_records'),
@@ -592,7 +632,7 @@ export async function executeBoundTool(
     return { matches: docs };
   }
 
-  // 3. Comandos SSH
+  // 3. Comandos Remotos via SSH
   if (
     cleanKey === 'execute_ssh_command' ||
     cleanKey === 'ssh_terminal' ||
@@ -604,19 +644,28 @@ export async function executeBoundTool(
     return await executeSshCommand(args?.command || queryValue || 'uptime');
   }
 
-  // 4. CONECTORES EXTERNOS, HOME ASSISTANT E APIS DINÂMICAS
-  const connector = connectorsMap?.get(cleanKey);
+  // 4. Conectores da Tabela external_connectors ou Tools Customizadas do Painel
+  const customConn = connectorsMap?.get(cleanKey);
+  const cfg = customConn?.config || {};
 
+  // Suporte a Tool do tipo Code (Script JavaScript puro)
+  if ((cfg.tool_type === 'code' || customConn?.category === 'Code Tool') && cfg.code_snippet) {
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const fn = new AsyncFunction('query', 'args', 'env', cfg.code_snippet);
+    return await fn(queryValue, args, { BASE_URL: serverBaseUrl });
+  }
+
+  // Identificação de Ferramentas HTTP / IoT / Home Assistant / APIs Dinâmicas
   if (
-    connector ||
+    customConn ||
     cleanKey.includes('home_assistant') ||
     cleanKey.includes('detector') ||
     cleanKey.includes('sensor') ||
     cleanKey.includes('dispositivo')
   ) {
     const targetEndpoint =
-      connector?.endpoint_url ||
-      connector?.url ||
+      cfg.endpoint_url ||
+      customConn?.endpoint_url ||
       args?.endpoint ||
       args?.endpoint_url ||
       (cleanKey.includes('detector')
@@ -624,13 +673,14 @@ export async function executeBoundTool(
         : 'http://163.176.111.18:8123/api/services/homeassistant/toggle');
 
     const targetToken =
-      connector?.auth_token ||
-      connector?.api_key ||
-      connector?.token ||
+      cfg.auth_token ||
+      cfg.access_token ||
+      cfg.api_key ||
+      customConn?.auth_token ||
       args?.auth_token ||
       '';
 
-    const targetMethod = connector?.http_method || connector?.method || args?.http_method || 'POST';
+    const targetMethod = cfg.http_method || customConn?.http_method || args?.http_method || 'POST';
 
     return await executeAutoDiscoveryAndAction(
       {
@@ -639,11 +689,12 @@ export async function executeBoundTool(
         http_method: targetMethod
       },
       userPrompt,
-      { query: queryValue, ...args }
+      { query: queryValue, ...args },
+      serverBaseUrl
     );
   }
 
-  // 5. Fallback para endpoints HTTP universais
+  // 5. Fallback para endpoints HTTP universais diretos
   if (args?.endpoint && String(args.endpoint).startsWith('http')) {
     return await executeAutoDiscoveryAndAction(
       {
@@ -652,14 +703,19 @@ export async function executeBoundTool(
         http_method: args.method || 'POST'
       },
       userPrompt,
-      args
+      args,
+      serverBaseUrl
     );
   }
 
-  return {
-    status: 'unsupported_tool',
-    message: `A ferramenta [${toolKey}] não possui rotina configurada no executeBoundTool.`
-  };
+  // 6. Fallback para Integração de Protocolos Nativos
+  return await executeProtocolOrIntegration(cleanKey, {
+    protocol: (cleanKey as SupportedProtocolOrPlatform) || 'rest_api',
+    endpoint: args?.endpoint,
+    method: args?.method || 'POST',
+    body: { query: queryValue, ...args },
+    prompt: userPrompt
+  }).catch((err: any) => ({ error: err.message, tool: cleanKey }));
 }
 
 export async function executeSpecialistPipeline(
