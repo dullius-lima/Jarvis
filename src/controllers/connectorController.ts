@@ -82,6 +82,17 @@ export const DEFAULT_CONNECTORS = [
     is_enabled: false
   },
   {
+    provider_key: 'google_drive',
+    name: 'Google Drive',
+    category: 'Google Workspace',
+    icon: '📁',
+    description: 'Armazenamento em nuvem, busca, upload e gerenciamento de arquivos.',
+    endpoint_url: 'https://www.googleapis.com/drive/v3/files',
+    http_method: 'GET',
+    api_key: '',
+    is_enabled: false
+  },
+  {
     provider_key: 'notion',
     name: 'Notion Workspace',
     category: 'Produtividade',
