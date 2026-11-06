@@ -63,7 +63,7 @@
         <canvas ref="neuralCanvas"></canvas>
 
         <!-- Status de Voz Flutuante -->
-        <div class="hud-hint" @click="manualRestartWakeWord" title="Clique para alternar vigília contínua">
+        <div class="hud-hint" @click="manualRestartWakeWord" title="Clique para alternar vigília ou microfone">
           <span>{{ voiceStatusText }}</span>
         </div>
 
@@ -123,36 +123,86 @@
         </ResponseBubble>
       </div>
 
-      <!-- BARRA DE COMANDO NO RODAPÉ -->
-      <CommandDock
-        v-model="promptText"
-        :is-processing="isProcessing"
-        :is-mic-active="isJarvisAwake || isRecognitionActive"
-        :is-cam-active="isCameraActive"
-        :is-screen-active="isScreenActive"
-        @toggle-mic="toggleMicrophone"
-        @toggle-cam="toggleWebcam"
-        @toggle-screen="toggleScreenShare"
-        @send="sendCommand()"
-      />
+      <!-- BARRA DE COMANDO NO RODAPÉ COM TEXTAREA MULTILINHA E AUTO-RESIZE -->
+      <footer class="command-dock-wrapper">
+        <div class="command-dock">
+          <div class="dock-controls">
+            <!-- Botão Microfone -->
+            <button
+              type="button"
+              @click="toggleMicrophone"
+              class="dock-btn mic-btn"
+              :class="{ active: isJarvisAwake || isRecognitionActive }"
+              :title="isJarvisAwake || isRecognitionActive ? 'Desativar Microfone' : 'Ativar Microfone'"
+            >
+              🎙️
+            </button>
+
+            <!-- Botão Webcam -->
+            <button
+              type="button"
+              @click="toggleWebcam"
+              class="dock-btn"
+              :class="{ active: isCameraActive }"
+              title="Alternar Câmera"
+            >
+              📷
+            </button>
+
+            <!-- Botão Compartilhar Tela -->
+            <button
+              type="button"
+              @click="toggleScreenShare"
+              class="dock-btn"
+              :class="{ active: isScreenActive }"
+              title="Compartilhar Tela"
+            >
+              🖥️
+            </button>
+          </div>
+
+          <!-- Campo Multilinha com Auto-Resize (Shift + Enter quebra linha) -->
+          <div class="dock-input-wrapper">
+            <textarea
+              ref="chatInputRef"
+              v-model="promptText"
+              @keydown.enter.exact.prevent="sendCommand()"
+              @keydown.shift.enter.stop
+              @input="adjustTextareaHeight"
+              rows="1"
+              placeholder="Instrução para o JARVIS... (Shift + Enter quebra linha)"
+              class="dock-textarea"
+              :disabled="isProcessing"
+            ></textarea>
+          </div>
+
+          <!-- Botão Transmitir -->
+          <button
+            type="button"
+            @click="sendCommand()"
+            class="send-btn"
+            :disabled="!promptText.trim() || isProcessing"
+            title="Transmitir comando"
+          >
+            {{ isProcessing ? '⚡' : 'Transmitir' }}
+          </button>
+        </div>
+      </footer>
     </template>
   </div>
 </template>
 
-
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watchEffect } from 'vue';
+import { ref, onMounted, onUnmounted, watchEffect, nextTick } from 'vue';
 
-// Composables
+// Composables de Domínio
 import { useAuth } from './composables/useAuth';
 import { useEcosystem, AGENT_PALETTE } from './composables/useEcosystem';
 import { useMediaStream } from './composables/useMediaStream';
-import { useVoiceAndAudio } from './composables/useVoiceAndAudio';
 import { useMemoryOrbs } from './composables/useMemoryOrbs';
 
-// Componentes
+// Componentes Estruturais
 import HudHeader from './components/HudHeader.vue';
-import CommandDock from './components/CommandDock.vue';
 import ResponseBubble from './components/ResponseBubble.vue';
 import MediaPreview from './components/MediaPreview.vue';
 import AgentTelemetryBadge from './components/AgentTelemetryBadge.vue';
@@ -182,7 +232,7 @@ async function onSaveCredentials(payload: { email: string; password: string }) {
 }
 const sessionId = ref<string>(localStorage.getItem('jarvis_active_session_id') || 'sess_main_admin');
 
-// 1. Injeta os composables modulares
+// 3. Injeta os composables modulares do ecossistema
 const {
   isAuthenticated, loginEmail, loginPassword, loginError, isLoggingIn,
   showPasswordModal, newEmailInput, newPasswordInput, credFeedback,
@@ -203,20 +253,13 @@ const {
 } = useMediaStream();
 
 const {
-  isJarvisAwake, isJarvisSpeaking, isRecognitionActive, voiceStatusText,
-  toggleMicrophone, manualRestartWakeWord, speakJarvisResponse, stopAllAudio
-} = useVoiceAndAudio((spokenText) => {
-  promptText.value = spokenText;
-  sendCommand(spokenText);
-});
-
-const {
   lastTelemetry, highlightedAgentSlug, highlightedStatusColor,
   fetchSessionMemoryOrbs, registerAgentExecution, drawMemoryOrbsOnCanvas
 } = useMemoryOrbs();
 
-// 2. Estados de Inspeção e Envio
+// 4. Estados de Inspeção, Canvas e Chat Multilinha
 const neuralCanvas = ref<HTMLCanvasElement | null>(null);
+const chatInputRef = ref<HTMLTextAreaElement | null>(null);
 const activeAgentForTools = ref<any | null>(null);
 const selectedSubNode = ref<any | null>(null);
 const selectedMemoryDot = ref<any | null>(null);
@@ -224,7 +267,239 @@ const promptText = ref<string>('');
 const isProcessing = ref<boolean>(false);
 const lastResponse = ref<{ agent: string; text: string; executionTimeMs?: number } | null>(null);
 
-// 3. Controles da Câmera 3D
+function adjustTextareaHeight() {
+  nextTick(() => {
+    const el = chatInputRef.value;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  });
+}
+
+// ============================================================================
+// 5. MOTOR DE VOZ INTEGRADO: ANTI-CORTE (2.2s SILENCE), BAIXO DELAY E TTS
+// ============================================================================
+const isJarvisAwake = ref<boolean>(false);
+const isJarvisSpeaking = ref<boolean>(false);
+const isRecognitionActive = ref<boolean>(false);
+const voiceStatusText = ref<string>('🎙️ Microfone pronto');
+const isVoiceMuted = ref<boolean>(false);
+
+let recognition: any = null;
+let speechSilenceTimer: any = null;
+let speechAccumulatedBuffer = '';
+let lastChimeTimestamp = 0;
+
+function playJarvisChime(type: 'wake' | 'send' = 'wake') {
+  const now = Date.now();
+  if (now - lastChimeTimestamp < 2500 && type === 'wake') return;
+  lastChimeTimestamp = now;
+
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    if (type === 'wake') {
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.08);
+    } else {
+      osc.frequency.setValueAtTime(659.25, ctx.currentTime);
+      osc.frequency.setValueAtTime(523.25, ctx.currentTime + 0.08);
+    }
+
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.2);
+    setTimeout(() => ctx.close().catch(() => {}), 300);
+  } catch {}
+}
+
+function initSTT() {
+  const SpeechRecognition =
+    (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+    voiceStatusText.value = '⚠️ Web Speech API indisponível';
+    return null;
+  }
+
+  const rec = new SpeechRecognition();
+  rec.lang = 'pt-BR';
+  rec.continuous = true;       // Não finaliza a escuta prematuramente
+  rec.interimResults = true;   // Transcrição instantânea: elimina delay
+  rec.maxAlternatives = 1;
+
+  rec.onstart = () => {
+    isRecognitionActive.value = true;
+    voiceStatusText.value = isJarvisAwake.value
+      ? '🎙️ Ouvindo... Pode respirar e falar com calma'
+      : '🟢 Vigília ativa: diga "Jarvis"...';
+  };
+
+  rec.onresult = (event: any) => {
+    if (isJarvisSpeaking.value) return;
+
+    // Reseta o timer a cada nova fonética detectada
+    if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
+
+    let currentInterim = '';
+    for (let i = event.resultIndex; i < event.results.length; ++i) {
+      const part = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        speechAccumulatedBuffer += ' ' + part;
+      } else {
+        currentInterim += part;
+      }
+    }
+
+    const liveText = (speechAccumulatedBuffer + ' ' + currentInterim).trim();
+    const lower = liveText.toLowerCase();
+
+    // Detecção da Wake Word contínua
+    if (!isJarvisAwake.value && (lower.includes('jarvis') || lower.includes('jávis'))) {
+      const afterWake = liveText.split(/jarvis|jávis/i).pop()?.replace(/^[,.\s!?-]+/, '').trim() || '';
+      isJarvisAwake.value = true;
+      playJarvisChime('wake');
+
+      if (afterWake.length > 2) {
+        speechAccumulatedBuffer = afterWake;
+      } else {
+        speechAccumulatedBuffer = '';
+        voiceStatusText.value = '🎙️ Sim, senhor? Estou ouvindo...';
+        return;
+      }
+    }
+
+    // Se estiver em escuta ativa (seja por clique no microfone ou por Wake Word)
+    if (isJarvisAwake.value && liveText.length > 1) {
+      const cleaned = liveText.replace(/^(jarvis|jávis)[,.\s!?-]*/i, '').trim();
+      promptText.value = cleaned;
+      voiceStatusText.value = `🎙️ Captando: "${cleaned}"`;
+      adjustTextareaHeight();
+
+      // TEMPORIZADOR DE RESPIRAÇÃO: Aguarda 2200ms de silêncio contínuo antes de enviar
+      speechSilenceTimer = setTimeout(() => {
+        const finalPrompt = promptText.value.trim();
+        if (finalPrompt.length > 1 && !isProcessing.value) {
+          playJarvisChime('send');
+          voiceStatusText.value = `⚡ Transmitindo comando...`;
+          stopMicrophoneSession();
+          sendCommand(finalPrompt);
+        }
+      }, 2200);
+    }
+  };
+
+  rec.onerror = (event: any) => {
+    if (event.error !== 'no-speech') {
+      if (event.error === 'not-allowed') {
+        voiceStatusText.value = '❌ Permissão de microfone negada';
+        isRecognitionActive.value = false;
+        isJarvisAwake.value = false;
+      }
+    }
+  };
+
+  rec.onend = () => {
+    isRecognitionActive.value = false;
+    // Se ainda estiver acordado e o navegador desconectou por limite de stream, retoma sem cortar
+    if (isJarvisAwake.value && !isJarvisSpeaking.value) {
+      try { rec.start(); } catch {}
+    } else if (!isJarvisAwake.value) {
+      voiceStatusText.value = '🎙️ Microfone em repouso';
+    }
+  };
+
+  return rec;
+}
+
+function toggleMicrophone() {
+  if (isRecognitionActive.value || isJarvisAwake.value) {
+    stopMicrophoneSession();
+    voiceStatusText.value = '🎙️ Microfone desligado';
+    return;
+  }
+
+  speechAccumulatedBuffer = '';
+  promptText.value = '';
+  adjustTextareaHeight();
+  isJarvisAwake.value = true;
+  playJarvisChime('wake');
+
+  if (!recognition) recognition = initSTT();
+  try {
+    recognition.start();
+  } catch {
+    try { recognition.stop(); recognition.start(); } catch {}
+  }
+}
+
+function stopMicrophoneSession() {
+  if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
+  isJarvisAwake.value = false;
+  isRecognitionActive.value = false;
+  speechAccumulatedBuffer = '';
+  if (recognition) {
+    try { recognition.stop(); } catch {}
+  }
+}
+
+function manualRestartWakeWord() {
+  stopMicrophoneSession();
+  toggleMicrophone();
+}
+
+function speakJarvisResponse(rawText: string, onDone?: () => void) {
+  if (isVoiceMuted.value || !rawText) {
+    if (onDone) onDone();
+    return;
+  }
+
+  stopMicrophoneSession();
+  isJarvisSpeaking.value = true;
+
+  const cleanText = rawText
+    .replace(/```[\s\S]*?```/g, 'bloco de código.')
+    .replace(/[*#_`~>|]/g, '')
+    .trim();
+
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+    setTimeout(() => {
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = 'pt-BR';
+      utterance.rate = 1.05;
+
+      utterance.onend = () => {
+        isJarvisSpeaking.value = false;
+        if (onDone) onDone();
+      };
+      utterance.onerror = () => {
+        isJarvisSpeaking.value = false;
+        if (onDone) onDone();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    }, 70);
+  } else {
+    isJarvisSpeaking.value = false;
+    if (onDone) onDone();
+  }
+}
+
+function stopAllAudio() {
+  stopMicrophoneSession();
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+}
+
+// 6. Controles da Câmera e Grafo 3D
 const rotationY = ref<number>(0);
 const rotationX = ref<number>(0.18);
 const cameraZoom = ref<number>(1.0);
@@ -486,7 +761,7 @@ function startNeuralCanvasLoop() {
   animationFrameId = requestAnimationFrame(renderFrame);
 }
 
-// 4. Interações de Toque e Mouse
+// 7. Interações de Toque e Mouse
 function handleStageTap(clientX: number, clientY: number) {
   for (const item of renderedAgentsHitbox) {
     if (Math.hypot(clientX - item.x, clientY - item.y) <= item.r) {
@@ -552,13 +827,14 @@ function onTouchEnd(e: TouchEvent) {
   isDragging = false;
 }
 
-// 5. Envio de Comando com Telemetria e Visão
+// 8. Envio de Comando com Telemetria e Visão
 async function sendCommand(overrideText?: string) {
   const textToSend = (typeof overrideText === 'string' ? overrideText : promptText.value).trim();
   if (!textToSend || isProcessing.value) return;
 
   isProcessing.value = true;
   if (!overrideText) promptText.value = '';
+  adjustTextareaHeight();
 
   let currentWebcamFrame = isCameraActive.value ? captureCurrentVideoFrame() : null;
   if (requiresCameraActivation(textToSend)) {
@@ -619,14 +895,13 @@ async function enableBackgroundMode() {
   if (Capacitor.getPlatform() !== 'android') return;
 
   try {
-    // Cria notificação persistente obrigatória para o Android não matar o processo
     await ForegroundService.startForegroundService({
       id: 1001,
       title: 'JARVIS Core Ativo',
       body: 'Conexão neural e automações operando em segundo plano.',
       smallIcon: 'ic_launcher'
     });
-    console.log('🟢 Foreground Service ativado com sucesso.');
+    console.log('🟢 Foreground Service ativado.');
   } catch (error) {
     console.warn('Falha ao iniciar Foreground Service:', error);
   }
@@ -678,40 +953,96 @@ onUnmounted(() => { stopAllEngines(); });
 .auth-field input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid #334155; background: #090d16; color: #ffffff; font-size: 14px; }
 .auth-error { font-size: 12px; color: #f87171; background: rgba(127, 29, 29, 0.35); padding: 8px 10px; border-radius: 8px; }
 .auth-submit-btn { padding: 11px; border-radius: 8px; border: none; background: linear-gradient(135deg, #0284c7, #2563eb); color: #ffffff; font-weight: 700; font-size: 14px; cursor: pointer; }
+
 .canvas-stage { position: relative; width: 100%; height: 100%; touch-action: none; }
 canvas { display: block; width: 100%; height: 100%; }
+
 .hud-hint {
-  position: fixed; bottom: 68px; left: 12px; z-index: 25; background: rgba(15, 23, 42, 0.88);
-  border: 1px solid rgba(56, 189, 248, 0.3); padding: 5px 11px; border-radius: 999px;
-  font-size: 11px; color: #cbd5e1; cursor: pointer;
+  position: fixed; bottom: 76px; left: 16px; z-index: 45; background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(56, 189, 248, 0.35); padding: 6px 14px; border-radius: 999px;
+  font-size: 11.5px; color: #cbd5e1; cursor: pointer; backdrop-filter: blur(8px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
 }
-.agent-connections-popover, .subnode-inspector {
-  position: fixed; top: 66px; right: 12px; width: min(340px, calc(100vw - 24px));
-  max-height: calc(100dvh - 150px); overflow-y: auto; z-index: 45; background: rgba(11, 15, 25, 0.96);
-  border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 12px; padding: 12px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75);
+
+/* BARRA DE COMANDO / CHAT DOCK MULTILINHA */
+.command-dock-wrapper {
+  position: fixed;
+  bottom: env(safe-area-inset-bottom, 16px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  padding: 0 12px;
+  pointer-events: none;
 }
-.popover-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.close-btn { background: transparent; border: none; color: #94a3b8; font-size: 15px; cursor: pointer; }
-.modal-input { width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 8px 10px; background: #090d16; border: 1px solid #334155; border-radius: 6px; color: #fff; font-size: 12px; }
-.field-lbl { display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px; }
-.cred-feedback { font-size: 11.5px; color: #38bdf8; margin-bottom: 8px; }
-.save-conn-btn { width: 100%; padding: 9px; background: linear-gradient(135deg, #0284c7, #2563eb); border: none; border-radius: 8px; color: #fff; font-weight: 700; font-size: 12px; cursor: pointer; }
-.shared-node-agents-list { display: flex; flex-direction: column; gap: 4px; max-height: 140px; overflow-y: auto; }
-.shared-agent-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: #cbd5e1; padding: 4px; border-radius: 4px; background: rgba(15,23,42,0.6); }
-.response-bubble {
-  position: fixed; bottom: 104px; left: 50%; transform: translateX(-50%);
-  width: min(560px, calc(100vw - 24px)); max-height: 36dvh; overflow-y: auto;
-  z-index: 40; background: rgba(15, 23, 42, 0.95); border: 1px solid #38bdf8;
-  border-radius: 12px; padding: 10px 14px; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
+
+.command-dock {
+  pointer-events: auto;
+  width: min(720px, 100%);
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 20px;
+  padding: 8px 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(12px);
+  box-sizing: border-box;
 }
-.response-header { display: flex; justify-content: space-between; font-size: 11.5px; color: #38bdf8; margin-bottom: 4px; }
-.response-text { font-size: 13px; line-height: 1.45; color: #f1f5f9; white-space: pre-wrap; }
-.close-bubble { background: transparent; border: none; color: #94a3b8; cursor: pointer; }
-.media-preview-box {
-  position: fixed; bottom: 110px; right: 12px; width: 150px; z-index: 38;
-  background: #0f172a; border: 1px solid #38bdf8; border-radius: 10px; overflow: hidden;
+
+.dock-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 2px;
 }
-.media-preview-header { display: flex; justify-content: space-between; padding: 4px 8px; font-size: 10px; background: rgba(2, 6, 23, 0.9); }
-.media-close-btn { background: transparent; border: none; color: #94a3b8; cursor: pointer; font-size: 12px; }
-.media-video { width: 100%; display: block; }
-</style>
+
+.dock-btn {
+  background: rgba(30, 41, 59, 0.85);
+  border: 1px solid #334155;
+  color: #f8fafc;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.dock-btn:hover {
+  border-color: #38bdf8;
+  background: #1e293b;
+}
+
+.dock-btn.active {
+  background: #0284c7;
+  border-color: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.5);
+}
+
+.mic-btn.active {
+  background: #ea580c;
+  border-color: #f97316;
+  box-shadow: 0 0 12px rgba(234, 88, 12, 0.6);
+}
+
+.dock-input-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.dock-textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #f8fafc;
+  font-size: 1
