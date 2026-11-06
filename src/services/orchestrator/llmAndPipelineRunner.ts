@@ -44,12 +44,7 @@ export async function callOpenAICompatibleLLM(options: {
   let provider = creds.provider;
   let apiKey = creds.apiKey;
 
-  const hasMultimodalImage = options.messages.some(
-    (m) => Array.isArray(m.content) && m.content.some((p: any) => p.type === 'image_url')
-  );
-
-  // Para Gemini com Visão (ou sem tools), usa a API nativa rápida; com tools, usa o endpoint compatível OpenAI do Gemini
-  if (provider === 'gemini' && (hasMultimodalImage || !options.tools || options.tools.length === 0)) {
+  if (provider === 'gemini') {
     const requestedModel = (creds.model || 'gemini-2.5-flash').trim();
     const cleanPrimary =
       requestedModel.includes('argon') ||
@@ -58,7 +53,9 @@ export async function callOpenAICompatibleLLM(options: {
         ? 'gemini-2.5-flash'
         : requestedModel;
 
-    const geminiModelsToTry = Array.from(new Set([cleanPrimary, 'gemini-2.5-flash', 'gemini-2.0-flash']));
+    const geminiModelsToTry = Array.from(
+      new Set([cleanPrimary, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'])
+    );
 
     const formattedParts: any[] = [];
     for (const msg of options.messages) {
@@ -78,6 +75,7 @@ export async function callOpenAICompatibleLLM(options: {
       }
     }
 
+    let lastGeminiError = '';
     for (const gemModel of geminiModelsToTry) {
       try {
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${gemModel}:generateContent?key=${apiKey}`;
@@ -86,9 +84,9 @@ export async function callOpenAICompatibleLLM(options: {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: formattedParts }],
-            generationConfig: { temperature: options.temperature ?? 0.2 }
+            generationConfig: { temperature: options.temperature ?? 0.3 }
           }),
-          signal: AbortSignal.timeout(15000)
+          signal: AbortSignal.timeout(25000)
         });
 
         if (resp.ok) {
@@ -98,43 +96,45 @@ export async function callOpenAICompatibleLLM(options: {
             choices: [{ message: { content: contentText, role: 'assistant' } }]
           };
         }
-      } catch {}
+        lastGeminiError = await resp.text();
+      } catch (err: any) {
+        lastGeminiError = err.message;
+      }
     }
-  }
 
-  // Se o modelo configurado na Groq for o reasoning lento (gpt-oss-120b) e houver tools, prioriza llama-3.3-70b-versatile para resposta < 2s
-  const primaryModel =
-    provider === 'groq' &&
-    options.tools &&
-    options.tools.length > 0 &&
-    creds.model.includes('gpt-oss')
-      ? 'llama-3.3-70b-versatile'
-      : creds.model;
+    throw new Error(`Gemini indisponível no momento: ${lastGeminiError.slice(0, 200)}`);
+  }
 
   const client = new OpenAI({
     apiKey: apiKey || 'ollama',
     baseURL: creds.baseURL,
-    timeout: 18000
+    timeout: 30000
   });
 
+  // Remove completamente o llama-3.1-8b-instant e respeita o modelo configurado (ex: openai/gpt-oss-120b)
   const candidateModels =
     provider === 'groq'
-      ? Array.from(new Set([primaryModel, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant']))
-      : provider === 'gemini'
-      ? Array.from(new Set([creds.model, 'gemini-2.5-flash', 'gemini-2.0-flash']))
+      ? Array.from(new Set([creds.model, 'openai/gpt-oss-120b', 'llama-3.3-70b-versatile']))
       : [creds.model];
 
   let lastError: any = null;
 
   for (const modelToUse of candidateModels) {
+    if (!modelToUse) continue;
     try {
       const payload: any = {
         model: modelToUse,
         messages: options.messages,
-        temperature: options.temperature ?? 0.2
+        temperature: options.temperature ?? 0.3
       };
 
-      if (options.tools && options.tools.length > 0) {
+      // Modelos de raciocínio como gpt-oss-120b ou deepseek-reasoner muitas vezes rejeitam tool_choice/tools nativos
+      const isReasoningModel =
+        modelToUse.includes('gpt-oss') ||
+        modelToUse.includes('reasoner') ||
+        modelToUse.includes('r1');
+
+      if (options.tools && options.tools.length > 0 && !isReasoningModel) {
         payload.tools = options.tools;
         payload.tool_choice = 'auto';
       }
@@ -142,30 +142,23 @@ export async function callOpenAICompatibleLLM(options: {
       return await client.chat.completions.create(payload);
     } catch (err: any) {
       lastError = err;
-      const errStatus = Number(err?.status || 0);
-      // Se for erro 401 (chave inválida), interrompe imediatamente sem repetir tentativas lentas
-      if (errStatus === 401) break;
-    }
-  }
-
-  // Fallback rápido sem tools apenas no modelo mais leve caso tool_use_failed ocorra em todos
-  if (options.tools && options.tools.length > 0) {
-    try {
-      const fastFallbackModel =
-        provider === 'groq' ? 'llama-3.1-8b-instant' : candidateModels[0];
-      return await client.chat.completions.create({
-        model: fastFallbackModel,
-        messages: options.messages,
-        temperature: options.temperature ?? 0.2
-      });
-    } catch (fallbackErr: any) {
-      lastError = fallbackErr;
+      // Se falhou por causa do parâmetro tools, tenta imediatamente o mesmo modelo sem tools
+      if (options.tools && options.tools.length > 0) {
+        try {
+          return await client.chat.completions.create({
+            model: modelToUse,
+            messages: options.messages,
+            temperature: options.temperature ?? 0.3
+          });
+        } catch (innerErr: any) {
+          lastError = innerErr;
+        }
+      }
     }
   }
 
   throw lastError || new Error(`Falha ao comunicar com provedor ${provider.toUpperCase()}`);
 }
-
 export async function executeUniversalApiConnector(
   connectorSlugOrAgent: string | Record<string, any>,
   taskArgs: Record<string, any>,
