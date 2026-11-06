@@ -213,9 +213,6 @@ import AgentToolsPopover from './components/modals/AgentToolsPopover.vue';
 import SubNodeInspector from './components/modals/SubNodeInspector.vue';
 import MemoryInspector from './components/modals/MemoryInspector.vue';
 
-import { ForegroundService } from '@capawesome-team/capacitor-android-foreground-service';
-import { Capacitor } from '@capacitor/core';
-
 // 1. Ponte de Vídeo para MediaPreview
 const mediaPreviewComponent = ref<any>(null);
 watchEffect(() => {
@@ -888,21 +885,6 @@ function stopAllEngines() {
   if (refreshIntervalId) clearInterval(refreshIntervalId);
 }
 
-async function enableBackgroundMode() {
-  if (Capacitor.getPlatform() !== 'android') return;
-
-  try {
-    await ForegroundService.startForegroundService({
-      id: 1001,
-      title: 'JARVIS Core Ativo',
-      body: 'Conexão neural e automações em segundo plano.',
-      smallIcon: 'ic_launcher'
-    });
-  } catch (error) {
-    console.warn('Falha no Foreground Service:', error);
-  }
-}
-
 async function bootAuthenticatedUniverse() {
   await loadEcosystemData();
   await fetchSessionMemoryOrbs(sessionId.value);
@@ -1075,4 +1057,15 @@ canvas { display: block; width: 100%; height: 100%; }
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Response bubble */
+.response-bubble {
+  position: fixed; bottom: 104px; left: 50%; transform: translateX(-50%);
+  width: min(560px, calc(100vw - 24px)); max-height: 36dvh; overflow-y: auto;
+  z-index: 40; background: rgba(15, 23, 42, 0.95); border: 1px solid #38bdf8;
+  border-radius: 12px; padding: 10px 14px; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
+}
+.response-header { display: flex; justify-content: space-between; font-size: 11.5px; color: #38bdf8; margin-bottom: 4px; }
+.response-text { font-size: 13px; line-height: 1.45; color: #f1f5f9; white-space: pre-wrap; }
+.close-bubble { background: transparent; border: none; color: #94a3b8; cursor: pointer; }
 </style>
