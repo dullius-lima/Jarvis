@@ -1038,8 +1038,55 @@ export async function executeSpecialistPipeline(
           pre_fetched_apis: preFetchedApiData
         };
       } else {
+      let rawContent = specChoice?.content || 'Processado pelo especialista.';
+
+      // INTERCEPTADOR: Se a LLM do Especialista gerou a Tool em formato de texto JSON:
+      if (rawContent.includes('"action"') || rawContent.includes('invoke_tool') || rawContent.includes('home_')) {
+        try {
+          const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            const toolToRun = sanitizeToolName(
+              parsed.parameters?.slug ||
+              parsed.parameters?.tool ||
+              parsed.action ||
+              parsed.tool ||
+              'home_assistant_acionar_dispositivos'
+            );
+            const toolArgs = parsed.parameters || parsed.payload || {};
+
+            // Executa imediatamente a ferramenta com auto-discovery
+            const toolOutput = await executeBoundTool(toolToRun, toolArgs, userPrompt, map, serverBaseUrl);
+
+            let friendlyText = '';
+            if (toolOutput?.status === 'executed') {
+              friendlyText = `Dispositivo acionado com sucesso (${toolOutput.entity_id || 'Home Assistant'}).`;
+            } else if (toolOutput?.message) {
+              friendlyText = toolOutput.message;
+            } else {
+              friendlyText = `Comando executado com sucesso pelo Assistente Residencial.`;
+            }
+
+            stepOutput = {
+              specialist_response: friendlyText,
+              tools_executed: [{ tool: toolToRun, output: toolOutput }],
+              pre_fetched_apis: preFetchedApiData
+            };
+          } else {
+            stepOutput = {
+              specialist_response: rawContent,
+              pre_fetched_apis: preFetchedApiData
+            };
+          }
+        } catch {
+          stepOutput = {
+            specialist_response: rawContent,
+            pre_fetched_apis: preFetchedApiData
+          };
+        }
+      } else {
         stepOutput = {
-          specialist_response: specChoice?.content || 'Processado pelo especialista.',
+          specialist_response: rawContent,
           pre_fetched_apis: preFetchedApiData
         };
       }
