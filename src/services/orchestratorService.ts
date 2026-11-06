@@ -1,17 +1,4 @@
 // src/services/orchestratorService.ts
-/**
- * ============================================================================
- * ORQUESTRADOR CENTRAL NEURAL - JARVIS ECOSYSTEM
- * ============================================================================
- * Núcleo cognitivo responsável por:
- * 1. Biometria Vocal & Reconhecimento de Locutores Familiares
- * 2. Percepção Multimodal (Visão de Webcam, Tela e Contexto Temporal)
- * 3. Roteamento Inteligente de Agentes Especialistas e Tool Calling Nativo
- * 4. Meta-Tools Autônomas (Criação/Edição/Exclusão de Conectores e Agentes)
- * 5. Pipeline Sequencial de Nós (next_agent_slug) e Interceptação JSON
- * 6. Telemetria Sináptica em Tempo Real (WebSocket) e Auditoria PostgreSQL
- */
-
 import { pool } from '../config/database.js';
 import { searchVectorDocuments, ingestDocumentToRag } from './ragService.js';
 import { emitBrainLinkEvent, emitNeuroPulse } from './brainSocketService.js';
@@ -19,7 +6,7 @@ import { executeProtocolOrIntegration } from './integrationAndProtocolService.js
 import { executeSshCommand, readRemoteFileViaSshToRag } from './sshService.js';
 import { dispatchErrorTrigger } from './errorTriggerService.js';
 import { appendShortTermMemory } from './shortTermMemoryService.js';
-import { interceptAndExecuteTextActions } from './jsonActionInterceptor.js';
+import { interceptAndExecuteTextActions, extractJsonActionBlocks } from './jsonActionInterceptor.js';
 import { identifySpeaker, enrollSpeakerVoice } from './voiceBiometricService.js';
 
 import {
@@ -59,9 +46,6 @@ import {
   executeAgentChain
 } from './orchestrator/llmAndPipelineRunner.js';
 
-// ============================================================================
-// RE-EXPORTAÇÕES PARA RETROCOMPATIBILIDADE TOTAL COM CONTROLLERS E ROTAS
-// ============================================================================
 export type {
   SupportedProtocolOrPlatform,
   ExternalProvider,
@@ -90,10 +74,6 @@ export {
   executeAgentChain
 };
 
-// ============================================================================
-// FLUXO PRINCIPAL DO ORQUESTRADOR CENTRAL (JARVIS)
-// ============================================================================
-
 export async function processWorkflowExecution(
   identityToken: string,
   userPrompt: string,
@@ -105,19 +85,14 @@ export async function processWorkflowExecution(
   let historyRowsCount = 0;
 
   try {
-    // 1. Inicialização de Esquema e Configuração do Cérebro
     await ensureOrchestratorSchema();
-    brainConfig = await getCentralBrainConfig();
-    const dynamicServerBaseUrl = brainConfig.server_base_url;
 
-    // 2. Geração do Contexto Temporal com Fuso Local
     const now = new Date();
-    const currentTimestampContext = `\n[CONTEXTO TEMPORAL ACTUAL DO SISTEMA]:
-- Data e Hora Actual do Servidor: ${now.toLocaleString('pt-BR', { timeZone: 'America/Campo_Grande' })}
+    const currentTimestampContext = `\n[CONTEXTO TEMPORAL ATUAL DO SISTEMA]:
+- Data e Hora Atual do Servidor: ${now.toLocaleString('pt-BR', { timeZone: 'America/Campo_Grande' })}
 - ISO 8601: ${now.toISOString()}
 - Fuso Horário Local: America/Campo_Grande (UTC-4)`;
 
-    // 3. Emissão do Pulso Sináptico Inicial (Acetilcolina: Ativação Cognitiva)
     emitNeuroPulse({
       source_dendrite: 'sensory_input',
       target_dendrite: 'jarvis_core',
@@ -126,9 +101,7 @@ export async function processWorkflowExecution(
       metadata: { sessionId, identityToken }
     });
 
-    // ========================================================================
-    // 4. BIOMETRIA VOCAL & IDENTIFICAÇÃO DE LOCUTORES FAMILIARES
-    // ========================================================================
+    // 1. BIOMETRIA VOCAL & IDENTIFICAÇÃO DE LOCUTORES FAMILIARES
     let activeSpeakerName = identityToken || 'Matheus-Admin';
     let speakerRole = 'admin';
     let isVoiceIdentified = false;
@@ -141,8 +114,6 @@ export async function processWorkflowExecution(
 
     if (audioSample && typeof audioSample === 'string' && audioSample.length > 300) {
       try {
-        // 4.1 Detecção de Auto-Apresentação / Treinamento de Voz Familiar
-        // Exemplo: "Sou o Matheus", "Meu nome é Juliana", "Aqui é a Maria", "Cadastre a voz do Lucas"
         const enrollmentMatch = userPrompt.match(
           /(?:sou\s+(?:o|a)?|meu\s+nome\s+[eé]|aqui\s+[eé]\s+(?:o|a)?|cadastre\s+a\s+voz\s+(?:do|da)?)\s+([A-Za-zÀ-ÖØ-öø-ÿ]+)/i
         );
@@ -160,7 +131,7 @@ export async function processWorkflowExecution(
           appendShortTermMemory(sessionId, 'user', userPrompt);
           appendShortTermMemory(sessionId, 'assistant', enrollReply);
 
-          await pool
+          pool
             .query(
               `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
               [sessionId, userPrompt, enrollReply]
@@ -183,7 +154,6 @@ export async function processWorkflowExecution(
           };
         }
 
-        // 4.2 Comparação de Padrão Acústico com Perfis Existentes
         const speakerCheck = await identifySpeaker(audioSample);
         if (speakerCheck && speakerCheck.identified) {
           activeSpeakerName = speakerCheck.name;
@@ -191,24 +161,19 @@ export async function processWorkflowExecution(
           isVoiceIdentified = true;
         }
 
-        // 4.3 Comportamento para Chamada Simples da Wake Word ("Jarvis" ou "Oi Jarvis")
         const isOnlyWakeWord = /^(oi\s+|ol[aá]\s+|ei\s+)?(jarvis|j[aá]vis|jarves|iarvis)[!.,?\s]*$/i.test(
           userPrompt.trim()
         );
 
         if (isOnlyWakeWord) {
-          let wakeGreeting = '';
-          if (isVoiceIdentified) {
-            wakeGreeting = `Olá, ${activeSpeakerName}! Estou ouvindo você perfeitamente. Como posso ajudar?`;
-          } else {
-            wakeGreeting =
-              'Olá! Não consegui identificar a sua voz com exatidão. Com quem estou falando? (Você pode dizer: "Sou o Matheus" ou "Sou a Juliana" para eu memorizar sua voz).';
-          }
+          const wakeGreeting = isVoiceIdentified
+            ? `Olá, ${activeSpeakerName}! Estou ouvindo você perfeitamente. Como posso ajudar?`
+            : 'Olá! Não consegui identificar a sua voz com exatidão. Com quem estou falando? (Você pode dizer: "Sou o Matheus" ou "Sou a Juliana" para eu memorizar sua voz).';
 
           appendShortTermMemory(sessionId, 'user', userPrompt);
           appendShortTermMemory(sessionId, 'assistant', wakeGreeting);
 
-          await pool
+          pool
             .query(
               `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
               [sessionId, userPrompt, wakeGreeting]
@@ -239,46 +204,49 @@ export async function processWorkflowExecution(
       }
     }
 
-    // ========================================================================
-    // 5. RECUPERAÇÃO DE MEMÓRIA CONVERSACIONAL (CHAT) & BASE VETORIAL (RAG)
-    // ========================================================================
-    const historyRes = await pool
-      .query(
-        `SELECT role, content FROM jarvis_chat_memory 
-         WHERE session_id = $1 ORDER BY id ASC LIMIT 14;`,
-        [sessionId]
-      )
-      .catch(() => ({ rows: [] as any[] }));
+    // 2. CARREGAMENTO PARALELO DE CONFIGURAÇÃO, MEMÓRIA, RAG, AGENTES E TOOLS (Otimização de Latência)
+    const [
+      resolvedBrainConfig,
+      historyRes,
+      ragRows,
+      agentsRes,
+      toolsCatalogData
+    ] = await Promise.all([
+      getCentralBrainConfig(),
+      pool
+        .query(
+          `SELECT role, content FROM jarvis_chat_memory WHERE session_id = $1 ORDER BY id DESC LIMIT 10;`,
+          [sessionId]
+        )
+        .catch(() => ({ rows: [] as any[] })),
+      searchVectorDocuments(userPrompt, 3).catch(() => []),
+      pool
+        .query(`SELECT * FROM ai_agents WHERE is_active = true ORDER BY id ASC;`)
+        .catch(() => ({ rows: [] as any[] })),
+      getDynamicToolsCatalog()
+    ]);
 
-    historyRowsCount = historyRes.rows.length;
-    const conversationThread = historyRes.rows.map((r: any) => ({
+    brainConfig = resolvedBrainConfig;
+    const dynamicServerBaseUrl = brainConfig.server_base_url;
+
+    const chronologicalHistory = [...historyRes.rows].reverse();
+    historyRowsCount = chronologicalHistory.length;
+    const conversationThread = chronologicalHistory.map((r: any) => ({
       role: r.role,
       content: r.content
     }));
 
     let ragContextText = '';
-    try {
-      const ragRows: any = await searchVectorDocuments(userPrompt, 3);
-      const list = Array.isArray(ragRows) ? ragRows : ragRows?.matches || [];
-      if (list.length > 0) {
-        ragContextText = list
-          .filter((m: any) => (m.similarity ?? 1) > 0.15)
-          .map((m: any) => `- ${m.content}`)
-          .join('\n');
-      }
-    } catch {
-      ragContextText = '';
+    const ragList = Array.isArray(ragRows) ? ragRows : (ragRows as any)?.matches || [];
+    if (ragList.length > 0) {
+      ragContextText = ragList
+        .filter((m: any) => (m.similarity ?? 1) > 0.15)
+        .map((m: any) => `- ${m.content}`)
+        .join('\n');
     }
 
-    // ========================================================================
-    // 6. CARREGAMENTO DOS AGENTES ATIVOS & CATÁLOGO DINÂMICO DE CONECTORES
-    // ========================================================================
-    const agentsRes = await pool
-      .query(`SELECT * FROM ai_agents WHERE is_active = true ORDER BY id ASC;`)
-      .catch(() => ({ rows: [] as any[] }));
     const activeAgents = agentsRes.rows;
-
-    const { catalog: liveToolsCatalog, connectorsMap } = await getDynamicToolsCatalog();
+    const { catalog: liveToolsCatalog, connectorsMap } = toolsCatalogData;
     const validToolSlugs = liveToolsCatalog.map((t) => t.slug);
 
     const liveToolsSummary =
@@ -307,7 +275,6 @@ export async function processWorkflowExecution(
             .join('\n')
         : 'Nenhum especialista cadastrado.';
 
-    // Monta as Tools dos Especialistas no padrão OpenAI Tool Calling
     const tools: any[] = activeAgents.map((ag: any) => {
       const safeSlug = sanitizeToolName(ag.slug);
       return {
@@ -326,7 +293,7 @@ export async function processWorkflowExecution(
               },
               symbol: {
                 type: 'string',
-                description: 'Ticker ou código de ativo quando aplicável (ex: PETR4, WEGE3).'
+                description: 'Ticker ou código de ativo quando aplicável (ex: PETR4, AZUL4, WEGE3).'
               },
               query: {
                 type: 'string',
@@ -339,7 +306,6 @@ export async function processWorkflowExecution(
       };
     });
 
-    // Anexa as Meta-Tools Nativas do JARVIS
     tools.push(
       {
         type: 'function',
@@ -466,7 +432,7 @@ export async function processWorkflowExecution(
         type: 'function',
         function: {
           name: 'execute_external_integration',
-          description: 'Dispara ações em WhatsApp, Google Workspace, Outlook, Home Assistant, REST, etc.',
+          description: 'Dispara ações em WhatsApp, Google Workspace, Google Calendar, Gmail, Outlook, Home Assistant, REST, etc.',
           parameters: {
             type: 'object',
             properties: {
@@ -495,9 +461,7 @@ export async function processWorkflowExecution(
       }
     );
 
-    // ========================================================================
-    // 7. CÓRTEX VISUAL E ANÁLISE MULTIMODAL (WEBCAM / TELA)
-    // ========================================================================
+    // 3. CÓRTEX VISUAL E ANÁLISE MULTIMODAL (WEBCAM / TELA)
     const rawScreen =
       sensoryInput?.screenFrame ||
       sensoryInput?.sensorData?.screenFrame ||
@@ -552,9 +516,7 @@ export async function processWorkflowExecution(
       ];
     }
 
-    // ========================================================================
-    // 8. PRIMEIRA PASSADA COGNITIVA (DISPATCHER DA LLM CENTRAL)
-    // ========================================================================
+    // 4. PRIMEIRA PASSADA COGNITIVA (DISPATCHER DA LLM CENTRAL)
     const messages: any[] = [
       {
         role: 'system',
@@ -567,7 +529,7 @@ URL Base do Servidor: ${dynamicServerBaseUrl}${visionSystemInstruction}
 ${liveToolsSummary}
 
 REGRAS OBRIGATÓRIAS DE EXECUÇÃO:
-1. NUNCA escreva blocos de texto no formato JSON de ferramenta (como {"action": "invoke_tool"}) diretamente para o usuário.
+1. NUNCA escreva blocos de texto no formato JSON de ferramenta (como {"toolName": ...} ou {"action": ...}) diretamente para o usuário.
 2. Sempre que a solicitação demandar dados externos, APIs ou especialistas cadastrados, invoque a Tool Call nativa correspondente.
 3. Trate o usuário de forma respeitosa, inteligente e alinhada à sua identidade reconhecida (${activeSpeakerName}).
 
@@ -600,14 +562,13 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
     let triggeredAgentId: string = 'jarvis_core';
     let triggeredNodeType = 'core';
 
-    // ========================================================================
-    // 9. EXECUÇÃO DE FERRAMENTAS & SÍNTESE CONTEXTUAL
-    // ========================================================================
+    // 5. EXECUÇÃO DE FERRAMENTAS & SÍNTESE CONTEXTUAL OTIMIZADA
     if (Array.isArray(choice?.tool_calls) && choice.tool_calls.length > 0) {
       const toolOutputsForSynthesis: Array<{
         toolName: string;
         responseInstruction?: string;
         result: any;
+        isReadySpecialistText?: boolean;
       }> = [];
 
       for (const toolCall of choice.tool_calls) {
@@ -622,14 +583,12 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           parsedArgs = { task_details: rawArgs };
         }
 
-        // 9.1 Criação/Edição de Conectores
         if (fnName === 'create_or_update_tool_connector') {
           const createdTool = await createOrUpdateToolFromBrain(parsedArgs as any);
           toolOutputsForSynthesis.push({ toolName: fnName, result: createdTool });
           continue;
         }
 
-        // 9.2 Exclusão de Conectores
         if (fnName === 'delete_tool_connector') {
           const deletedTool = await deleteToolConnectorFromBrain({
             provider_key: parsedArgs.provider_key
@@ -638,7 +597,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
-        // 9.3 Criação/Atualização de Agentes
         if (fnName === 'create_or_update_ai_agent') {
           const createdAg = await createOrUpdateAgentFromBrain(parsedArgs as any, brainConfig);
           triggeredAgentName = createdAg.agent?.name || triggeredAgentName;
@@ -671,7 +629,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
-        // 9.4 Ajuste de Personalidade/Prompt
         if (fnName === 'update_persona_and_behavior') {
           const personaUpdated = await updateAgentOrJarvisPersona({
             target_slug: parsedArgs.target_slug || 'jarvis_core',
@@ -684,7 +641,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
-        // 9.5 Suíte Hacker e Auditoria
         if (fnName === 'hacker_sec_agent') {
           triggeredAgentName = 'Agente Hacker (Red Team & Self-Healing)';
           triggeredAgentId = 'hacker_sec_agent';
@@ -694,7 +650,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
-        // 9.6 Persistência em Coleções Dinâmicas
         if (fnName === 'save_to_database') {
           const dbRes = await saveToDatabase({
             collectionName: parsedArgs.collectionName || 'autonomous_logs',
@@ -705,7 +660,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
-        // 9.7 Integrações Externas / IoT
         if (fnName === 'execute_external_integration') {
           triggeredAgentName = `Protocolo: ${(parsedArgs.provider || 'externo').toUpperCase()}`;
           triggeredAgentId = sanitizeToolName(parsedArgs.provider || 'external_api');
@@ -719,7 +673,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
-        // 9.8 Execução SSH Remota
         if (fnName === 'execute_ssh_command') {
           triggeredAgentId = 'executar_comando_ssh';
           triggeredNodeType = 'ssh';
@@ -730,7 +683,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
-        // 9.9 Acionamento de Agentes Especialistas Ativos
         const matchedAgent = activeAgents.find(
           (a: any) => sanitizeToolName(a.slug) === fnName
         );
@@ -757,15 +709,21 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
             connectorsMap
           );
 
+          const lastHopOutput = chainResults[chainResults.length - 1]?.output;
+          const isCleanText =
+            typeof lastHopOutput === 'string' &&
+            lastHopOutput.trim().length > 0 &&
+            extractJsonActionBlocks(lastHopOutput).length === 0;
+
           toolOutputsForSynthesis.push({
             toolName: matchedAgent.slug,
             responseInstruction: agentWithTime.system_prompt || undefined,
-            result: chainResults
+            result: isCleanText ? lastHopOutput : chainResults,
+            isReadySpecialistText: isCleanText
           });
           continue;
         }
 
-        // 9.10 Execução Direta de Conectores Vinculados
         if (connectorsMap.has(fnName) || validToolSlugs.includes(fnName)) {
           triggeredAgentId = fnName;
           triggeredNodeType = 'api';
@@ -780,41 +738,51 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
         }
       }
 
-      // Segunda Passada: Síntese Final Consolidada
-      const synthesisMessages = [
-        ...messages,
-        {
-          role: 'user',
-          content: `Os especialistas e ferramentas retornaram o seguinte payload:\n${JSON.stringify(
-            toolOutputsForSynthesis,
-            null,
-            2
-          )}\n\n[CONTEXTO TEMPORAL ACTUAL]: ${now.toLocaleString('pt-BR', {
-            timeZone: 'America/Campo_Grande'
-          })}\nComunique a resposta final ao usuário de forma completa, precisa e polida.`
-        }
-      ];
+      // ATALHO DE ALTA PERFORMANCE: Se apenas 1 especialista foi acionado e já entregou texto natural pronto, pula a 2ª chamada de LLM!
+      if (
+        toolOutputsForSynthesis.length === 1 &&
+        toolOutputsForSynthesis[0].isReadySpecialistText &&
+        typeof toolOutputsForSynthesis[0].result === 'string'
+      ) {
+        finalResponseText = toolOutputsForSynthesis[0].result;
+      } else {
+        const synthesisMessages = [
+          ...messages,
+          {
+            role: 'user',
+            content: `Os especialistas e ferramentas retornaram o seguinte payload:\n${JSON.stringify(
+              toolOutputsForSynthesis,
+              null,
+              2
+            )}\n\n[CONTEXTO TEMPORAL ATUAL]: ${now.toLocaleString('pt-BR', {
+              timeZone: 'America/Campo_Grande'
+            })}\nComunique a resposta final ao usuário de forma completa, precisa e em linguagem natural (PROIBIDO exibir código JSON ou {"toolName": ...}).`
+          }
+        ];
 
-      const secondPass: any = await callOpenAICompatibleLLM({
-        provider: brainConfig.provider,
-        model: brainConfig.model,
-        apiKey: brainConfig.api_key,
-        baseUrl: brainConfig.base_url,
-        messages: synthesisMessages,
-        temperature: brainConfig.temperature
-      });
+        const secondPass: any = await callOpenAICompatibleLLM({
+          provider: brainConfig.provider,
+          model: brainConfig.model,
+          apiKey: brainConfig.api_key,
+          baseUrl: brainConfig.base_url,
+          messages: synthesisMessages,
+          temperature: brainConfig.temperature
+        });
 
-      finalResponseText =
-        secondPass?.choices?.[0]?.message?.content ||
-        JSON.stringify(toolOutputsForSynthesis);
+        finalResponseText =
+          secondPass?.choices?.[0]?.message?.content ||
+          JSON.stringify(toolOutputsForSynthesis);
+      }
     }
 
-    // ========================================================================
-    // 10. INTERCEPTAÇÃO DE AÇÕES JSON EM TEXTO & PERSISTÊNCIA NEURAL
-    // ========================================================================
-    const isJsonText =
-      finalResponseText.includes('"action"') || finalResponseText.includes('invoke_tool');
-    if (!triggeredAgentId || triggeredAgentId === 'jarvis_core' || isJsonText) {
+    // 6. INTERCEPTAÇÃO UNIVERSAL DE QUALQUER JSON RESIDUAL ("toolName", "action", "tool", "slug")
+    const hasResidualJson =
+      extractJsonActionBlocks(finalResponseText).length > 0 ||
+      finalResponseText.includes('"toolName"') ||
+      finalResponseText.includes('"action"') ||
+      finalResponseText.includes('invoke_tool');
+
+    if (hasResidualJson) {
       const intercepted = await interceptAndExecuteTextActions({
         llmText: finalResponseText,
         userPrompt,
@@ -835,11 +803,13 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
 
     const executionTimeMs = Date.now() - startTime;
 
-    // Gravação Simultânea em Memória Relacional, Auditoria e RAG
-    await Promise.allSettled([
+    // 7. PERSISTÊNCIA ASSÍNCRONA EM BACKGROUND (Não trava o tempo de resposta da interface!)
+    const ragContent = `Pergunta (${activeSpeakerName}): ${userPrompt} | Resposta (${triggeredAgentName}): ${finalResponseText}`;
+    const ragMeta = { sessionId, agent: triggeredAgentName, speaker: activeSpeakerName };
+
+    Promise.allSettled([
       pool.query(
-        `INSERT INTO jarvis_chat_memory (session_id, role, content) 
-         VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
+        `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
         [sessionId, userPrompt, finalResponseText]
       ),
       pool.query(
@@ -853,13 +823,9 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           executionTimeMs
         ]
       ),
-      ingestDocumentToRag({
-        content: `Pergunta (${activeSpeakerName}): ${userPrompt} | Resposta (${triggeredAgentName}): ${finalResponseText}`,
-        metadata: { sessionId, agent: triggeredAgentName, speaker: activeSpeakerName }
-      } as any).catch(() => {})
-    ]);
+      ingestDocumentToRag(ragContent, ragMeta).catch(() => {})
+    ]).catch(() => {});
 
-    // Emissão do Pulso Sináptico de Conclusão (Dopamina: Sucesso)
     emitBrainLinkEvent({
       axon_id: 'response_output',
       source_dendrite: 'jarvis_core',
@@ -896,16 +862,14 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
   } catch (error: any) {
     console.error('❌ [Orquestrador Central] Erro na execução neural:', error?.message);
 
-    try {
-      await dispatchErrorTrigger({
-        sourceNode: 'Orquestrador Central (JARVIS)',
-        sourceSlug: 'jarvis_core',
-        errorMessage: error?.message || 'Falha na execução do workflow neural',
-        stackTrace: error?.stack,
-        inputPayload: { prompt: userPrompt, identityToken, sessionId },
-        severity: 'high'
-      });
-    } catch {}
+    dispatchErrorTrigger({
+      sourceNode: 'Orquestrador Central (JARVIS)',
+      sourceSlug: 'jarvis_core',
+      errorMessage: error?.message || 'Falha na execução do workflow neural',
+      stackTrace: error?.stack,
+      inputPayload: { prompt: userPrompt, identityToken, sessionId },
+      severity: 'high'
+    }).catch(() => {});
 
     return {
       success: false,
@@ -924,10 +888,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
     };
   }
 }
-
-// ============================================================================
-// WRAPPERS DE COMPATIBILIDADE UNIVERSAL PARA CONTROLLERS E WEBHOOKS
-// ============================================================================
 
 export async function processOrchestratorWorkflow(
   arg1?: any,
