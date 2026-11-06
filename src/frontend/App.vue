@@ -1,6 +1,6 @@
 <template>
   <div class="jarvis-universe">
-    <!-- 1. TELA DE LOGIN / AUTENTICAÇÃO -->
+    <!-- 1. ECRÃ DE LOGIN / AUTENTICAÇÃO -->
     <div v-if="!isAuthenticated" class="auth-overlay">
       <div class="auth-card">
         <div class="auth-core-ring"><div class="auth-core-inner"></div></div>
@@ -19,7 +19,7 @@
             />
           </div>
           <div class="auth-field">
-            <label>Senha de Acesso</label>
+            <label>Palavra-passe de Acesso</label>
             <input
               v-model="loginPassword"
               type="password"
@@ -30,7 +30,7 @@
           </div>
           <div v-if="loginError" class="auth-error">⚠️ {{ loginError }}</div>
           <button type="submit" class="auth-submit-btn" :disabled="isLoggingIn">
-            {{ isLoggingIn ? 'Autenticando...' : '🔓 Desbloquear JARVIS' }}
+            {{ isLoggingIn ? 'A autenticar...' : '🔓 Desbloquear JARVIS' }}
           </button>
         </form>
       </div>
@@ -62,12 +62,12 @@
       >
         <canvas ref="neuralCanvas"></canvas>
 
-        <!-- Status de Voz Flutuante -->
+        <!-- Estado de Voz Flutuante -->
         <div class="hud-hint" @click="manualRestartWakeWord" title="Clique para alternar vigília ou microfone">
           <span>{{ voiceStatusText }}</span>
         </div>
 
-        <!-- MODAL DE SENHA -->
+        <!-- MODAL DE PALAVRA-PASSE -->
         <PasswordModal
           v-if="showPasswordModal"
           :initial-email="loginEmail"
@@ -107,7 +107,7 @@
           @close="selectedMemoryDot = null"
         />
 
-        <!-- PREVIEW DE VÍDEO (CÂMERA OU TELA) -->
+        <!-- PRÉ-VISUALIZAÇÃO DE VÍDEO (CÂMARA OU ECRÃ) -->
         <MediaPreview
           ref="mediaPreviewComponent"
           :is-camera-active="isCameraActive"
@@ -115,7 +115,7 @@
           @close="stopAllMedia"
         />
 
-        <!-- BALÃO DE RESPOSTA COM BADGE DE TELEMETRIA -->
+        <!-- BALÃO DE RESPOSTA COM TELEMETRIA -->
         <ResponseBubble :response="lastResponse" @close="lastResponse = null">
           <template #telemetry>
             <AgentTelemetryBadge :telemetry="lastTelemetry" />
@@ -123,7 +123,7 @@
         </ResponseBubble>
       </div>
 
-      <!-- BARRA DE COMANDO NO RODAPÉ COM TEXTAREA MULTILINHA E AUTO-RESIZE -->
+      <!-- BARRA DE COMANDO: CHAT MULTILINHA E CONTROLOS -->
       <footer class="command-dock-wrapper">
         <div class="command-dock">
           <div class="dock-controls">
@@ -138,30 +138,30 @@
               🎙️
             </button>
 
-            <!-- Botão Webcam -->
+            <!-- Botão Câmara -->
             <button
               type="button"
               @click="toggleWebcam"
               class="dock-btn"
               :class="{ active: isCameraActive }"
-              title="Alternar Câmera"
+              title="Alternar Câmara"
             >
               📷
             </button>
 
-            <!-- Botão Compartilhar Tela -->
+            <!-- Botão Partilha de Ecrã -->
             <button
               type="button"
               @click="toggleScreenShare"
               class="dock-btn"
               :class="{ active: isScreenActive }"
-              title="Compartilhar Tela"
+              title="Partilhar Ecrã"
             >
               🖥️
             </button>
           </div>
 
-          <!-- Campo Multilinha com Auto-Resize (Shift + Enter quebra linha) -->
+          <!-- Caixa de Texto Multilinha com Auto-Resize (Shift + Enter quebra linha) -->
           <div class="dock-input-wrapper">
             <textarea
               ref="chatInputRef"
@@ -195,19 +195,19 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watchEffect, nextTick } from 'vue';
 
-// Composables de Domínio
+// Composables do Ecossistema
 import { useAuth } from './composables/useAuth';
 import { useEcosystem, AGENT_PALETTE } from './composables/useEcosystem';
 import { useMediaStream } from './composables/useMediaStream';
 import { useMemoryOrbs } from './composables/useMemoryOrbs';
 
-// Componentes Estruturais
+// Componentes da Interface
 import HudHeader from './components/HudHeader.vue';
 import ResponseBubble from './components/ResponseBubble.vue';
 import MediaPreview from './components/MediaPreview.vue';
 import AgentTelemetryBadge from './components/AgentTelemetryBadge.vue';
 
-// Modais
+// Modais do Sistema
 import PasswordModal from './components/modals/PasswordModal.vue';
 import AgentToolsPopover from './components/modals/AgentToolsPopover.vue';
 import SubNodeInspector from './components/modals/SubNodeInspector.vue';
@@ -216,7 +216,7 @@ import MemoryInspector from './components/modals/MemoryInspector.vue';
 import { ForegroundService } from '@capawesome-team/capacitor-android-foreground-service';
 import { Capacitor } from '@capacitor/core';
 
-// 1. Ponte para o MediaPreview conectar o elemento de vídeo ao capturador de tela/webcam
+// 1. Ponte de Vídeo para MediaPreview
 const mediaPreviewComponent = ref<any>(null);
 watchEffect(() => {
   if (mediaPreviewComponent.value?.videoRef) {
@@ -224,7 +224,7 @@ watchEffect(() => {
   }
 });
 
-// 2. Ponte para salvar novas credenciais emitidas pelo PasswordModal
+// 2. Ponte de Credenciais do PasswordModal
 async function onSaveCredentials(payload: { email: string; password: string }) {
   newEmailInput.value = payload.email;
   newPasswordInput.value = payload.password;
@@ -232,7 +232,7 @@ async function onSaveCredentials(payload: { email: string; password: string }) {
 }
 const sessionId = ref<string>(localStorage.getItem('jarvis_active_session_id') || 'sess_main_admin');
 
-// 3. Injeta os composables modulares do ecossistema
+// 3. Injeção de Módulos
 const {
   isAuthenticated, loginEmail, loginPassword, loginError, isLoggingIn,
   showPasswordModal, newEmailInput, newPasswordInput, credFeedback,
@@ -257,7 +257,7 @@ const {
   fetchSessionMemoryOrbs, registerAgentExecution, drawMemoryOrbsOnCanvas
 } = useMemoryOrbs();
 
-// 4. Estados de Inspeção, Canvas e Chat Multilinha
+// 4. Estados do Canvas e Input Multilinha
 const neuralCanvas = ref<HTMLCanvasElement | null>(null);
 const chatInputRef = ref<HTMLTextAreaElement | null>(null);
 const activeAgentForTools = ref<any | null>(null);
@@ -277,7 +277,7 @@ function adjustTextareaHeight() {
 }
 
 // ============================================================================
-// 5. MOTOR DE VOZ INTEGRADO: ANTI-CORTE (2.2s SILENCE), BAIXO DELAY E TTS
+// 5. MOTOR DE VOZ INTEGRADO: 2.2s TOLERÂNCIA A PAUSAS, ZERO DELAY E TTS
 // ============================================================================
 const isJarvisAwake = ref<boolean>(false);
 const isJarvisSpeaking = ref<boolean>(false);
@@ -332,8 +332,8 @@ function initSTT() {
 
   const rec = new SpeechRecognition();
   rec.lang = 'pt-BR';
-  rec.continuous = true;       // Não finaliza a escuta prematuramente
-  rec.interimResults = true;   // Transcrição instantânea: elimina delay
+  rec.continuous = true;
+  rec.interimResults = true;
   rec.maxAlternatives = 1;
 
   rec.onstart = () => {
@@ -346,7 +346,6 @@ function initSTT() {
   rec.onresult = (event: any) => {
     if (isJarvisSpeaking.value) return;
 
-    // Reseta o timer a cada nova fonética detectada
     if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
 
     let currentInterim = '';
@@ -362,7 +361,7 @@ function initSTT() {
     const liveText = (speechAccumulatedBuffer + ' ' + currentInterim).trim();
     const lower = liveText.toLowerCase();
 
-    // Detecção da Wake Word contínua
+    // Deteção Wake Word contínua
     if (!isJarvisAwake.value && (lower.includes('jarvis') || lower.includes('jávis'))) {
       const afterWake = liveText.split(/jarvis|jávis/i).pop()?.replace(/^[,.\s!?-]+/, '').trim() || '';
       isJarvisAwake.value = true;
@@ -372,24 +371,23 @@ function initSTT() {
         speechAccumulatedBuffer = afterWake;
       } else {
         speechAccumulatedBuffer = '';
-        voiceStatusText.value = '🎙️ Sim, senhor? Estou ouvindo...';
+        voiceStatusText.value = '🎙️ Sim, senhor? Estou a ouvir...';
         return;
       }
     }
 
-    // Se estiver em escuta ativa (seja por clique no microfone ou por Wake Word)
     if (isJarvisAwake.value && liveText.length > 1) {
       const cleaned = liveText.replace(/^(jarvis|jávis)[,.\s!?-]*/i, '').trim();
       promptText.value = cleaned;
-      voiceStatusText.value = `🎙️ Captando: "${cleaned}"`;
+      voiceStatusText.value = `🎙️ A captar: "${cleaned}"`;
       adjustTextareaHeight();
 
-      // TEMPORIZADOR DE RESPIRAÇÃO: Aguarda 2200ms de silêncio contínuo antes de enviar
+      // Tolerância de respiração: aguarda 2200ms de silêncio contínuo antes do envio
       speechSilenceTimer = setTimeout(() => {
         const finalPrompt = promptText.value.trim();
         if (finalPrompt.length > 1 && !isProcessing.value) {
           playJarvisChime('send');
-          voiceStatusText.value = `⚡ Transmitindo comando...`;
+          voiceStatusText.value = '⚡ A transmitir comando...';
           stopMicrophoneSession();
           sendCommand(finalPrompt);
         }
@@ -409,7 +407,6 @@ function initSTT() {
 
   rec.onend = () => {
     isRecognitionActive.value = false;
-    // Se ainda estiver acordado e o navegador desconectou por limite de stream, retoma sem cortar
     if (isJarvisAwake.value && !isJarvisSpeaking.value) {
       try { rec.start(); } catch {}
     } else if (!isJarvisAwake.value) {
@@ -499,7 +496,7 @@ function stopAllAudio() {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
 }
 
-// 6. Controles da Câmera e Grafo 3D
+// 6. Câmara 3D e Renderização no Canvas
 const rotationY = ref<number>(0);
 const rotationX = ref<number>(0.18);
 const cameraZoom = ref<number>(1.0);
@@ -622,7 +619,7 @@ function startNeuralCanvasLoop() {
     }
     ctx.restore();
 
-    // Bolinhas Azuis de Memória
+    // Orbes de Memória
     drawMemoryOrbsOnCanvas(ctx, cx, cy, rotationY.value);
 
     // Mapeamento e desenho de agentes e conectores
@@ -671,7 +668,7 @@ function startNeuralCanvasLoop() {
       }
     });
 
-    // Conectores externos (Nós Fixos)
+    // Nós de Conectores Externos
     const uniqueToolIds = Array.from(new Set(dynamicAgents.value.flatMap((ag) => ag.tools || []).map((t: string) => String(t).toLowerCase())));
     uniqueToolIds.forEach((toolId, tIdx) => {
       const meta = getConnectionMeta(toolId);
@@ -761,7 +758,7 @@ function startNeuralCanvasLoop() {
   animationFrameId = requestAnimationFrame(renderFrame);
 }
 
-// 7. Interações de Toque e Mouse
+// 7. Interações de Toque e Rato
 function handleStageTap(clientX: number, clientY: number) {
   for (const item of renderedAgentsHitbox) {
     if (Math.hypot(clientX - item.x, clientY - item.y) <= item.r) {
@@ -827,7 +824,7 @@ function onTouchEnd(e: TouchEvent) {
   isDragging = false;
 }
 
-// 8. Envio de Comando com Telemetria e Visão
+// 8. Envio de Comandos e Telemetria
 async function sendCommand(overrideText?: string) {
   const textToSend = (typeof overrideText === 'string' ? overrideText : promptText.value).trim();
   if (!textToSend || isProcessing.value) return;
@@ -838,7 +835,7 @@ async function sendCommand(overrideText?: string) {
 
   let currentWebcamFrame = isCameraActive.value ? captureCurrentVideoFrame() : null;
   if (requiresCameraActivation(textToSend)) {
-    voiceStatusText.value = '📷 Ativando visão da câmera...';
+    voiceStatusText.value = '📷 A ativar visão da câmara...';
     const autoFrame = await ensureCameraAndCaptureFrame();
     if (autoFrame) currentWebcamFrame = autoFrame;
   }
@@ -898,12 +895,11 @@ async function enableBackgroundMode() {
     await ForegroundService.startForegroundService({
       id: 1001,
       title: 'JARVIS Core Ativo',
-      body: 'Conexão neural e automações operando em segundo plano.',
+      body: 'Conexão neural e automações em segundo plano.',
       smallIcon: 'ic_launcher'
     });
-    console.log('🟢 Foreground Service ativado.');
   } catch (error) {
-    console.warn('Falha ao iniciar Foreground Service:', error);
+    console.warn('Falha no Foreground Service:', error);
   }
 }
 
@@ -964,7 +960,6 @@ canvas { display: block; width: 100%; height: 100%; }
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
 }
 
-/* BARRA DE COMANDO / CHAT DOCK MULTILINHA */
 .command-dock-wrapper {
   position: fixed;
   bottom: env(safe-area-inset-bottom, 16px);
@@ -1045,4 +1040,39 @@ canvas { display: block; width: 100%; height: 100%; }
   border: none;
   outline: none;
   color: #f8fafc;
-  font-size: 1
+  font-size: 13.5px;
+  font-family: inherit;
+  line-height: 1.45;
+  resize: none;
+  max-height: 120px;
+  min-height: 24px;
+  padding: 6px 4px;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.dock-textarea::placeholder {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.send-btn {
+  background: linear-gradient(135deg, #0284c7, #2563eb);
+  color: #ffffff;
+  border: none;
+  border-radius: 14px;
+  padding: 8px 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+</style>
