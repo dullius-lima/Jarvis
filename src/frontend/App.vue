@@ -38,15 +38,18 @@
 
     <!-- 2. ECOSSISTEMA PRINCIPAL 3D -->
     <template v-else>
-      <HudHeader
-        :agents-count="dynamicAgents.length"
-        :active-nodes-count="activeSharedNodesCount"
-        :memories-count="memoryDots.length"
-        :has-selection-or-zoom="Boolean(activeAgentForTools || selectedSubNode || selectedMemoryDot || cameraZoom !== 1)"
-        @reset-view="resetViewAndSelection"
-        @open-password="showPasswordModal = true"
-        @logout="handleLogout(stopAllEngines)"
-      />
+      <!-- Cabeçalho com proteção da barra de status do celular -->
+      <header class="hud-top-safe-area">
+        <HudHeader
+          :agents-count="dynamicAgents.length"
+          :active-nodes-count="activeSharedNodesCount"
+          :memories-count="memoryDots.length"
+          :has-selection-or-zoom="Boolean(activeAgentForTools || selectedSubNode || selectedMemoryDot || cameraZoom !== 1)"
+          @reset-view="resetViewAndSelection"
+          @open-password="showPasswordModal = true"
+          @logout="handleLogout(stopAllEngines)"
+        />
+      </header>
 
       <!-- PALCO CANVAS 3D INTERATIVO -->
       <div
@@ -61,11 +64,6 @@
         @touchend="onTouchEnd"
       >
         <canvas ref="neuralCanvas"></canvas>
-
-        <!-- Indicador de Status de Voz Minimalista -->
-        <div class="hud-hint" @click="manualRestartWakeWord" title="Clique para alternar vigília">
-          <span>{{ voiceStatusText }}</span>
-        </div>
 
         <!-- MODAL DE PALAVRA-PASSE -->
         <PasswordModal
@@ -107,7 +105,7 @@
           @close="selectedMemoryDot = null"
         />
 
-        <!-- PRÉ-VISUALIZAÇÃO DE VÍDEO (CÂMARA OU ECRÃ) -->
+        <!-- PRÉ-VISUALIZAÇÃO DE VÍDEO -->
         <MediaPreview
           ref="mediaPreviewComponent"
           :is-camera-active="isCameraActive"
@@ -125,6 +123,12 @@
 
       <!-- BARRA DE COMANDO MINIMALISTA: CHAT MULTILINHA E CONTROLOS -->
       <footer class="command-dock-wrapper">
+        <!-- Indicador de Status Acima do Dock (Sem sobreposição) -->
+        <div class="hud-status-badge" @click="toggleMicrophone" :class="{ awake: isJarvisAwake }">
+          <span class="status-dot"></span>
+          <span>{{ voiceStatusText }}</span>
+        </div>
+
         <div class="command-dock">
           <div class="dock-controls">
             <!-- Botão Microfone -->
@@ -132,8 +136,8 @@
               type="button"
               @click="toggleMicrophone"
               class="dock-btn mic-btn"
-              :class="{ active: isJarvisAwake || isRecognitionActive }"
-              :title="isJarvisAwake || isRecognitionActive ? 'Desativar Microfone' : 'Ativar Microfone'"
+              :class="{ active: isJarvisAwake || isRecordingAudio }"
+              :title="isJarvisAwake ? 'Microfone ativo' : 'Ativar Microfone'"
             >
               🎙️
             </button>
@@ -161,7 +165,7 @@
             </button>
           </div>
 
-          <!-- Caixa de Texto Multilinha com Auto-Resize (Shift + Enter quebra linha) -->
+          <!-- Caixa de Texto Multilinha com Auto-Resize -->
           <div class="dock-input-wrapper">
             <textarea
               ref="chatInputRef"
@@ -170,7 +174,7 @@
               @keydown.shift.enter.stop
               @input="adjustTextareaHeight"
               rows="1"
-              placeholder="Instrução para o JARVIS..."
+              placeholder="Fale 'Jarvis' ou digite..."
               class="dock-textarea"
               :disabled="isProcessing"
             ></textarea>
@@ -254,7 +258,7 @@ const {
   fetchSessionMemoryOrbs, registerAgentExecution, drawMemoryOrbsOnCanvas
 } = useMemoryOrbs();
 
-// 4. Estados do Canvas e Input Multilinha
+// 4. Estados do Canvas e Input
 const neuralCanvas = ref<HTMLCanvasElement | null>(null);
 const chatInputRef = ref<HTMLTextAreaElement | null>(null);
 const activeAgentForTools = ref<any | null>(null);
@@ -269,27 +273,30 @@ function adjustTextareaHeight() {
     const el = chatInputRef.value;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 100)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 90)}px`;
   });
 }
 
 // ============================================================================
-// 5. MOTOR DE VOZ INTEGRADO: WAKE-WORD AMPLIFICADA, CLIQUE NO NÚCLEO E ZERO DELAY
+// 5. MOTOR DE VOZ NATIVO + FALLBACK WHISPER PARA ANDROID/WEBVIEW
 // ============================================================================
 const isJarvisAwake = ref<boolean>(false);
 const isJarvisSpeaking = ref<boolean>(false);
-const isRecognitionActive = ref<boolean>(false);
-const voiceStatusText = ref<string>('🎙️ Microfone pronto');
+const isRecordingAudio = ref<boolean>(false);
+const voiceStatusText = ref<string>('Toque no microfone ou diga "Jarvis"');
 const isVoiceMuted = ref<boolean>(false);
 
 let recognition: any = null;
 let speechSilenceTimer: any = null;
 let speechAccumulatedBuffer = '';
 let lastChimeTimestamp = 0;
+let mediaRecorder: MediaRecorder | null = null;
+let audioChunks: Blob[] = [];
+let localAudioStream: MediaStream | null = null;
 
 function playJarvisChime(type: 'wake' | 'send' = 'wake') {
   const now = Date.now();
-  if (now - lastChimeTimestamp < 2000 && type === 'wake') return;
+  if (now - lastChimeTimestamp < 1800 && type === 'wake') return;
   lastChimeTimestamp = now;
 
   try {
@@ -318,14 +325,81 @@ function playJarvisChime(type: 'wake' | 'send' = 'wake') {
   } catch {}
 }
 
+// Força o pop-up nativo de permissão do microfone no Android/WebView
+async function ensureMicrophonePermission(): Promise<boolean> {
+  try {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      if (!localAudioStream || !localAudioStream.active) {
+        localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+      return true;
+    }
+  } catch (err) {
+    console.warn('Permissão de microfone negada no sistema:', err);
+    voiceStatusText.value = '❌ Microfone bloqueado nas permissões do celular';
+    return false;
+  }
+  return false;
+}
+
+// Gravação de contingência enviada para o Whisper Local na VM
+async function startWhisperFallbackRecording() {
+  if (!localAudioStream) return;
+  try {
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(localAudioStream);
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
+    mediaRecorder.onstop = async () => {
+      isRecordingAudio.value = false;
+      if (audioChunks.length === 0 || promptText.value.trim().length > 1) return;
+
+      voiceStatusText.value = '⚡ Transcrevendo áudio via Whisper...';
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = async () => {
+        const base64Audio = (reader.result as string).split(',')[1];
+        if (!base64Audio) return;
+
+        try {
+          const res = await fetch('/api/v1/audio/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audioBase64: base64Audio })
+          });
+          const data = await res.json();
+          if (data.success && data.text && data.text.trim().length > 1) {
+            promptText.value = data.text.trim();
+            sendCommand(data.text.trim());
+          } else {
+            voiceStatusText.value = '🎙️ Não entendi, fale novamente.';
+          }
+        } catch {
+          voiceStatusText.value = '⚠️ Falha no Whisper local.';
+        }
+      };
+    };
+    mediaRecorder.start();
+    isRecordingAudio.value = true;
+  } catch (e) {
+    console.warn('Erro ao inicializar MediaRecorder:', e);
+  }
+}
+
+function stopWhisperFallbackRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+  }
+  isRecordingAudio.value = false;
+}
+
 function initSTT() {
   const SpeechRecognition =
     (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-  if (!SpeechRecognition) {
-    voiceStatusText.value = '⚠️ Web Speech indisponível';
-    return null;
-  }
+  if (!SpeechRecognition) return null;
 
   const rec = new SpeechRecognition();
   rec.lang = 'pt-BR';
@@ -334,10 +408,9 @@ function initSTT() {
   rec.maxAlternatives = 1;
 
   rec.onstart = () => {
-    isRecognitionActive.value = true;
     voiceStatusText.value = isJarvisAwake.value
-      ? '🎙️ Ouvindo... Pode falar pausadamente'
-      : '🟢 Vigília: diga "Jarvis" ou clique no núcleo';
+      ? '🎙️ Ouvindo... Pode falar'
+      : '🟢 Diga "Jarvis" ou toque no centro';
   };
 
   rec.onresult = (event: any) => {
@@ -357,15 +430,12 @@ function initSTT() {
 
     const liveText = (speechAccumulatedBuffer + ' ' + currentInterim).trim();
     const lower = liveText.toLowerCase();
-
-    // Padrão ampliado para captar "jarvis", "oi jarvis", "olá jarvis", "jávis", "ei jarvis"
-    const wakeWordPattern = /(?:oi|ol[aá]|ei|ok|e a[ií]|fala|al[oô])?\s*(jarvis|j[aá]vis|jarves|iarvis|jarbas|dj[aá]rvis)/i;
+    const wakeWordPattern = /(?:oi|ol[aá]|ei|ok|fala|al[oô])?\s*(jarvis|j[aá]vis|jarves|iarvis)/i;
 
     if (!isJarvisAwake.value && wakeWordPattern.test(lower)) {
       isJarvisAwake.value = true;
       playJarvisChime('wake');
 
-      // Extrai qualquer instrução dita logo em sequência
       const parts = liveText.split(wakeWordPattern);
       const afterWake = parts.pop()?.replace(/^[,.\s!?-]+/, '').trim() || '';
 
@@ -385,51 +455,44 @@ function initSTT() {
     if (isJarvisAwake.value && liveText.length > 1) {
       const cleaned = liveText.replace(wakeWordPattern, '').replace(/^[,.\s!?-]+/, '').trim();
       promptText.value = cleaned;
-      voiceStatusText.value = `🎙️ A captar: "${cleaned}"`;
+      voiceStatusText.value = `🎙️ "${cleaned}"`;
       adjustTextareaHeight();
 
-      // Tolerância de respiração (2200ms de silêncio contínuo antes de enviar)
       speechSilenceTimer = setTimeout(() => {
         const finalPrompt = promptText.value.trim();
         if (finalPrompt.length > 1 && !isProcessing.value) {
           playJarvisChime('send');
-          voiceStatusText.value = '⚡ A transmitir comando...';
+          voiceStatusText.value = '⚡ Transmitindo comando...';
           stopMicrophoneSession();
           sendCommand(finalPrompt);
         }
-      }, 2200);
+      }, 2000);
     }
   };
 
   rec.onerror = (event: any) => {
-    if (event.error !== 'no-speech') {
-      if (event.error === 'not-allowed') {
-        voiceStatusText.value = '❌ Permissão de microfone negada';
-        isRecognitionActive.value = false;
-        isJarvisAwake.value = false;
+    // Se o serviço do Google falhar no WebView do Android, aciona a gravação Whisper
+    if (['service-not-allowed', 'network', 'not-allowed'].includes(event.error)) {
+      if (isJarvisAwake.value && !isRecordingAudio.value) {
+        voiceStatusText.value = '🎙️ Gravando comando de voz...';
+        startWhisperFallbackRecording();
       }
     }
   };
 
   rec.onend = () => {
-    isRecognitionActive.value = false;
-    // Vigília contínua resiliente: se não estiver mutado nem falando, religa o microfone
-    if (!isVoiceMuted.value && !isJarvisSpeaking.value) {
-      setTimeout(() => {
-        try {
-          rec.start();
-        } catch {}
-      }, 300);
-    } else if (!isJarvisAwake.value) {
-      voiceStatusText.value = '🎙️ Microfone em repouso';
+    if (isJarvisAwake.value && isRecordingAudio.value) {
+      stopWhisperFallbackRecording();
+    }
+    if (isJarvisAwake.value && !isJarvisSpeaking.value) {
+      try { rec.start(); } catch {}
     }
   };
 
   return rec;
 }
 
-// Ação de Clique Direto no Núcleo do JARVIS
-function onJarvisCoreClick() {
+async function onJarvisCoreClick() {
   selectedSubNode.value = null;
   selectedMemoryDot.value = null;
   activeAgentForTools.value = null;
@@ -440,19 +503,34 @@ function onJarvisCoreClick() {
     return;
   }
 
+  // 1. Garante a permissão no sistema Android
+  const hasPerm = await ensureMicrophonePermission();
+  if (!hasPerm) return;
+
   speechAccumulatedBuffer = '';
   promptText.value = '';
   adjustTextareaHeight();
   isJarvisAwake.value = true;
   playJarvisChime('wake');
-  voiceStatusText.value = '🎙️ Sim, senhor? Estou ouvindo...';
+  voiceStatusText.value = '🎙️ Ouvindo... Pode falar';
 
+  // Inicia SpeechRecognition e abre gravação de segurança
   if (!recognition) recognition = initSTT();
   try {
     recognition.start();
   } catch {
     try { recognition.stop(); recognition.start(); } catch {}
   }
+  startWhisperFallbackRecording();
+
+  // Trava de segurança: se após 6 segundos não houver fala, finaliza
+  if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
+  speechSilenceTimer = setTimeout(() => {
+    if (isJarvisAwake.value && !promptText.value.trim()) {
+      stopMicrophoneSession();
+      voiceStatusText.value = '🎙️ Toque no microfone ou diga "Jarvis"';
+    }
+  }, 6000);
 }
 
 function toggleMicrophone() {
@@ -462,16 +540,11 @@ function toggleMicrophone() {
 function stopMicrophoneSession() {
   if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
   isJarvisAwake.value = false;
-  isRecognitionActive.value = false;
   speechAccumulatedBuffer = '';
+  stopWhisperFallbackRecording();
   if (recognition) {
     try { recognition.stop(); } catch {}
   }
-}
-
-function manualRestartWakeWord() {
-  stopMicrophoneSession();
-  onJarvisCoreClick();
 }
 
 function speakJarvisResponse(rawText: string, onDone?: () => void) {
@@ -514,10 +587,14 @@ function speakJarvisResponse(rawText: string, onDone?: () => void) {
 
 function stopAllAudio() {
   stopMicrophoneSession();
+  if (localAudioStream) {
+    localAudioStream.getTracks().forEach((t) => t.stop());
+    localAudioStream = null;
+  }
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
 }
 
-// 6. Câmara 3D e Renderização no Canvas
+// 6. Câmara 3D e Renderização no Canvas (Reescalonado Sem Colisão)
 const rotationY = ref<number>(0);
 const rotationX = ref<number>(0.18);
 const cameraZoom = ref<number>(1.0);
@@ -592,8 +669,8 @@ function startNeuralCanvasLoop() {
     ctx.globalAlpha = 1.0;
     ctx.clearRect(0, 0, width, height);
 
-    // Fundo espacial profundo minimalista
-    const bgGrad = ctx.createRadialGradient(width * 0.5, height * 0.48, 8, width * 0.5, height * 0.48, Math.max(width, height) * 0.72);
+    // Fundo espacial profundo
+    const bgGrad = ctx.createRadialGradient(width * 0.5, height * 0.44, 8, width * 0.5, height * 0.44, Math.max(width, height) * 0.72);
     bgGrad.addColorStop(0, '#091524');
     bgGrad.addColorStop(0.6, '#040813');
     bgGrad.addColorStop(1, '#020409');
@@ -605,15 +682,15 @@ function startNeuralCanvasLoop() {
 
     const isMobile = width < 768;
     const cx = width * 0.5;
-    const cy = height * (isMobile ? 0.46 : 0.5);
+    const cy = height * (isMobile ? 0.43 : 0.48); // Centro elevado para dar respiro aos nós inferiores
     const fov = isMobile ? 520 : 680;
-    const maxSafeRadius = Math.max(90, Math.min(width * 0.5 - (isMobile ? 40 : 70), height * 0.5 - (isMobile ? 110 : 125)));
-    const coreRadius = Math.min(maxSafeRadius * 0.38, isMobile ? 54 : 80);
-    const agentOrbitRadius = Math.min(maxSafeRadius * 0.88, isMobile ? 130 : 240);
-    const sharedNodeOrbitRadius = Math.min(maxSafeRadius * 1.15, isMobile ? 160 : 320);
+    const maxSafeRadius = Math.max(85, Math.min(width * 0.5 - (isMobile ? 36 : 60), height * 0.44 - (isMobile ? 40 : 60)));
+    const coreRadius = Math.min(maxSafeRadius * 0.32, isMobile ? 40 : 65); // Núcleo compacto
+    const agentOrbitRadius = Math.min(maxSafeRadius * 0.92, isMobile ? 125 : 230);
+    const sharedNodeOrbitRadius = Math.min(maxSafeRadius * 1.2, isMobile ? 155 : 310);
 
     // ========================================================================
-    // DESTAQUE DO NÚCLEO JARVIS (AURA + REATOR BIOLUMINESCENTE 3D)
+    // NÚCLEO HOLOGRÁFICO JARVIS (Com aura sem colisão de texto)
     // ========================================================================
     const corePulse = isJarvisAwake.value
       ? 1 + Math.sin(time * 6) * 0.08
@@ -623,41 +700,28 @@ function startNeuralCanvasLoop() {
 
     const currentCoreR = coreRadius * corePulse * cameraZoom.value;
 
-    // 1. Halo / Aura Volumétrica
     ctx.save();
-    const coreGlow = ctx.createRadialGradient(cx, cy, 2, cx, cy, currentCoreR * 1.75);
-    if (isJarvisAwake.value) {
-      coreGlow.addColorStop(0, 'rgba(56, 189, 248, 0.4)');
-      coreGlow.addColorStop(0.5, 'rgba(14, 165, 233, 0.18)');
-      coreGlow.addColorStop(1, 'rgba(2, 6, 23, 0)');
-    } else {
-      coreGlow.addColorStop(0, 'rgba(14, 165, 233, 0.22)');
-      coreGlow.addColorStop(0.6, 'rgba(2, 132, 199, 0.08)');
-      coreGlow.addColorStop(1, 'rgba(2, 6, 23, 0)');
-    }
+    const coreGlow = ctx.createRadialGradient(cx, cy, 2, cx, cy, currentCoreR * 1.6);
+    coreGlow.addColorStop(0, isJarvisAwake.value ? 'rgba(56, 189, 248, 0.45)' : 'rgba(14, 165, 233, 0.22)');
+    coreGlow.addColorStop(1, 'rgba(2, 6, 23, 0)');
     ctx.fillStyle = coreGlow;
     ctx.beginPath();
-    ctx.arc(cx, cy, currentCoreR * 1.75, 0, Math.PI * 2);
+    ctx.arc(cx, cy, currentCoreR * 1.6, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    // 2. Anéis Concêntricos Segmentados tipo Arc-Reactor
+    // Anéis Concêntricos
     ctx.save();
     ctx.strokeStyle = isJarvisAwake.value ? '#38bdf8' : '#0ea5e9';
     ctx.lineWidth = isJarvisAwake.value ? 2 : 1.2;
-    ctx.globalAlpha = isJarvisAwake.value ? 0.9 : 0.65;
+    ctx.globalAlpha = isJarvisAwake.value ? 0.9 : 0.6;
     ctx.setLineDash([5, 6]);
     ctx.beginPath();
-    ctx.arc(cx, cy, currentCoreR * 1.25, time * 0.4, time * 0.4 + Math.PI * 2);
-    ctx.stroke();
-
-    ctx.setLineDash([18, 14, 6, 14]);
-    ctx.beginPath();
-    ctx.arc(cx, cy, currentCoreR * 1.1, -time * 0.35, -time * 0.35 + Math.PI * 1.6);
+    ctx.arc(cx, cy, currentCoreR * 1.2, time * 0.4, time * 0.4 + Math.PI * 2);
     ctx.stroke();
     ctx.restore();
 
-    // 3. Esfera Geodésica 3D (Wireframe Interno)
+    // Esfera 3D Central
     const effectiveCoreR = coreRadius * corePulse;
     ctx.save();
     ctx.strokeStyle = isJarvisAwake.value ? '#38bdf8' : isJarvisSpeaking.value ? '#22d3ee' : '#0284c7';
@@ -670,34 +734,12 @@ function startNeuralCanvasLoop() {
         const p = project3D(effectiveCoreR * Math.sin(theta) * Math.cos(phi), effectiveCoreR * Math.cos(theta), effectiveCoreR * Math.sin(theta) * Math.sin(phi), cx, cy, fov);
         if (j === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
       }
-      ctx.globalAlpha = isJarvisAwake.value ? 0.6 : 0.35;
+      ctx.globalAlpha = isJarvisAwake.value ? 0.65 : 0.35;
       ctx.stroke();
     }
     ctx.restore();
 
-    // 4. Núcleo Denso Central
-    ctx.save();
-    const innerGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, currentCoreR * 0.45);
-    innerGrad.addColorStop(0, isJarvisAwake.value ? '#ffffff' : '#bae6fd');
-    innerGrad.addColorStop(0.35, isJarvisAwake.value ? '#38bdf8' : '#0284c7');
-    innerGrad.addColorStop(1, 'rgba(15, 23, 42, 0.9)');
-    ctx.fillStyle = innerGrad;
-    ctx.shadowColor = isJarvisAwake.value ? '#38bdf8' : '#0ea5e9';
-    ctx.shadowBlur = isJarvisAwake.value ? 24 : 12;
-    ctx.beginPath();
-    ctx.arc(cx, cy, currentCoreR * 0.45, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-
-    // Rótulo Minimalista do Núcleo
-    ctx.font = '600 9px monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = isJarvisAwake.value ? '#38bdf8' : '#64748b';
-    ctx.fillText(isJarvisAwake.value ? 'JARVIS ● ATIVO' : 'JARVIS CORE', cx, cy + currentCoreR * 1.4);
-    ctx.restore();
-
-    // Orbes de Memória (Bolinhas Azuis)
+    // Bolinhas Azuis de Memória
     drawMemoryOrbsOnCanvas(ctx, cx, cy, rotationY.value);
 
     // Mapeamento e desenho de agentes e conectores
@@ -708,12 +750,12 @@ function startNeuralCanvasLoop() {
     const agentPositionsMap = new Map<any, { ag: any; proj: { x: number; y: number; scale: number }; color: string }>();
     dynamicAgents.value.forEach((ag, idx) => {
       const angle = (idx / Math.max(dynamicAgents.value.length, 1)) * Math.PI * 2 + 0.3;
-      const rawProj = project3D(Math.cos(angle) * agentOrbitRadius, Math.sin(idx * 1.7 + time * 0.5) * (isMobile ? 26 : 38), Math.sin(angle) * agentOrbitRadius, cx, cy, fov);
+      const rawProj = project3D(Math.cos(angle) * agentOrbitRadius, Math.sin(idx * 1.7 + time * 0.5) * (isMobile ? 22 : 36), Math.sin(angle) * agentOrbitRadius, cx, cy, fov);
       const color = ag.color || AGENT_PALETTE[idx % AGENT_PALETTE.length];
       agentPositionsMap.set(ag.id, { ag, proj: { x: rawProj.x, y: rawProj.y, scale: rawProj.scale }, color });
     });
 
-    // Feixes sinápticos e memórias em trânsito
+    // Feixes sinápticos e memórias
     Array.from(agentPositionsMap.values()).forEach(({ ag, proj: agProj, color }, index) => {
       const isSelected = activeAgentForTools.value?.id === ag.id;
       ctx.save();
@@ -724,7 +766,7 @@ function startNeuralCanvasLoop() {
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       const ctrlX = (cx + agProj.x) * 0.5;
-      const ctrlY = (cy + agProj.y) * 0.5 - 16;
+      const ctrlY = (cy + agProj.y) * 0.5 - 14;
       ctx.quadraticCurveTo(ctrlX, ctrlY, agProj.x, agProj.y);
       ctx.stroke();
       ctx.restore();
@@ -751,7 +793,7 @@ function startNeuralCanvasLoop() {
     uniqueToolIds.forEach((toolId, tIdx) => {
       const meta = getConnectionMeta(toolId);
       const angle = (tIdx / Math.max(uniqueToolIds.length, 1)) * Math.PI * 2 + 0.85;
-      const tProj = project3D(Math.cos(angle) * sharedNodeOrbitRadius, Math.cos(tIdx * 2.1) * (isMobile ? 32 : 50), Math.sin(angle) * sharedNodeOrbitRadius, cx, cy, fov);
+      const tProj = project3D(Math.cos(angle) * sharedNodeOrbitRadius, Math.cos(tIdx * 2.1) * (isMobile ? 28 : 46), Math.sin(angle) * sharedNodeOrbitRadius, cx, cy, fov);
       const nodeR = isMobile ? 10 : 13;
 
       getAgentsUsingTool(toolId).forEach((cAg) => {
@@ -788,9 +830,9 @@ function startNeuralCanvasLoop() {
       renderedSubNodesHitbox.push({ x: tProj.x, y: tProj.y, r: nodeR + 5, node: { ...meta, toolId } });
     });
 
-    // Orbes dos Agentes Especialistas (Design Minimalista)
+    // Orbes dos Agentes Especialistas (Com truncamento de texto anti-colisão)
     Array.from(agentPositionsMap.values()).forEach(({ ag, proj, color }) => {
-      const orbR = isMobile ? 19 : 24;
+      const orbR = isMobile ? 18 : 23;
       const isSelected = activeAgentForTools.value?.id === ag.id;
       const isHighlighted = highlightedAgentSlug.value === ag.slug;
 
@@ -816,17 +858,19 @@ function startNeuralCanvasLoop() {
       if ((ag.tools || []).length > 0) {
         ctx.fillStyle = '#0284c7';
         ctx.beginPath();
-        ctx.arc(proj.x + orbR * 0.72, proj.y - orbR * 0.72, isMobile ? 6.5 : 7.5, 0, Math.PI * 2);
+        ctx.arc(proj.x + orbR * 0.72, proj.y - orbR * 0.72, isMobile ? 6 : 7, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = '#ffffff';
-        ctx.font = `bold ${isMobile ? 8 : 9}px system-ui`;
+        ctx.font = `bold ${isMobile ? 7.5 : 8.5}px system-ui`;
         ctx.fillText(String(ag.tools.length), proj.x + orbR * 0.72, proj.y - orbR * 0.72);
       }
 
-      // Tipografia compacta e minimalista
-      ctx.font = `500 ${isMobile ? 9.5 : 11}px system-ui, -apple-system, sans-serif`;
+      // Rótulo compacto que não invade nós vizinhos
+      ctx.font = `500 ${isMobile ? 9 : 10.5}px system-ui, -apple-system, sans-serif`;
       ctx.fillStyle = '#cbd5e1';
-      ctx.fillText(ag.name || 'Agente', proj.x, proj.y + orbR + (isMobile ? 11 : 14));
+      const rawName = ag.name || 'Agente';
+      const cleanName = rawName.length > 16 ? rawName.slice(0, 14) + '…' : rawName;
+      ctx.fillText(cleanName, proj.x, proj.y + orbR + (isMobile ? 10 : 13));
       ctx.restore();
 
       renderedAgentsHitbox.push({ x: proj.x, y: proj.y, r: orbR + 6, agent: ag });
@@ -837,12 +881,12 @@ function startNeuralCanvasLoop() {
   animationFrameId = requestAnimationFrame(renderFrame);
 }
 
-// 7. Interações de Toque e Rato com Detecção do Núcleo
+// 7. Interações de Toque e Rato
 function handleStageTap(clientX: number, clientY: number) {
   const isMobile = (window.innerWidth || 360) < 768;
   const cx = (window.innerWidth || 360) * 0.5;
-  const cy = (window.innerHeight || 640) * (isMobile ? 0.46 : 0.5);
-  const coreHitRadius = (isMobile ? 54 : 80) * cameraZoom.value * 1.35;
+  const cy = (window.innerHeight || 640) * (isMobile ? 0.43 : 0.48);
+  const coreHitRadius = (isMobile ? 40 : 65) * cameraZoom.value * 1.35;
 
   // 1. Toque no Núcleo JARVIS Central
   if (Math.hypot(clientX - cx, clientY - cy) <= coreHitRadius) {
@@ -998,8 +1042,9 @@ onMounted(async () => {
   if ('speechSynthesis' in window) window.speechSynthesis.getVoices();
   if (isAuthenticated.value) await bootAuthenticatedUniverse();
 
-  // Inicia a escuta contínua de vigília após a primeira interação do usuário na página
-  const startVigilance = () => {
+  // Desbloqueia o motor de áudio no primeiro toque na tela
+  const startVigilance = async () => {
+    await ensureMicrophonePermission();
     if (!recognition) recognition = initSTT();
     try {
       recognition.start();
@@ -1020,6 +1065,21 @@ onUnmounted(() => { stopAllEngines(); });
   background: #020409; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif;
   overflow: hidden; user-select: none;
 }
+
+/* Proteção do topo para não colidir com o relógio e bateria do Android */
+.hud-top-safe-area {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  padding-top: max(env(safe-area-inset-top), 24px);
+  pointer-events: none;
+}
+.hud-top-safe-area > * {
+  pointer-events: auto;
+}
+
 .auth-overlay {
   position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
   padding: 16px; background: radial-gradient(circle at center, #09192c 0%, #020409 100%);
@@ -1030,10 +1090,10 @@ onUnmounted(() => { stopAllEngines(); });
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8); text-align: center; backdrop-filter: blur(12px);
 }
 .auth-core-ring {
-  width: 56px; height: 56px; margin: 0 auto 12px; border-radius: 50%;
+  width: 52px; height: 52px; margin: 0 auto 12px; border-radius: 50%;
   border: 2px dashed #38bdf8; display: flex; align-items: center; justify-content: center;
 }
-.auth-core-inner { width: 30px; height: 30px; border-radius: 50%; background: radial-gradient(circle, #38bdf8 0%, #0284c7 100%); box-shadow: 0 0 16px #38bdf8; }
+.auth-core-inner { width: 28px; height: 28px; border-radius: 50%; background: radial-gradient(circle, #38bdf8 0%, #0284c7 100%); box-shadow: 0 0 16px #38bdf8; }
 .auth-title { margin: 0; font-size: 16px; letter-spacing: 1.5px; color: #f8fafc; }
 .auth-subtitle { margin: 4px 0 16px; font-size: 11px; color: #94a3b8; }
 .auth-form { display: flex; flex-direction: column; gap: 12px; text-align: left; }
@@ -1045,34 +1105,63 @@ onUnmounted(() => { stopAllEngines(); });
 .canvas-stage { position: relative; width: 100%; height: 100%; touch-action: none; }
 canvas { display: block; width: 100%; height: 100%; }
 
-/* Indicador flutuante de voz enxuto */
-.hud-hint {
-  position: fixed; bottom: 62px; left: 12px; z-index: 45; background: rgba(15, 23, 42, 0.85);
-  border: 1px solid rgba(56, 189, 248, 0.25); padding: 4px 10px; border-radius: 999px;
-  font-size: 10px; color: #94a3b8; cursor: pointer; backdrop-filter: blur(8px);
+/* Indicador de Status Acoplado Acima da Barra de Comando */
+.hud-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(11, 18, 33, 0.9);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: #94a3b8;
+  margin-bottom: 6px;
+  cursor: pointer;
+  pointer-events: auto;
+  backdrop-filter: blur(8px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  max-width: 90%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #38bdf8;
+}
+.hud-status-badge.awake {
+  border-color: #f97316;
+  color: #fdba74;
+}
+.hud-status-badge.awake .status-dot {
+  background: #ea580c;
+  box-shadow: 0 0 8px #f97316;
 }
 
-/* BARRA DE COMANDO COMPACTA E MINIMALISTA */
+/* BARRA DE COMANDO COMPACTA */
 .command-dock-wrapper {
   position: fixed;
-  bottom: env(safe-area-inset-bottom, 12px);
+  bottom: env(safe-area-inset-bottom, 10px);
   left: 0;
   right: 0;
   z-index: 50;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   padding: 0 10px;
   pointer-events: none;
 }
 
 .command-dock {
   pointer-events: auto;
-  width: min(680px, 100%);
+  width: min(640px, 100%);
   display: flex;
   align-items: flex-end;
   gap: 6px;
-  background: rgba(11, 18, 33, 0.92);
+  background: rgba(11, 18, 33, 0.94);
   border: 1px solid rgba(56, 189, 248, 0.25);
   border-radius: 16px;
   padding: 6px 10px;
@@ -1092,8 +1181,8 @@ canvas { display: block; width: 100%; height: 100%; }
   background: rgba(30, 41, 59, 0.7);
   border: 1px solid rgba(51, 65, 85, 0.7);
   color: #f8fafc;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1102,11 +1191,6 @@ canvas { display: block; width: 100%; height: 100%; }
   cursor: pointer;
   transition: all 0.2s ease;
   flex-shrink: 0;
-}
-
-.dock-btn:hover {
-  border-color: #38bdf8;
-  background: #1e293b;
 }
 
 .dock-btn.active {
@@ -1138,7 +1222,7 @@ canvas { display: block; width: 100%; height: 100%; }
   font-family: inherit;
   line-height: 1.35;
   resize: none;
-  max-height: 100px;
+  max-height: 90px;
   min-height: 22px;
   padding: 4px 6px;
   box-sizing: border-box;
