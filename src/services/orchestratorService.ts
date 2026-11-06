@@ -410,7 +410,15 @@ export async function processWorkflowExecution(
 Identidade Autenticada: ${identityToken}
 URL Base do Servidor: ${dynamicServerBaseUrl}${visionSystemInstruction}
 
+--- CATÁLOGO DINÂMICO DE TOOLS / CONEXÕES DISPONÍVEIS ---
+${liveToolsSummary}
+
+REGRAS OBRIGATÓRIAS DE EXECUÇÃO:
+1. NUNCA escreva blocos de código JSON (como {"action": "invoke_ai_agent"}) na resposta de texto para o usuário.
+2. Sempre que precisar consultar cotações, APIs ou especialistas, acione obrigatoriamente a Tool Call nativa correspondente na lista de tools usando exatamente o Slug listado em AGENTES ESPECIALISTAS ATIVOS.
+
 --- AGENTES ESPECIALISTAS ATIVOS ---
+
 ${existingAgentsSummary}
 
 --- CATÁLOGO DINÂMICO DE TOOLS / CONEXÕES DISPONÍVEIS ---
