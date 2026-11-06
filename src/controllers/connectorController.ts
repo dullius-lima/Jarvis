@@ -1,6 +1,7 @@
 // src/controllers/connectorController.ts
 import { Request, Response } from 'express';
 import { pool } from '../config/database.js';
+import { executeExternalConnector } from '../services/integrationService.js';
 
 export const DEFAULT_CONNECTORS = [
   {
@@ -103,9 +104,47 @@ function sanitizeKey(rawKey: string): string {
     .replace(/^_+|_+$/g, '');
 }
 
-/**
- * Garante que a tabela external_connectors e as colunas necessárias existam no PostgreSQL
- */
+export async function testConnector(req: Request, res: Response) {
+  const startTime = Date.now();
+  try {
+    const { provider, provider_key, endpoint_url, action, params, auth_token, api_key } = req.body || {};
+    const targetProvider = String(provider || provider_key || '').toLowerCase().trim();
+
+    // Se for do ecossistema Google, não exige endpoint_url manual pois o backend usa OAuth2 interno
+    const isGoogle = targetProvider.includes('gmail') || targetProvider.includes('calendar') || targetProvider.includes('drive');
+
+    if (!isGoogle && !endpoint_url) {
+      return res.status(400).json({
+        success: false,
+        latencyMs: Date.now() - startTime,
+        error: 'Informe uma Endpoint URL para testar a conexão externa.'
+      });
+    }
+
+    const result = await executeExternalConnector({
+      providerKey: targetProvider,
+      action: action || (targetProvider.includes('gmail') ? 'read_inbox' : 'execute'),
+      payload: {
+        ...(params || {}),
+        endpoint: endpoint_url,
+        auth_token: auth_token || api_key
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      latencyMs: Date.now() - startTime,
+      data: result
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      latencyMs: Date.now() - startTime,
+      error: error.message || 'Falha ao testar conector.'
+    });
+  }
+}
+
 async function ensureConnectorsTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS external_connectors (
