@@ -423,6 +423,143 @@ export async function executeUniversalApiConnector(
   };
 }
 
+/**
+ * Motor Universal com Auto-Discovery para Home Assistant e Conectores REST/IoT
+ */
+export async function executeAutoDiscoveryAndAction(
+  connectorConfig: any,
+  userPrompt: string,
+  payload: Record<string, any> = {}
+) {
+  const endpointUrl = String(connectorConfig.endpoint_url || connectorConfig.url || '').trim();
+  const authToken = String(connectorConfig.auth_token || connectorConfig.api_key || connectorConfig.token || '').trim();
+  const promptLower = (userPrompt || '').toLowerCase();
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+  if (authToken) {
+    headers['Authorization'] = authToken.startsWith('Bearer ') ? authToken : `Bearer ${authToken}`;
+  }
+
+  // =========================================================================
+  // 1. HOME ASSISTANT (Auto-Discovery e Acionamento Sem Perguntar entity_id)
+  // =========================================================================
+  if (endpointUrl.includes(':8123/api') || endpointUrl.includes('/api/services') || endpointUrl.includes('/api/states')) {
+    const baseUrl = endpointUrl.split('/api')[0];
+
+    // Consulta os estados atuais de todos os dispositivos
+    let relevantDevices: any[] = [];
+    try {
+      const statesRes = await fetch(`${baseUrl}/api/states`, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(10000)
+      });
+      const allStates: any[] = await statesRes.json().catch(() => []);
+
+      if (Array.isArray(allStates)) {
+        relevantDevices = allStates
+          .filter((st) =>
+            /^(light|switch|climate|fan|cover|media_player|sensor|binary_sensor|input_boolean)\./.test(
+              st.entity_id || ''
+            )
+          )
+          .map((st) => ({
+            entity_id: st.entity_id,
+            name: st.attributes?.friendly_name || st.entity_id,
+            state: st.state,
+            temperature: st.attributes?.current_temperature ?? st.attributes?.temperature ?? undefined
+          }));
+      }
+    } catch (err: any) {
+      console.warn('⚠️ [HomeAssistant Discovery] Falha ao consultar /api/states:', err.message);
+    }
+
+    // Se a chamada for especificamente de leitura de sensores e não for comando de ligar/desligar
+    const isAction = /(ligar|ligue|acender|acenda|desligar|desligue|apagar|apague|fechar|feche|abrir|abra|iniciar)/i.test(promptLower);
+    if (endpointUrl.endsWith('/api/states') && !isAction) {
+      return {
+        status: 'success',
+        mode: 'sensor_reading',
+        total_devices: relevantDevices.length,
+        devices: relevantDevices
+      };
+    }
+
+    // Define a ação (turn_off ou turn_on)
+    const isTurnOff = /(desligar|desligue|apagar|apague|fechar|feche|off)/i.test(promptLower);
+    const serviceAction = isTurnOff ? 'turn_off' : 'turn_on';
+
+    // Auto-Discovery: localiza o entity_id pelo que o usuário falou
+    let targetEntity = payload.entity_id;
+
+    if (!targetEntity && relevantDevices.length > 0) {
+      const wantsAC = /(ar-condicionado|ar condicionado|clima|split|yarin|ac\b)/i.test(promptLower);
+      const wantsLight = /(luz|l[aâ]mpada|ilumina[cç][aã]o|led|spot|quarto|sala|cozinha|banheiro)/i.test(promptLower);
+
+      const matched = relevantDevices.find((dev) => {
+        const idAndName = `${dev.entity_id} ${dev.name}`.toLowerCase();
+        if (wantsAC && (idAndName.includes('climate.') || idAndName.includes('ar') || idAndName.includes('yarin') || idAndName.includes('ac'))) {
+          return true;
+        }
+        if (wantsLight && (idAndName.includes('light.') || idAndName.includes('switch.') || idAndName.includes('luz') || idAndName.includes('lampada'))) {
+          return true;
+        }
+        return false;
+      });
+
+      targetEntity = matched?.entity_id;
+    }
+
+    if (!targetEntity) {
+      return {
+        status: 'device_not_found',
+        message: 'Dispositivo não encontrado automaticamente. Entidades disponíveis:',
+        devices: relevantDevices
+      };
+    }
+
+    // Dispara POST no serviço correspondente do Home Assistant
+    const actionUrl = `${baseUrl}/api/services/homeassistant/${serviceAction}`;
+    const execRes = await fetch(actionUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ entity_id: targetEntity }),
+      signal: AbortSignal.timeout(10000)
+    });
+
+    const execData = await execRes.json().catch(() => ({}));
+    return {
+      status: 'executed',
+      action: `homeassistant.${serviceAction}`,
+      entity_id: targetEntity,
+      http_status: execRes.status,
+      result: execData
+    };
+  }
+
+  // =========================================================================
+  // 2. QUALQUER OUTRA PLATAFORMA (Webhooks, Tuya, Node-RED, REST genérica)
+  // =========================================================================
+  const method = (connectorConfig.http_method || 'POST').toUpperCase();
+  const finalUrl = endpointUrl
+    .replace(/\{\{query\}\}/g, encodeURIComponent(userPrompt))
+    .replace(/\{\{BASE_URL\}\}/g, 'http://localhost:3333');
+
+  const res = await fetch(finalUrl, {
+    method,
+    headers,
+    body: method !== 'GET' ? JSON.stringify(payload) : undefined,
+    signal: AbortSignal.timeout(15000)
+  });
+
+  return await res.json().catch(async () => ({ status: res.status, text: await res.text() }));
+}
+
+/**
+ * Executor Central de Ferramentas Vinculadas (executeBoundTool)
+ */
 export async function executeBoundTool(
   toolKey: string,
   args: Record<string, any>,
@@ -433,6 +570,7 @@ export async function executeBoundTool(
   const cleanKey = sanitizeToolName(toolKey);
   const queryValue = String(args?.query || args?.task_details || args?.input || userPrompt).trim();
 
+  // 1. Gravação em Banco de Dados
   if (cleanKey === 'save_to_database' || cleanKey === 'dynamicdatabasetool') {
     return await saveToDatabase({
       collectionName: sanitizeToolName(args?.collectionName || 'jarvis_records'),
@@ -444,6 +582,7 @@ export async function executeBoundTool(
     });
   }
 
+  // 2. RAG Vetorial
   if (
     cleanKey === 'vector_rag' ||
     cleanKey === 'rag_search' ||
@@ -453,6 +592,7 @@ export async function executeBoundTool(
     return { matches: docs };
   }
 
+  // 3. Comandos SSH
   if (
     cleanKey === 'execute_ssh_command' ||
     cleanKey === 'ssh_terminal' ||
@@ -464,52 +604,62 @@ export async function executeBoundTool(
     return await executeSshCommand(args?.command || queryValue || 'uptime');
   }
 
-  // Execução via Motor Universal caso seja conector de banco ou API
-  const customConn = connectorsMap.get(cleanKey);
-  if (customConn || cleanKey.startsWith('brapi')) {
-    return await executeUniversalApiConnector(
-      customConn || cleanKey,
-      args,
+  // 4. CONECTORES EXTERNOS, HOME ASSISTANT E APIS DINÂMICAS
+  const connector = connectorsMap?.get(cleanKey);
+
+  if (
+    connector ||
+    cleanKey.includes('home_assistant') ||
+    cleanKey.includes('detector') ||
+    cleanKey.includes('sensor') ||
+    cleanKey.includes('dispositivo')
+  ) {
+    const targetEndpoint =
+      connector?.endpoint_url ||
+      connector?.url ||
+      args?.endpoint ||
+      args?.endpoint_url ||
+      (cleanKey.includes('detector')
+        ? 'http://163.176.111.18:8123/api/states'
+        : 'http://163.176.111.18:8123/api/services/homeassistant/toggle');
+
+    const targetToken =
+      connector?.auth_token ||
+      connector?.api_key ||
+      connector?.token ||
+      args?.auth_token ||
+      '';
+
+    const targetMethod = connector?.http_method || connector?.method || args?.http_method || 'POST';
+
+    return await executeAutoDiscoveryAndAction(
+      {
+        endpoint_url: targetEndpoint,
+        auth_token: targetToken,
+        http_method: targetMethod
+      },
       userPrompt,
-      serverBaseUrl
+      { query: queryValue, ...args }
     );
   }
 
-  const cfg = customConn?.config || {};
-  const isNativeSpecialized =
-    cleanKey.includes('home_assistant') ||
-    cleanKey.includes('hass') ||
-    cleanKey.includes('gmail') ||
-    cleanKey.includes('outlook') ||
-    cleanKey.includes('telegram') ||
-    cleanKey.includes('google_sheets');
-
-  if (isNativeSpecialized) {
-    return await executeProtocolOrIntegration(cleanKey, {
-      protocol: cleanKey as SupportedProtocolOrPlatform,
-      endpoint: cfg.endpoint_url || customConn?.endpoint_url || args?.endpoint,
-      method: cfg.http_method || customConn?.http_method || args?.method,
-      body: {
-        query: queryValue,
-        prompt: userPrompt,
-        auth_token: cfg.auth_token || cfg.api_key || customConn?.auth_token,
-        ...args
+  // 5. Fallback para endpoints HTTP universais
+  if (args?.endpoint && String(args.endpoint).startsWith('http')) {
+    return await executeAutoDiscoveryAndAction(
+      {
+        endpoint_url: args.endpoint,
+        auth_token: args.token || args.auth_token,
+        http_method: args.method || 'POST'
       },
-      prompt: userPrompt
-    });
+      userPrompt,
+      args
+    );
   }
 
-  if ((cfg.tool_type === 'code' || customConn?.category === 'Code Tool') && cfg.code_snippet) {
-    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    const fn = new AsyncFunction('query', 'args', 'env', cfg.code_snippet);
-    return await fn(queryValue, args, { BASE_URL: serverBaseUrl });
-  }
-
-  if (cfg.tool_type === 'ssh') {
-    return await executeSshCommand(cfg.endpoint_url || queryValue || 'uptime');
-  }
-
-  return await executeUniversalApiConnector(cleanKey, args, userPrompt, serverBaseUrl);
+  return {
+    status: 'unsupported_tool',
+    message: `A ferramenta [${toolKey}] não possui rotina configurada no executeBoundTool.`
+  };
 }
 
 export async function executeSpecialistPipeline(
