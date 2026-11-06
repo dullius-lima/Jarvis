@@ -163,6 +163,9 @@ import AgentToolsPopover from './components/modals/AgentToolsPopover.vue';
 import SubNodeInspector from './components/modals/SubNodeInspector.vue';
 import MemoryInspector from './components/modals/MemoryInspector.vue';
 
+import { ForegroundService } from '@capawesome-team/capacitor-android-foreground-service';
+import { Capacitor } from '@capacitor/core';
+
 // 1. Ponte para o MediaPreview conectar o elemento de vídeo ao capturador de tela/webcam
 const mediaPreviewComponent = ref<any>(null);
 watchEffect(() => {
@@ -610,6 +613,23 @@ function stopAllEngines() {
   stopAllMedia();
   stopAllAudio();
   if (refreshIntervalId) clearInterval(refreshIntervalId);
+}
+
+async function enableBackgroundMode() {
+  if (Capacitor.getPlatform() !== 'android') return;
+
+  try {
+    // Cria notificação persistente obrigatória para o Android não matar o processo
+    await ForegroundService.startForegroundService({
+      id: 1001,
+      title: 'JARVIS Core Ativo',
+      body: 'Conexão neural e automações operando em segundo plano.',
+      smallIcon: 'ic_launcher'
+    });
+    console.log('🟢 Foreground Service ativado com sucesso.');
+  } catch (error) {
+    console.warn('Falha ao iniciar Foreground Service:', error);
+  }
 }
 
 async function bootAuthenticatedUniverse() {
