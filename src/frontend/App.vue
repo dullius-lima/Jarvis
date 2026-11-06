@@ -62,8 +62,8 @@
       >
         <canvas ref="neuralCanvas"></canvas>
 
-        <!-- Estado de Voz Flutuante -->
-        <div class="hud-hint" @click="manualRestartWakeWord" title="Clique para alternar vigília ou microfone">
+        <!-- Indicador de Status de Voz Minimalista -->
+        <div class="hud-hint" @click="manualRestartWakeWord" title="Clique para alternar vigília">
           <span>{{ voiceStatusText }}</span>
         </div>
 
@@ -123,7 +123,7 @@
         </ResponseBubble>
       </div>
 
-      <!-- BARRA DE COMANDO: CHAT MULTILINHA E CONTROLOS -->
+      <!-- BARRA DE COMANDO MINIMALISTA: CHAT MULTILINHA E CONTROLOS -->
       <footer class="command-dock-wrapper">
         <div class="command-dock">
           <div class="dock-controls">
@@ -170,7 +170,7 @@
               @keydown.shift.enter.stop
               @input="adjustTextareaHeight"
               rows="1"
-              placeholder="Instrução para o JARVIS... (Shift + Enter quebra linha)"
+              placeholder="Instrução para o JARVIS..."
               class="dock-textarea"
               :disabled="isProcessing"
             ></textarea>
@@ -184,7 +184,7 @@
             :disabled="!promptText.trim() || isProcessing"
             title="Transmitir comando"
           >
-            {{ isProcessing ? '⚡' : 'Transmitir' }}
+            {{ isProcessing ? '⚡' : 'Enviar' }}
           </button>
         </div>
       </footer>
@@ -269,12 +269,12 @@ function adjustTextareaHeight() {
     const el = chatInputRef.value;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 100)}px`;
   });
 }
 
 // ============================================================================
-// 5. MOTOR DE VOZ INTEGRADO: 2.2s TOLERÂNCIA A PAUSAS, ZERO DELAY E TTS
+// 5. MOTOR DE VOZ INTEGRADO: WAKE-WORD AMPLIFICADA, CLIQUE NO NÚCLEO E ZERO DELAY
 // ============================================================================
 const isJarvisAwake = ref<boolean>(false);
 const isJarvisSpeaking = ref<boolean>(false);
@@ -289,7 +289,7 @@ let lastChimeTimestamp = 0;
 
 function playJarvisChime(type: 'wake' | 'send' = 'wake') {
   const now = Date.now();
-  if (now - lastChimeTimestamp < 2500 && type === 'wake') return;
+  if (now - lastChimeTimestamp < 2000 && type === 'wake') return;
   lastChimeTimestamp = now;
 
   try {
@@ -314,7 +314,7 @@ function playJarvisChime(type: 'wake' | 'send' = 'wake') {
     gain.connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + 0.2);
-    setTimeout(() => ctx.close().catch(() => {}), 300);
+    setTimeout(() => ctx.close().catch(() => {}), 280);
   } catch {}
 }
 
@@ -323,7 +323,7 @@ function initSTT() {
     (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
   if (!SpeechRecognition) {
-    voiceStatusText.value = '⚠️ Web Speech API indisponível';
+    voiceStatusText.value = '⚠️ Web Speech indisponível';
     return null;
   }
 
@@ -336,8 +336,8 @@ function initSTT() {
   rec.onstart = () => {
     isRecognitionActive.value = true;
     voiceStatusText.value = isJarvisAwake.value
-      ? '🎙️ Ouvindo... Pode respirar e falar com calma'
-      : '🟢 Vigília ativa: diga "Jarvis"...';
+      ? '🎙️ Ouvindo... Pode falar pausadamente'
+      : '🟢 Vigília: diga "Jarvis" ou clique no núcleo';
   };
 
   rec.onresult = (event: any) => {
@@ -358,28 +358,37 @@ function initSTT() {
     const liveText = (speechAccumulatedBuffer + ' ' + currentInterim).trim();
     const lower = liveText.toLowerCase();
 
-    // Deteção Wake Word contínua
-    if (!isJarvisAwake.value && (lower.includes('jarvis') || lower.includes('jávis'))) {
-      const afterWake = liveText.split(/jarvis|jávis/i).pop()?.replace(/^[,.\s!?-]+/, '').trim() || '';
+    // Padrão ampliado para captar "jarvis", "oi jarvis", "olá jarvis", "jávis", "ei jarvis"
+    const wakeWordPattern = /(?:oi|ol[aá]|ei|ok|e a[ií]|fala|al[oô])?\s*(jarvis|j[aá]vis|jarves|iarvis|jarbas|dj[aá]rvis)/i;
+
+    if (!isJarvisAwake.value && wakeWordPattern.test(lower)) {
       isJarvisAwake.value = true;
       playJarvisChime('wake');
 
+      // Extrai qualquer instrução dita logo em sequência
+      const parts = liveText.split(wakeWordPattern);
+      const afterWake = parts.pop()?.replace(/^[,.\s!?-]+/, '').trim() || '';
+
       if (afterWake.length > 2) {
         speechAccumulatedBuffer = afterWake;
+        promptText.value = afterWake;
+        adjustTextareaHeight();
+        voiceStatusText.value = `🎙️ Captando: "${afterWake}"`;
       } else {
         speechAccumulatedBuffer = '';
-        voiceStatusText.value = '🎙️ Sim, senhor? Estou a ouvir...';
+        promptText.value = '';
+        voiceStatusText.value = '🎙️ Sim, senhor? Estou ouvindo...';
         return;
       }
     }
 
     if (isJarvisAwake.value && liveText.length > 1) {
-      const cleaned = liveText.replace(/^(jarvis|jávis)[,.\s!?-]*/i, '').trim();
+      const cleaned = liveText.replace(wakeWordPattern, '').replace(/^[,.\s!?-]+/, '').trim();
       promptText.value = cleaned;
       voiceStatusText.value = `🎙️ A captar: "${cleaned}"`;
       adjustTextareaHeight();
 
-      // Tolerância de respiração: aguarda 2200ms de silêncio contínuo antes do envio
+      // Tolerância de respiração (2200ms de silêncio contínuo antes de enviar)
       speechSilenceTimer = setTimeout(() => {
         const finalPrompt = promptText.value.trim();
         if (finalPrompt.length > 1 && !isProcessing.value) {
@@ -404,8 +413,13 @@ function initSTT() {
 
   rec.onend = () => {
     isRecognitionActive.value = false;
-    if (isJarvisAwake.value && !isJarvisSpeaking.value) {
-      try { rec.start(); } catch {}
+    // Vigília contínua resiliente: se não estiver mutado nem falando, religa o microfone
+    if (!isVoiceMuted.value && !isJarvisSpeaking.value) {
+      setTimeout(() => {
+        try {
+          rec.start();
+        } catch {}
+      }, 300);
     } else if (!isJarvisAwake.value) {
       voiceStatusText.value = '🎙️ Microfone em repouso';
     }
@@ -414,10 +428,15 @@ function initSTT() {
   return rec;
 }
 
-function toggleMicrophone() {
-  if (isRecognitionActive.value || isJarvisAwake.value) {
+// Ação de Clique Direto no Núcleo do JARVIS
+function onJarvisCoreClick() {
+  selectedSubNode.value = null;
+  selectedMemoryDot.value = null;
+  activeAgentForTools.value = null;
+
+  if (isJarvisAwake.value) {
     stopMicrophoneSession();
-    voiceStatusText.value = '🎙️ Microfone desligado';
+    voiceStatusText.value = '🎙️ Microfone em repouso';
     return;
   }
 
@@ -426,6 +445,7 @@ function toggleMicrophone() {
   adjustTextareaHeight();
   isJarvisAwake.value = true;
   playJarvisChime('wake');
+  voiceStatusText.value = '🎙️ Sim, senhor? Estou ouvindo...';
 
   if (!recognition) recognition = initSTT();
   try {
@@ -433,6 +453,10 @@ function toggleMicrophone() {
   } catch {
     try { recognition.stop(); recognition.start(); } catch {}
   }
+}
+
+function toggleMicrophone() {
+  onJarvisCoreClick();
 }
 
 function stopMicrophoneSession() {
@@ -447,7 +471,7 @@ function stopMicrophoneSession() {
 
 function manualRestartWakeWord() {
   stopMicrophoneSession();
-  toggleMicrophone();
+  onJarvisCoreClick();
 }
 
 function speakJarvisResponse(rawText: string, onDone?: () => void) {
@@ -568,41 +592,76 @@ function startNeuralCanvasLoop() {
     ctx.globalAlpha = 1.0;
     ctx.clearRect(0, 0, width, height);
 
-    const bgGrad = ctx.createRadialGradient(width * 0.5, height * 0.48, 10, width * 0.5, height * 0.48, Math.max(width, height) * 0.75);
-    bgGrad.addColorStop(0, '#09192c');
-    bgGrad.addColorStop(0.55, '#050b16');
+    // Fundo espacial profundo minimalista
+    const bgGrad = ctx.createRadialGradient(width * 0.5, height * 0.48, 8, width * 0.5, height * 0.48, Math.max(width, height) * 0.72);
+    bgGrad.addColorStop(0, '#091524');
+    bgGrad.addColorStop(0.6, '#040813');
     bgGrad.addColorStop(1, '#020409');
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, width, height);
 
-    time += isJarvisSpeaking.value || isProcessing.value ? 0.032 : 0.012;
-    if (!isDragging) rotationY.value += 0.0028;
+    time += isJarvisSpeaking.value || isProcessing.value ? 0.03 : 0.012;
+    if (!isDragging) rotationY.value += 0.0024;
 
     const isMobile = width < 768;
     const cx = width * 0.5;
-    const cy = height * (isMobile ? 0.48 : 0.5);
+    const cy = height * (isMobile ? 0.46 : 0.5);
     const fov = isMobile ? 520 : 680;
-    const maxSafeRadius = Math.max(95, Math.min(width * 0.5 - (isMobile ? 48 : 80), height * 0.5 - (isMobile ? 115 : 130)));
-    const coreRadius = Math.min(maxSafeRadius * 0.36, isMobile ? 56 : 82);
-    const agentOrbitRadius = Math.min(maxSafeRadius * 0.88, isMobile ? 132 : 245);
-    const sharedNodeOrbitRadius = Math.min(maxSafeRadius * 1.15, isMobile ? 162 : 330);
+    const maxSafeRadius = Math.max(90, Math.min(width * 0.5 - (isMobile ? 40 : 70), height * 0.5 - (isMobile ? 110 : 125)));
+    const coreRadius = Math.min(maxSafeRadius * 0.38, isMobile ? 54 : 80);
+    const agentOrbitRadius = Math.min(maxSafeRadius * 0.88, isMobile ? 130 : 240);
+    const sharedNodeOrbitRadius = Math.min(maxSafeRadius * 1.15, isMobile ? 160 : 320);
 
-    // Anel orbital central
+    // ========================================================================
+    // DESTAQUE DO NÚCLEO JARVIS (AURA + REATOR BIOLUMINESCENTE 3D)
+    // ========================================================================
+    const corePulse = isJarvisAwake.value
+      ? 1 + Math.sin(time * 6) * 0.08
+      : isJarvisSpeaking.value || isProcessing.value
+      ? 1 + Math.sin(time * 5) * 0.06
+      : 1 + Math.sin(time * 2) * 0.02;
+
+    const currentCoreR = coreRadius * corePulse * cameraZoom.value;
+
+    // 1. Halo / Aura Volumétrica
     ctx.save();
-    ctx.globalAlpha = 0.55;
-    ctx.strokeStyle = '#0ea5e9';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([6, 8]);
+    const coreGlow = ctx.createRadialGradient(cx, cy, 2, cx, cy, currentCoreR * 1.75);
+    if (isJarvisAwake.value) {
+      coreGlow.addColorStop(0, 'rgba(56, 189, 248, 0.4)');
+      coreGlow.addColorStop(0.5, 'rgba(14, 165, 233, 0.18)');
+      coreGlow.addColorStop(1, 'rgba(2, 6, 23, 0)');
+    } else {
+      coreGlow.addColorStop(0, 'rgba(14, 165, 233, 0.22)');
+      coreGlow.addColorStop(0.6, 'rgba(2, 132, 199, 0.08)');
+      coreGlow.addColorStop(1, 'rgba(2, 6, 23, 0)');
+    }
+    ctx.fillStyle = coreGlow;
     ctx.beginPath();
-    ctx.arc(cx, cy, coreRadius * 1.32 * cameraZoom.value, time * 0.4, time * 0.4 + Math.PI * 2);
+    ctx.arc(cx, cy, currentCoreR * 1.75, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // 2. Anéis Concêntricos Segmentados tipo Arc-Reactor
+    ctx.save();
+    ctx.strokeStyle = isJarvisAwake.value ? '#38bdf8' : '#0ea5e9';
+    ctx.lineWidth = isJarvisAwake.value ? 2 : 1.2;
+    ctx.globalAlpha = isJarvisAwake.value ? 0.9 : 0.65;
+    ctx.setLineDash([5, 6]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, currentCoreR * 1.25, time * 0.4, time * 0.4 + Math.PI * 2);
+    ctx.stroke();
+
+    ctx.setLineDash([18, 14, 6, 14]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, currentCoreR * 1.1, -time * 0.35, -time * 0.35 + Math.PI * 1.6);
     ctx.stroke();
     ctx.restore();
 
-    // Wireframe 3D Central
-    const effectiveCoreR = coreRadius * (1 + (isJarvisSpeaking.value || isProcessing.value ? Math.sin(time * 5) * 0.07 : Math.sin(time * 2) * 0.02));
+    // 3. Esfera Geodésica 3D (Wireframe Interno)
+    const effectiveCoreR = coreRadius * corePulse;
     ctx.save();
-    ctx.strokeStyle = isJarvisSpeaking.value ? '#38bdf8' : '#22d3ee';
-    ctx.lineWidth = 1.1;
+    ctx.strokeStyle = isJarvisAwake.value ? '#38bdf8' : isJarvisSpeaking.value ? '#22d3ee' : '#0284c7';
+    ctx.lineWidth = 1.0;
     for (let i = 1; i < 7; i++) {
       const theta = (i * Math.PI) / 7;
       ctx.beginPath();
@@ -611,12 +670,34 @@ function startNeuralCanvasLoop() {
         const p = project3D(effectiveCoreR * Math.sin(theta) * Math.cos(phi), effectiveCoreR * Math.cos(theta), effectiveCoreR * Math.sin(theta) * Math.sin(phi), cx, cy, fov);
         if (j === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
       }
-      ctx.globalAlpha = 0.42;
+      ctx.globalAlpha = isJarvisAwake.value ? 0.6 : 0.35;
       ctx.stroke();
     }
     ctx.restore();
 
-    // Orbes de Memória
+    // 4. Núcleo Denso Central
+    ctx.save();
+    const innerGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, currentCoreR * 0.45);
+    innerGrad.addColorStop(0, isJarvisAwake.value ? '#ffffff' : '#bae6fd');
+    innerGrad.addColorStop(0.35, isJarvisAwake.value ? '#38bdf8' : '#0284c7');
+    innerGrad.addColorStop(1, 'rgba(15, 23, 42, 0.9)');
+    ctx.fillStyle = innerGrad;
+    ctx.shadowColor = isJarvisAwake.value ? '#38bdf8' : '#0ea5e9';
+    ctx.shadowBlur = isJarvisAwake.value ? 24 : 12;
+    ctx.beginPath();
+    ctx.arc(cx, cy, currentCoreR * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Rótulo Minimalista do Núcleo
+    ctx.font = '600 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = isJarvisAwake.value ? '#38bdf8' : '#64748b';
+    ctx.fillText(isJarvisAwake.value ? 'JARVIS ● ATIVO' : 'JARVIS CORE', cx, cy + currentCoreR * 1.4);
+    ctx.restore();
+
+    // Orbes de Memória (Bolinhas Azuis)
     drawMemoryOrbsOnCanvas(ctx, cx, cy, rotationY.value);
 
     // Mapeamento e desenho de agentes e conectores
@@ -627,7 +708,7 @@ function startNeuralCanvasLoop() {
     const agentPositionsMap = new Map<any, { ag: any; proj: { x: number; y: number; scale: number }; color: string }>();
     dynamicAgents.value.forEach((ag, idx) => {
       const angle = (idx / Math.max(dynamicAgents.value.length, 1)) * Math.PI * 2 + 0.3;
-      const rawProj = project3D(Math.cos(angle) * agentOrbitRadius, Math.sin(idx * 1.7 + time * 0.5) * (isMobile ? 28 : 42), Math.sin(angle) * agentOrbitRadius, cx, cy, fov);
+      const rawProj = project3D(Math.cos(angle) * agentOrbitRadius, Math.sin(idx * 1.7 + time * 0.5) * (isMobile ? 26 : 38), Math.sin(angle) * agentOrbitRadius, cx, cy, fov);
       const color = ag.color || AGENT_PALETTE[idx % AGENT_PALETTE.length];
       agentPositionsMap.set(ag.id, { ag, proj: { x: rawProj.x, y: rawProj.y, scale: rawProj.scale }, color });
     });
@@ -636,51 +717,51 @@ function startNeuralCanvasLoop() {
     Array.from(agentPositionsMap.values()).forEach(({ ag, proj: agProj, color }, index) => {
       const isSelected = activeAgentForTools.value?.id === ag.id;
       ctx.save();
-      ctx.globalAlpha = isSelected ? 0.95 : 0.55;
+      ctx.globalAlpha = isSelected ? 0.9 : 0.45;
       ctx.strokeStyle = color;
-      ctx.lineWidth = isSelected ? 2.4 : 1.5;
-      ctx.setLineDash([4, 6]);
+      ctx.lineWidth = isSelected ? 2.0 : 1.2;
+      ctx.setLineDash([3, 5]);
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       const ctrlX = (cx + agProj.x) * 0.5;
-      const ctrlY = (cy + agProj.y) * 0.5 - 18;
+      const ctrlY = (cy + agProj.y) * 0.5 - 16;
       ctx.quadraticCurveTo(ctrlX, ctrlY, agProj.x, agProj.y);
       ctx.stroke();
       ctx.restore();
 
       const agentMemories = memoryDots.value.filter((m) => m.agentId === ag.id || m.agentName === ag.name);
-      for (let d = 0; d < Math.min(Math.max(agentMemories.length, 2), 5); d++) {
-        const t = (time * 0.22 + d * 0.2 + index * 0.17) % 1;
+      for (let d = 0; d < Math.min(Math.max(agentMemories.length, 2), 4); d++) {
+        const t = (time * 0.2 + d * 0.2 + index * 0.17) % 1;
         const invT = 1 - t;
         const mx = invT * invT * cx + 2 * invT * t * ctrlX + t * t * agProj.x;
         const my = invT * invT * cy + 2 * invT * t * ctrlY + t * t * agProj.y;
         ctx.save();
-        ctx.globalAlpha = 0.9;
+        ctx.globalAlpha = 0.85;
         ctx.fillStyle = color;
         ctx.beginPath();
-        ctx.arc(mx, my, isMobile ? 3 : 3.8, 0, Math.PI * 2);
+        ctx.arc(mx, my, isMobile ? 2.5 : 3.2, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
-        if (agentMemories[d]) renderedMemoriesHitbox.push({ x: mx, y: my, r: 10, mem: agentMemories[d] });
+        if (agentMemories[d]) renderedMemoriesHitbox.push({ x: mx, y: my, r: 8, mem: agentMemories[d] });
       }
     });
 
-    // Nós de Conectores Externos
+    // Conectores Externos (Nós Fixos)
     const uniqueToolIds = Array.from(new Set(dynamicAgents.value.flatMap((ag) => ag.tools || []).map((t: string) => String(t).toLowerCase())));
     uniqueToolIds.forEach((toolId, tIdx) => {
       const meta = getConnectionMeta(toolId);
       const angle = (tIdx / Math.max(uniqueToolIds.length, 1)) * Math.PI * 2 + 0.85;
-      const tProj = project3D(Math.cos(angle) * sharedNodeOrbitRadius, Math.cos(tIdx * 2.1) * (isMobile ? 35 : 55), Math.sin(angle) * sharedNodeOrbitRadius, cx, cy, fov);
-      const nodeR = isMobile ? 12 : 15;
+      const tProj = project3D(Math.cos(angle) * sharedNodeOrbitRadius, Math.cos(tIdx * 2.1) * (isMobile ? 32 : 50), Math.sin(angle) * sharedNodeOrbitRadius, cx, cy, fov);
+      const nodeR = isMobile ? 10 : 13;
 
       getAgentsUsingTool(toolId).forEach((cAg) => {
         const agEntry = agentPositionsMap.get(cAg.id);
         if (agEntry) {
           ctx.save();
-          ctx.globalAlpha = 0.45;
+          ctx.globalAlpha = 0.35;
           ctx.strokeStyle = agEntry.color;
-          ctx.lineWidth = 1.2;
-          ctx.setLineDash([3, 4]);
+          ctx.lineWidth = 1.0;
+          ctx.setLineDash([2, 4]);
           ctx.beginPath();
           ctx.moveTo(agEntry.proj.x, agEntry.proj.y);
           ctx.lineTo(tProj.x, tProj.y);
@@ -690,35 +771,35 @@ function startNeuralCanvasLoop() {
       });
 
       ctx.save();
-      ctx.fillStyle = '#0f172a';
+      ctx.fillStyle = '#0b1329';
       ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1.2;
       ctx.beginPath();
       ctx.arc(tProj.x, tProj.y, nodeR, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
-      ctx.font = `${isMobile ? 11 : 13}px system-ui`;
+      ctx.font = `${isMobile ? 10 : 12}px system-ui`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#f8fafc';
       ctx.fillText(meta.icon || '🔌', tProj.x, tProj.y);
       ctx.restore();
 
-      renderedSubNodesHitbox.push({ x: tProj.x, y: tProj.y, r: nodeR + 6, node: { ...meta, toolId } });
+      renderedSubNodesHitbox.push({ x: tProj.x, y: tProj.y, r: nodeR + 5, node: { ...meta, toolId } });
     });
 
-    // Orbes dos Agentes
+    // Orbes dos Agentes Especialistas (Design Minimalista)
     Array.from(agentPositionsMap.values()).forEach(({ ag, proj, color }) => {
-      const orbR = isMobile ? 22 : 28;
+      const orbR = isMobile ? 19 : 24;
       const isSelected = activeAgentForTools.value?.id === ag.id;
       const isHighlighted = highlightedAgentSlug.value === ag.slug;
 
       ctx.save();
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
       ctx.strokeStyle = isHighlighted ? highlightedStatusColor.value : color;
-      ctx.lineWidth = isHighlighted || isSelected ? 3 : 2;
+      ctx.lineWidth = isHighlighted || isSelected ? 2.5 : 1.5;
       ctx.shadowColor = isHighlighted ? highlightedStatusColor.value : color;
-      ctx.shadowBlur = isHighlighted ? 20 : isSelected ? 16 : 8;
+      ctx.shadowBlur = isHighlighted ? 16 : isSelected ? 12 : 6;
 
       ctx.beginPath();
       ctx.arc(proj.x, proj.y, orbR, 0, Math.PI * 2);
@@ -726,7 +807,7 @@ function startNeuralCanvasLoop() {
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      ctx.font = `${isMobile ? 16 : 20}px system-ui`;
+      ctx.font = `${isMobile ? 14 : 17}px system-ui`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#ffffff';
@@ -735,19 +816,20 @@ function startNeuralCanvasLoop() {
       if ((ag.tools || []).length > 0) {
         ctx.fillStyle = '#0284c7';
         ctx.beginPath();
-        ctx.arc(proj.x + orbR * 0.72, proj.y - orbR * 0.72, isMobile ? 8 : 9, 0, Math.PI * 2);
+        ctx.arc(proj.x + orbR * 0.72, proj.y - orbR * 0.72, isMobile ? 6.5 : 7.5, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = '#ffffff';
-        ctx.font = `bold ${isMobile ? 9 : 10}px system-ui`;
+        ctx.font = `bold ${isMobile ? 8 : 9}px system-ui`;
         ctx.fillText(String(ag.tools.length), proj.x + orbR * 0.72, proj.y - orbR * 0.72);
       }
 
-      ctx.font = `600 ${isMobile ? 11 : 12.5}px system-ui, sans-serif`;
-      ctx.fillStyle = '#f1f5f9';
-      ctx.fillText(ag.name || 'Agente', proj.x, proj.y + orbR + (isMobile ? 13 : 16));
+      // Tipografia compacta e minimalista
+      ctx.font = `500 ${isMobile ? 9.5 : 11}px system-ui, -apple-system, sans-serif`;
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText(ag.name || 'Agente', proj.x, proj.y + orbR + (isMobile ? 11 : 14));
       ctx.restore();
 
-      renderedAgentsHitbox.push({ x: proj.x, y: proj.y, r: orbR + 8, agent: ag });
+      renderedAgentsHitbox.push({ x: proj.x, y: proj.y, r: orbR + 6, agent: ag });
     });
 
     animationFrameId = requestAnimationFrame(renderFrame);
@@ -755,8 +837,20 @@ function startNeuralCanvasLoop() {
   animationFrameId = requestAnimationFrame(renderFrame);
 }
 
-// 7. Interações de Toque e Rato
+// 7. Interações de Toque e Rato com Detecção do Núcleo
 function handleStageTap(clientX: number, clientY: number) {
+  const isMobile = (window.innerWidth || 360) < 768;
+  const cx = (window.innerWidth || 360) * 0.5;
+  const cy = (window.innerHeight || 640) * (isMobile ? 0.46 : 0.5);
+  const coreHitRadius = (isMobile ? 54 : 80) * cameraZoom.value * 1.35;
+
+  // 1. Toque no Núcleo JARVIS Central
+  if (Math.hypot(clientX - cx, clientY - cy) <= coreHitRadius) {
+    onJarvisCoreClick();
+    return;
+  }
+
+  // 2. Toque nos Agentes Especialistas
   for (const item of renderedAgentsHitbox) {
     if (Math.hypot(clientX - item.x, clientY - item.y) <= item.r) {
       selectedSubNode.value = null;
@@ -765,6 +859,8 @@ function handleStageTap(clientX: number, clientY: number) {
       return;
     }
   }
+
+  // 3. Toque nos Nós Conectores
   for (const sub of renderedSubNodesHitbox) {
     if (Math.hypot(clientX - sub.x, clientY - sub.y) <= sub.r) {
       activeAgentForTools.value = null;
@@ -773,6 +869,8 @@ function handleStageTap(clientX: number, clientY: number) {
       return;
     }
   }
+
+  // 4. Toque nas Memórias
   for (const mem of renderedMemoriesHitbox) {
     if (Math.hypot(clientX - mem.x, clientY - mem.y) <= mem.r) {
       activeAgentForTools.value = null;
@@ -899,6 +997,18 @@ async function bootAuthenticatedUniverse() {
 onMounted(async () => {
   if ('speechSynthesis' in window) window.speechSynthesis.getVoices();
   if (isAuthenticated.value) await bootAuthenticatedUniverse();
+
+  // Inicia a escuta contínua de vigília após a primeira interação do usuário na página
+  const startVigilance = () => {
+    if (!recognition) recognition = initSTT();
+    try {
+      recognition.start();
+    } catch {}
+    window.removeEventListener('click', startVigilance);
+    window.removeEventListener('touchstart', startVigilance);
+  };
+  window.addEventListener('click', startVigilance, { once: true });
+  window.addEventListener('touchstart', startVigilance, { once: true });
 });
 
 onUnmounted(() => { stopAllEngines(); });
@@ -915,78 +1025,80 @@ onUnmounted(() => { stopAllEngines(); });
   padding: 16px; background: radial-gradient(circle at center, #09192c 0%, #020409 100%);
 }
 .auth-card {
-  width: 100%; max-width: 380px; background: rgba(15, 23, 42, 0.92);
-  border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 16px; padding: 28px 22px;
+  width: 100%; max-width: 360px; background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 16px; padding: 24px 20px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8); text-align: center; backdrop-filter: blur(12px);
 }
 .auth-core-ring {
-  width: 64px; height: 64px; margin: 0 auto 14px; border-radius: 50%;
+  width: 56px; height: 56px; margin: 0 auto 12px; border-radius: 50%;
   border: 2px dashed #38bdf8; display: flex; align-items: center; justify-content: center;
 }
-.auth-core-inner { width: 36px; height: 36px; border-radius: 50%; background: radial-gradient(circle, #38bdf8 0%, #0284c7 100%); box-shadow: 0 0 18px #38bdf8; }
-.auth-title { margin: 0; font-size: 18px; letter-spacing: 1.5px; color: #f8fafc; }
-.auth-subtitle { margin: 6px 0 20px; font-size: 12px; color: #94a3b8; }
-.auth-form { display: flex; flex-direction: column; gap: 14px; text-align: left; }
-.auth-field label { display: block; font-size: 11.5px; color: #cbd5e1; margin-bottom: 5px; }
-.auth-field input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid #334155; background: #090d16; color: #ffffff; font-size: 14px; }
-.auth-error { font-size: 12px; color: #f87171; background: rgba(127, 29, 29, 0.35); padding: 8px 10px; border-radius: 8px; }
-.auth-submit-btn { padding: 11px; border-radius: 8px; border: none; background: linear-gradient(135deg, #0284c7, #2563eb); color: #ffffff; font-weight: 700; font-size: 14px; cursor: pointer; }
+.auth-core-inner { width: 30px; height: 30px; border-radius: 50%; background: radial-gradient(circle, #38bdf8 0%, #0284c7 100%); box-shadow: 0 0 16px #38bdf8; }
+.auth-title { margin: 0; font-size: 16px; letter-spacing: 1.5px; color: #f8fafc; }
+.auth-subtitle { margin: 4px 0 16px; font-size: 11px; color: #94a3b8; }
+.auth-form { display: flex; flex-direction: column; gap: 12px; text-align: left; }
+.auth-field label { display: block; font-size: 11px; color: #cbd5e1; margin-bottom: 4px; }
+.auth-field input { width: 100%; box-sizing: border-box; padding: 9px 11px; border-radius: 8px; border: 1px solid #334155; background: #090d16; color: #ffffff; font-size: 13px; }
+.auth-error { font-size: 11.5px; color: #f87171; background: rgba(127, 29, 29, 0.35); padding: 7px 9px; border-radius: 8px; }
+.auth-submit-btn { padding: 10px; border-radius: 8px; border: none; background: linear-gradient(135deg, #0284c7, #2563eb); color: #ffffff; font-weight: 600; font-size: 13px; cursor: pointer; }
 
 .canvas-stage { position: relative; width: 100%; height: 100%; touch-action: none; }
 canvas { display: block; width: 100%; height: 100%; }
 
+/* Indicador flutuante de voz enxuto */
 .hud-hint {
-  position: fixed; bottom: 76px; left: 16px; z-index: 45; background: rgba(15, 23, 42, 0.88);
-  border: 1px solid rgba(56, 189, 248, 0.35); padding: 6px 14px; border-radius: 999px;
-  font-size: 11.5px; color: #cbd5e1; cursor: pointer; backdrop-filter: blur(8px);
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+  position: fixed; bottom: 62px; left: 12px; z-index: 45; background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.25); padding: 4px 10px; border-radius: 999px;
+  font-size: 10px; color: #94a3b8; cursor: pointer; backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
+/* BARRA DE COMANDO COMPACTA E MINIMALISTA */
 .command-dock-wrapper {
   position: fixed;
-  bottom: env(safe-area-inset-bottom, 16px);
+  bottom: env(safe-area-inset-bottom, 12px);
   left: 0;
   right: 0;
   z-index: 50;
   display: flex;
   justify-content: center;
-  padding: 0 12px;
+  padding: 0 10px;
   pointer-events: none;
 }
 
 .command-dock {
   pointer-events: auto;
-  width: min(720px, 100%);
+  width: min(680px, 100%);
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  background: rgba(15, 23, 42, 0.94);
-  border: 1px solid rgba(56, 189, 248, 0.35);
-  border-radius: 20px;
-  padding: 8px 12px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+  gap: 6px;
+  background: rgba(11, 18, 33, 0.92);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 16px;
+  padding: 6px 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
   backdrop-filter: blur(12px);
   box-sizing: border-box;
 }
 
 .dock-controls {
   display: flex;
-  gap: 6px;
+  gap: 5px;
   align-items: center;
   margin-bottom: 2px;
 }
 
 .dock-btn {
-  background: rgba(30, 41, 59, 0.85);
-  border: 1px solid #334155;
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(51, 65, 85, 0.7);
   color: #f8fafc;
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
+  font-size: 13px;
   cursor: pointer;
   transition: all 0.2s ease;
   flex-shrink: 0;
@@ -1000,13 +1112,13 @@ canvas { display: block; width: 100%; height: 100%; }
 .dock-btn.active {
   background: #0284c7;
   border-color: #38bdf8;
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
 }
 
 .mic-btn.active {
   background: #ea580c;
   border-color: #f97316;
-  box-shadow: 0 0 12px rgba(234, 88, 12, 0.6);
+  box-shadow: 0 0 10px rgba(234, 88, 12, 0.55);
 }
 
 .dock-input-wrapper {
@@ -1022,29 +1134,29 @@ canvas { display: block; width: 100%; height: 100%; }
   border: none;
   outline: none;
   color: #f8fafc;
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-family: inherit;
-  line-height: 1.45;
+  line-height: 1.35;
   resize: none;
-  max-height: 120px;
-  min-height: 24px;
-  padding: 6px 4px;
+  max-height: 100px;
+  min-height: 22px;
+  padding: 4px 6px;
   box-sizing: border-box;
   overflow-y: auto;
 }
 
 .dock-textarea::placeholder {
   color: #64748b;
-  font-size: 13px;
+  font-size: 11.5px;
 }
 
 .send-btn {
   background: linear-gradient(135deg, #0284c7, #2563eb);
   color: #ffffff;
   border: none;
-  border-radius: 14px;
-  padding: 8px 16px;
-  font-size: 12.5px;
+  border-radius: 10px;
+  padding: 6px 12px;
+  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
   margin-bottom: 2px;
@@ -1058,14 +1170,14 @@ canvas { display: block; width: 100%; height: 100%; }
   cursor: not-allowed;
 }
 
-/* Response bubble */
+/* Balão de Resposta Minimalista */
 .response-bubble {
-  position: fixed; bottom: 104px; left: 50%; transform: translateX(-50%);
-  width: min(560px, calc(100vw - 24px)); max-height: 36dvh; overflow-y: auto;
-  z-index: 40; background: rgba(15, 23, 42, 0.95); border: 1px solid #38bdf8;
-  border-radius: 12px; padding: 10px 14px; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
+  position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%);
+  width: min(520px, calc(100vw - 20px)); max-height: 32dvh; overflow-y: auto;
+  z-index: 40; background: rgba(11, 18, 33, 0.95); border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 12px; padding: 9px 12px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.65);
 }
-.response-header { display: flex; justify-content: space-between; font-size: 11.5px; color: #38bdf8; margin-bottom: 4px; }
-.response-text { font-size: 13px; line-height: 1.45; color: #f1f5f9; white-space: pre-wrap; }
-.close-bubble { background: transparent; border: none; color: #94a3b8; cursor: pointer; }
+.response-header { display: flex; justify-content: space-between; font-size: 11px; color: #38bdf8; margin-bottom: 3px; }
+.response-text { font-size: 12px; line-height: 1.4; color: #f1f5f9; white-space: pre-wrap; }
+.close-bubble { background: transparent; border: none; color: #94a3b8; cursor: pointer; font-size: 13px; }
 </style>
