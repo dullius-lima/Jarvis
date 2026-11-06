@@ -634,7 +634,8 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
     }
 
     // Intercepta e executa automaticamente blocos JSON escritos no texto pela LLM
-    if (!triggeredAgentId || triggeredAgentId === 'jarvis_core') {
+    const isJsonText = finalResponseText.includes('"action"') || finalResponseText.includes('invoke_tool');
+    if (!triggeredAgentId || triggeredAgentId === 'jarvis_core' || isJsonText) {
       const intercepted = await interceptAndExecuteTextActions({
         llmText: finalResponseText,
         userPrompt,
