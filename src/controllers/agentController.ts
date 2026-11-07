@@ -2,6 +2,8 @@
 import { Request, Response } from 'express';
 import { pool } from '../config/database.js';
 import { emitBrainLinkEvent } from '../services/brainSocketService.js';
+import { listAvailableCredentialsMetadata } from '../services/credentialMapperService.js';
+
 import {
   listAvailableCredentialsMetadata,
   resolveSecretByCredentialId
@@ -740,10 +742,6 @@ export async function resolveWaitStateDecision(req: Request, res: Response) {
   }
 }
 
-/**
- * Endpoint GET /api/v1/agents/credentials
- * Lista todas as credenciais salvas no servidor retornando apenas metadados seguros
- */
 export async function listAvailableCredentials(_req: Request, res: Response) {
   try {
     const credentials = await listAvailableCredentialsMetadata();
