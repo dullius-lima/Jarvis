@@ -74,7 +74,10 @@ export {
   executeAgentChain
 };
 
-export async function processWorkflowExecution(
+/**
+ * Processa o fluxo principal cognitivo, sensorial e execução de ferramentas do JARVIS
+ */
+export async function processarExecucaoWorkflow(
   identityToken: string,
   userPrompt: string,
   sessionId = `sess_${Date.now()}`,
@@ -204,7 +207,37 @@ export async function processWorkflowExecution(
       }
     }
 
-    // 2. CARREGAMENTO PARALELO DE CONFIGURAÇÃO, MEMÓRIA, RAG, AGENTES E TOOLS (Otimização de Latência)
+    // 2. FILTRO DE SAUDAÇÕES SIMPLES (Evita invocar ferramentas desnecessárias ao dizer oi/olá)
+    const cleanLowerPrompt = userPrompt.trim().toLowerCase().replace(/[!.,?]/g, '');
+    const isBasicGreeting = /^(oi|ol[aá]|bom dia|boa tarde|boa noite|e ai|ei|fala ai|jarvis)$/i.test(cleanLowerPrompt);
+
+    if (isBasicGreeting) {
+      const greetingResponse = `Olá, ${activeSpeakerName}! Todos os sistemas estão operacionais. Como posso ajudar você agora?`;
+      
+      appendShortTermMemory(sessionId, 'user', userPrompt);
+      appendShortTermMemory(sessionId, 'assistant', greetingResponse);
+
+      pool.query(
+        `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
+        [sessionId, userPrompt, greetingResponse]
+      ).catch(() => {});
+
+      return {
+        success: true,
+        triggeredSuccess: true,
+        agent: 'JARVIS',
+        agentId: 'jarvis_core',
+        nodeType: 'core',
+        memoryStored: true,
+        memoryCount: historyRowsCount + 2,
+        identity: activeSpeakerName,
+        sessionId,
+        response: greetingResponse,
+        executionTimeMs: Date.now() - startTime
+      };
+    }
+
+    // 3. CARREGAMENTO PARALELO DE CONFIGURAÇÃO, MEMÓRIA, RAG, AGENTES E TOOLS
     const [
       resolvedBrainConfig,
       historyRes,
@@ -461,7 +494,7 @@ export async function processWorkflowExecution(
       }
     );
 
-    // 3. CÓRTEX VISUAL E ANÁLISE MULTIMODAL (WEBCAM / TELA)
+    // 4. CÓRTEX VISUAL E ANÁLISE MULTIMODAL (WEBCAM / TELA)
     const rawScreen =
       sensoryInput?.screenFrame ||
       sensoryInput?.sensorData?.screenFrame ||
@@ -516,7 +549,7 @@ export async function processWorkflowExecution(
       ];
     }
 
-    // 4. PRIMEIRA PASSADA COGNITIVA (DISPATCHER DA LLM CENTRAL)
+    // 5. PRIMEIRA PASSADA COGNITIVA (DISPATCHER DA LLM CENTRAL)
     const messages: any[] = [
       {
         role: 'system',
@@ -529,8 +562,8 @@ URL Base do Servidor: ${dynamicServerBaseUrl}${visionSystemInstruction}
 ${liveToolsSummary}
 
 REGRAS OBRIGATÓRIAS DE EXECUÇÃO:
-1. NUNCA escreva blocos de texto no formato JSON de ferramenta (como {"toolName": ...} ou {"action": ...}) diretamente para o usuário.
-2. Sempre que a solicitação demandar dados externos, APIs ou especialistas cadastrados, invoque a Tool Call nativa correspondente.
+1. NUNCA gere blocos de texto contendo estruturas JSON como {"tool": ...} ou {"action": ...} para conversação comum.
+2. Para cumprimentos e perguntas do dia a dia, responda sempre em linguagem natural, fluida e direta em português.
 3. Trate o usuário de forma respeitosa, inteligente e alinhada à sua identidade reconhecida (${activeSpeakerName}).
 
 --- AGENTES ESPECIALISTAS ATIVOS ---
@@ -541,10 +574,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
       { role: 'user', content: userMessageContent }
     ];
 
-    let modelForCall = brainConfig.model;
-    if (frameToUse && brainConfig.provider === 'groq') {
-      modelForCall = 'llama-3.2-11b-vision-preview';
-    }
+    const modelForCall = brainConfig.model;
 
     const firstPass: any = await callOpenAICompatibleLLM({
       provider: brainConfig.provider,
@@ -562,7 +592,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
     let triggeredAgentId: string = 'jarvis_core';
     let triggeredNodeType = 'core';
 
-    // 5. EXECUÇÃO DE FERRAMENTAS & SÍNTESE CONTEXTUAL OTIMIZADA
+    // 6. EXECUÇÃO DE FERRAMENTAS & SÍNTESE CONTEXTUAL OTIMIZADA
     if (Array.isArray(choice?.tool_calls) && choice.tool_calls.length > 0) {
       const toolOutputsForSynthesis: Array<{
         toolName: string;
@@ -738,7 +768,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
         }
       }
 
-      // ATALHO DE ALTA PERFORMANCE: Se apenas 1 especialista foi acionado e já entregou texto natural pronto, pula a 2ª chamada de LLM!
+      // ATALHO DE ALTA PERFORMANCE: Se apenas 1 especialista foi acionado e já entregou texto natural pronto
       if (
         toolOutputsForSynthesis.length === 1 &&
         toolOutputsForSynthesis[0].isReadySpecialistText &&
@@ -756,7 +786,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
               2
             )}\n\n[CONTEXTO TEMPORAL ATUAL]: ${now.toLocaleString('pt-BR', {
               timeZone: 'America/Campo_Grande'
-            })}\nComunique a resposta final ao usuário de forma completa, precisa e em linguagem natural (PROIBIDO exibir código JSON ou {"toolName": ...}).`
+            })}\nComunique a resposta final ao usuário de forma completa, precisa e em linguagem natural (PROIBIDO exibir blocos JSON como {"tool": ...}).`
           }
         ];
 
@@ -775,11 +805,12 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
       }
     }
 
-    // 6. INTERCEPTAÇÃO UNIVERSAL DE QUALQUER JSON RESIDUAL ("toolName", "action", "tool", "slug")
+    // 7. INTERCEPTAÇÃO UNIVERSAL DE QUALQUER JSON RESIDUAL ("toolName", "action", "tool", "slug")
     const hasResidualJson =
       extractJsonActionBlocks(finalResponseText).length > 0 ||
       finalResponseText.includes('"toolName"') ||
       finalResponseText.includes('"action"') ||
+      finalResponseText.includes('"tool"') ||
       finalResponseText.includes('invoke_tool');
 
     if (hasResidualJson) {
@@ -803,7 +834,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
 
     const executionTimeMs = Date.now() - startTime;
 
-    // 7. PERSISTÊNCIA ASSÍNCRONA EM BACKGROUND (Não trava o tempo de resposta da interface!)
+    // 8. PERSISTÊNCIA ASSÍNCRONA EM BACKGROUND
     const ragContent = `Pergunta (${activeSpeakerName}): ${userPrompt} | Resposta (${triggeredAgentName}): ${finalResponseText}`;
     const ragMeta = { sessionId, agent: triggeredAgentName, speaker: activeSpeakerName };
 
@@ -889,7 +920,10 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
   }
 }
 
-export async function processOrchestratorWorkflow(
+/**
+ * Adaptador de entrada flexível (aceita parâmetros posicionais ou objeto de payload)
+ */
+export async function processarFluxoOrquestrador(
   arg1?: any,
   arg2?: any,
   arg3?: string,
@@ -907,7 +941,7 @@ export async function processOrchestratorWorkflow(
           'Verificar status operacional';
     const sid = arg3 || arg2?.sessionId || `sess_${Date.now()}`;
     const sensory = arg4 || (typeof arg2 === 'object' ? arg2 : undefined);
-    return processWorkflowExecution(token, prompt, sid, sensory);
+    return processarExecucaoWorkflow(token, prompt, sid, sensory);
   }
 
   const params = arg1 || {};
@@ -924,12 +958,22 @@ export async function processOrchestratorWorkflow(
       : 'Verificar status operacional');
   const sid = params?.sessionId || params?.sensorData?.sessionId || `sess_${Date.now()}`;
   const sensoryData = params?.sensorData || params;
-  return processWorkflowExecution(token, prompt, sid, sensoryData);
+  return processarExecucaoWorkflow(token, prompt, sid, sensoryData);
 }
 
-export const processOrchestratorStimulus = async (
+/**
+ * Disparador rápido para estímulos e sensores do sistema
+ */
+export const processarEstimuloOrquestrador = async (
   identityToken: string,
   sensorData: any
 ) => {
-  return processOrchestratorWorkflow({ identityToken, sensorData });
+  return processarFluxoOrquestrador({ identityToken, sensorData });
 };
+
+// ============================================================================
+// ALIASES DE COMPATIBILIDADE (Garante que arquivos antigos continuem funcionando)
+// ============================================================================
+export const processWorkflowExecution = processarExecucaoWorkflow;
+export const processOrchestratorWorkflow = processarFluxoOrquestrador;
+export const processOrchestratorStimulus = processarEstimuloOrquestrador;
