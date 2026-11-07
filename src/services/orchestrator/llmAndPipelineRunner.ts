@@ -143,23 +143,29 @@ export async function callOpenAICompatibleLLM(options: {
   }
 
   // 2. SUPORTE GROQ, OPENROUTER, DEEPSEEK, OPENAI E OLLAMA
+  // 2. SUPORTE GROQ, OPENROUTER, DEEPSEEK, OPENAI E OLLAMA
   const client = new OpenAI({
     apiKey: apiKey || 'ollama',
     baseURL: creds.baseURL,
     timeout: 30000
   });
 
-  // Remove permanentemente o llama-3.1-8b-instant descontinuado para evitar erro 404
+  // Sanitização de modelos descontinuados na Groq
   let safeTargetModel = creds.model;
   if (provider === 'groq') {
-    if (safeTargetModel.includes('8b-instant')) {
+    if (
+      !safeTargetModel ||
+      safeTargetModel.includes('deepseek-r1') ||
+      safeTargetModel.includes('8b-instant')
+    ) {
       safeTargetModel = 'llama-3.3-70b-versatile';
     }
   }
 
+  // Fallback seguro: apenas modelos ativos oficiais da Groq
   const candidateModels =
     provider === 'groq'
-      ? Array.from(new Set([safeTargetModel, 'llama-3.3-70b-versatile', 'deepseek-r1-distill-llama-70b']))
+      ? Array.from(new Set([safeTargetModel, 'llama-3.3-70b-versatile']))
       : [safeTargetModel];
 
   let lastError: any = null;
@@ -178,6 +184,7 @@ export async function callOpenAICompatibleLLM(options: {
         modelToUse.includes('reasoner') ||
         modelToUse.includes('r1');
 
+      // Reasoning models na Groq não aceitam tool calling
       if (options.tools && options.tools.length > 0 && !isReasoningModel) {
         payload.tools = options.tools;
         payload.tool_choice = 'auto';
@@ -186,7 +193,7 @@ export async function callOpenAICompatibleLLM(options: {
       return await client.chat.completions.create(payload);
     } catch (err: any) {
       lastError = err;
-      // Contingência imediata: se falhou com tools, tenta o mesmo modelo de forma direta
+      // Se falhou com tools, tenta imediatamente o mesmo modelo em modo texto puro
       if (options.tools && options.tools.length > 0) {
         try {
           return await client.chat.completions.create({
@@ -202,7 +209,6 @@ export async function callOpenAICompatibleLLM(options: {
   }
 
   throw lastError || new Error(`Falha ao comunicar com provedor ${provider.toUpperCase()}`);
-}
 
 export async function executeUniversalApiConnector(
   connectorSlugOrAgent: string | Record<string, any>,
