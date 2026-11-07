@@ -113,9 +113,9 @@ export async function callOpenAICompatibleLLM(options: {
 
   // Remove completamente o llama-3.1-8b-instant e respeita o modelo configurado (ex: openai/gpt-oss-120b)
   const candidateModels =
-    provider === 'groq'
-      ? Array.from(new Set([creds.model, 'openai/gpt-oss-120b', 'llama-3.3-70b-versatile']))
-      : [creds.model];
+  provider === 'groq'
+    ? Array.from(new Set([creds.model, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant']))
+    : [creds.model];
 
   let lastError: any = null;
 
