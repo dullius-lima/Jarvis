@@ -1007,11 +1007,11 @@ function onBrainProviderChange() {
 }
 
 function onBrainModelSelectChange() {
-  if (selectedBrainModelOption.value !== 'CUSTOM_INPUT') {
+  if (selectedBrainModelOption.value && selectedBrainModelOption.value !== 'CUSTOM_INPUT') {
     brainSettings.value.model = selectedBrainModelOption.value;
   }
 }
-
+  
 async function testLLMConnection() {
   isTesting.value = true;
   testResult.value = null;
@@ -1042,14 +1042,15 @@ async function saveBrainSettings() {
   isSavingBrain.value = true;
   testResult.value = null;
   try {
-    const prov = brainSettings.value.provider.toLowerCase();
+    const prov = (brainSettings.value.provider || 'groq').toLowerCase();
     if (!brainSettings.value.saved_keys) brainSettings.value.saved_keys = {};
-    
-    // Garante que o modelo do select seja repassado fielmente
+
+    // 1. Força a sincronização do modelo selecionado antes de disparar o envio
     if (selectedBrainModelOption.value && selectedBrainModelOption.value !== 'CUSTOM_INPUT') {
       brainSettings.value.model = selectedBrainModelOption.value;
     }
 
+    // 2. Se a chave digitada não for máscara de bolinhas, grava no cofre
     if (brainSettings.value.api_key && !/[•*]/.test(brainSettings.value.api_key)) {
       brainSettings.value.saved_keys[prov] = brainSettings.value.api_key;
     }
@@ -1059,11 +1060,12 @@ async function saveBrainSettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(brainSettings.value)
     });
+    
     const json = await res.json();
     if (json.success) {
       brainSettings.value = { ...brainSettings.value, ...json.data };
       syncBrainModelSelection();
-      testResult.value = { success: true, message: `💾 ${json.message}` };
+      testResult.value = { success: true, message: `💾 Configurações salvas: [${brainSettings.value.model}] ativo!` };
     } else {
       testResult.value = { success: false, message: `❌ ${json.error}` };
     }
