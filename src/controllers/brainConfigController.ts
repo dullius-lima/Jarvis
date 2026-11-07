@@ -29,7 +29,6 @@ export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
     { label: 'Llama 3.3 70B Versatile (Free Tier Recomendado)', value: 'llama-3.3-70b-versatile' },
     { label: 'Llama 3.1 8B Instant (Free Tier Ultra-Rápido)', value: 'llama-3.1-8b-instant' },
-    { label: 'DeepSeek R1 Distill Llama 70B (Free Tier)', value: 'deepseek-r1-distill-llama-70b' },
     { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' }
   ],
   gemini: [
@@ -686,7 +685,6 @@ export async function validateLLMConnection(req: Request, res: Response) {
         'openai/gpt-oss-120b',
         'llama-3.3-70b-versatile',
         'llama-3.1-8b-instant',
-        'deepseek-r1-distill-llama-70b'
       ],
       openrouter: [
         selectedModel,
