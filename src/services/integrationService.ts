@@ -2,14 +2,20 @@
 import { pool } from '../config/database.js';
 import { executeMcpToolCall } from './mcpHfService.js';
 
-export interface IntegrationRequestPayload {
+export interface CargaRequisicaoIntegracao {
   providerKey: string;
   action?: string;
   payload?: any;
 }
 
-function sanitizeKey(raw: string): string {
-  return String(raw || '')
+// Mantém retrocompatibilidade de tipos caso outros arquivos importem a interface antiga
+export type IntegrationRequestPayload = CargaRequisicaoIntegracao;
+
+/**
+ * Sanitiza a chave ou identificador do provedor
+ */
+function sanitizarChave(valorBruto: string): string {
+  return String(valorBruto || '')
     .trim()
     .toLowerCase()
     .normalize('NFD')
@@ -21,51 +27,51 @@ function sanitizeKey(raw: string): string {
 /**
  * Extrai um ticker válido da B3 (ex: PETR4, VALE3, KLBN11)
  */
-export function extractCleanTicker(rawInput: string): string {
-  const str = String(rawInput || '').trim();
+export function extrairTickerLimpo(entradaBruta: string): string {
+  const str = String(entradaBruta || '').trim();
   const match = str.toUpperCase().match(/\b([A-Z]{4}\d{1,2})\b/);
   if (match && match[1]) return match[1];
   return str.split(/\s+/)[0]?.toUpperCase() || 'PETR4';
 }
 
 /**
- * Busca a configuração e o token do conector no banco de dados
+ * Busca a configuração e o token do conector no banco de dados PostgreSQL
  */
-export async function getConnectorConfig(providerKey: string): Promise<Record<string, any>> {
-  const clean = sanitizeKey(providerKey);
-  const aliases = [clean];
-  if (clean.startsWith('brapi')) aliases.push('brapi', 'brapi_b3', 'brapi_quote');
-  if (clean.includes('home_assistant') || clean.includes('hass')) aliases.push('home_assistant');
-  if (clean.includes('gmail')) aliases.push('gmail', 'google_gmail');
-  if (clean.includes('calendar')) aliases.push('google_calendar', 'calendar');
-  if (clean.includes('drive')) aliases.push('google_drive', 'drive');
-  if (clean.includes('outlook')) aliases.push('outlook', 'microsoft_outlook');
-  if (clean.includes('telegram')) aliases.push('telegram', 'telegram_bot');
-  if (clean.includes('whatsapp')) aliases.push('whatsapp', 'whatsapp_evolution');
+export async function obterConfiguracaoConector(chaveProvedor: string): Promise<Record<string, any>> {
+  const limpa = sanitizarChave(chaveProvedor);
+  const apelidos = [limpa];
+  if (limpa.startsWith('brapi')) apelidos.push('brapi', 'brapi_b3', 'brapi_quote');
+  if (limpa.includes('home_assistant') || limpa.includes('hass')) apelidos.push('home_assistant');
+  if (limpa.includes('gmail')) apelidos.push('gmail', 'google_gmail');
+  if (limpa.includes('calendar') || limpa.includes('agenda')) apelidos.push('google_calendar', 'calendar');
+  if (limpa.includes('drive')) apelidos.push('google_drive', 'drive');
+  if (limpa.includes('outlook')) apelidos.push('outlook', 'microsoft_outlook');
+  if (limpa.includes('telegram')) apelidos.push('telegram', 'telegram_bot');
+  if (limpa.includes('whatsapp')) apelidos.push('whatsapp', 'whatsapp_evolution');
 
   try {
     const res = await pool.query(
       'SELECT * FROM external_connectors WHERE LOWER(provider_key) = ANY($1) ORDER BY updated_at DESC LIMIT 1;',
-      [aliases]
+      [apelidos]
     );
     if (res.rows.length > 0) {
-      const row = res.rows[0];
+      const linha = res.rows[0];
       const cfg =
-        typeof row.config === 'string'
-          ? JSON.parse(row.config || '{}')
-          : row.config || {};
+        typeof linha.config === 'string'
+          ? JSON.parse(linha.config || '{}')
+          : linha.config || {};
       return {
         ...cfg,
-        provider_key: row.provider_key,
-        endpoint_url: (cfg.endpoint_url || row.endpoint_url || '').trim(),
-        http_method: (cfg.http_method || row.http_method || 'GET').toUpperCase(),
-        api_key: (cfg.api_key || cfg.auth_token || row.api_key || '').trim(),
-        auth_token: (cfg.auth_token || cfg.api_key || row.api_key || '').trim(),
-        is_enabled: row.is_enabled ?? true
+        provider_key: linha.provider_key,
+        endpoint_url: (cfg.endpoint_url || linha.endpoint_url || '').trim(),
+        http_method: (cfg.http_method || linha.http_method || 'GET').toUpperCase(),
+        api_key: (cfg.api_key || cfg.auth_token || linha.api_key || '').trim(),
+        auth_token: (cfg.auth_token || cfg.api_key || linha.api_key || '').trim(),
+        is_enabled: linha.is_enabled ?? true
       };
     }
-  } catch (err: any) {
-    console.warn(`⚠️ [Integration Service] Fallback de ambiente para ${providerKey}:`, err.message);
+  } catch (erro: any) {
+    console.warn(`⚠️ [Serviço de Integração] Fallback de ambiente para ${chaveProvedor}:`, erro.message);
   }
   return {};
 }
@@ -73,7 +79,7 @@ export async function getConnectorConfig(providerKey: string): Promise<Record<st
 /**
  * Renovador automático de Access Token OAuth2 para o Ecossistema Google
  */
-export async function getGoogleAccessToken(): Promise<string> {
+export async function obterTokenAcessoGoogle(): Promise<string> {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
@@ -82,7 +88,7 @@ export async function getGoogleAccessToken(): Promise<string> {
     throw new Error('Credenciais Google OAuth2 não configuradas no arquivo .env');
   }
 
-  const response = await fetch('https://oauth2.googleapis.com/token', {
+  const resposta = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -93,24 +99,24 @@ export async function getGoogleAccessToken(): Promise<string> {
     })
   });
 
-  const data: any = await response.json().catch(() => ({}));
-  if (!response.ok || !data.access_token) {
-    throw new Error(data.error_description || data.error || 'Falha ao renovar o Access Token do Google.');
+  const dados: any = await resposta.json().catch(() => ({}));
+  if (!resposta.ok || !dados.access_token) {
+    throw new Error(dados.error_description || dados.error || 'Falha ao renovar o Access Token do Google.');
   }
 
-  return data.access_token;
+  return dados.access_token;
 }
 
 /**
  * Executor Central de Conectores Externos
  */
-export async function executeExternalConnector({
+export async function executarConectorExterno({
   providerKey,
   action = 'execute',
   payload = {}
-}: IntegrationRequestPayload): Promise<any> {
-  const rawKey = sanitizeKey(providerKey);
-  const config = await getConnectorConfig(rawKey);
+}: CargaRequisicaoIntegracao): Promise<any> {
+  const chaveBruta = sanitizarChave(providerKey);
+  const config = await obterConfiguracaoConector(chaveBruta);
   const token = (
     payload?.auth_token ||
     payload?.api_key ||
@@ -122,27 +128,27 @@ export async function executeExternalConnector({
     .replace(/^Bearer\s+/i, '')
     .trim();
 
-  const key = rawKey.startsWith('brapi')
+  const chave = chaveBruta.startsWith('brapi')
     ? 'brapi'
-    : rawKey.includes('home_assistant') || rawKey.includes('hass')
+    : chaveBruta.includes('home_assistant') || chaveBruta.includes('hass')
     ? 'home_assistant'
-    : rawKey.includes('gmail')
+    : chaveBruta.includes('gmail')
     ? 'gmail'
-    : rawKey.includes('calendar')
+    : chaveBruta.includes('calendar') || chaveBruta.includes('agenda')
     ? 'google_calendar'
-    : rawKey.includes('drive')
+    : chaveBruta.includes('drive')
     ? 'google_drive'
-    : rawKey.includes('outlook')
+    : chaveBruta.includes('outlook')
     ? 'outlook'
-    : rawKey.includes('telegram')
+    : chaveBruta.includes('telegram')
     ? 'telegram'
-    : rawKey;
+    : chaveBruta;
 
-  switch (key) {
+  switch (chave) {
     case 'brapi': {
-      const rawTicker =
+      const tickerBruto =
         payload.symbol || payload.ticker || payload.query || payload.task_details || 'PETR4';
-      const ticker = extractCleanTicker(rawTicker);
+      const ticker = extrairTickerLimpo(tickerBruto);
       const brapiToken = token || process.env.BRAPI_API_KEY || process.env.BRAPI_TOKEN || '';
 
       const url = `https://brapi.dev/api/quote/${encodeURIComponent(ticker)}${
@@ -286,14 +292,14 @@ export async function executeExternalConnector({
     }
 
     // --------------------------------------------------------------------------
-    // GMAIL: LEITURA, ENVIO E EXCLUSÃO VITALÍCIOS
+    // GMAIL: LEITURA, ENVIO E EXCLUSÃO
     // --------------------------------------------------------------------------
     case 'gmail': {
-      const accessToken = await getGoogleAccessToken();
-      const currentAction = String(action || payload.action || 'read_inbox').toLowerCase();
+      const accessToken = await obterTokenAcessoGoogle();
+      const acaoAtual = String(action || payload.action || 'read_inbox').toLowerCase();
 
       // 1. Excluir mensagem / Mover para a Lixeira
-      if (currentAction === 'trash_message' || currentAction === 'delete_message') {
+      if (acaoAtual === 'trash_message' || acaoAtual === 'delete_message' || acaoAtual === 'excluir_mensagem') {
         const msgId = payload.id || payload.messageId;
         if (!msgId) {
           throw new Error('Parâmetro id ou messageId é obrigatório para mover e-mail para a lixeira.');
@@ -314,13 +320,17 @@ export async function executeExternalConnector({
       }
 
       // 2. Enviar e-mail
-      if (currentAction === 'send_email') {
-        if (!payload.to) {
-          throw new Error('Parâmetro to (destinatário) é obrigatório para envio de e-mail.');
+      if (acaoAtual === 'send_email' || acaoAtual === 'enviar_email') {
+        const destinatario = payload.to || payload.destinatario || payload.para;
+        if (!destinatario) {
+          throw new Error('Destinatário (campo "to") é obrigatório para envio de e-mail.');
         }
 
+        const assunto = payload.subject || payload.assunto || 'JARVIS Notificação';
+        const corpo = payload.body || payload.corpo || payload.text || payload.mensagem || '';
+
         const rawMessage = Buffer.from(
-          `To: ${payload.to}\r\nSubject: =?utf-8?B?${Buffer.from(payload.subject || 'JARVIS').toString('base64')}?=\r\nContent-Type: text/plain; charset="UTF-8"\r\nMIME-Version: 1.0\r\n\r\n${payload.body || payload.text || ''}`
+          `To: ${destinatario}\r\nSubject: =?utf-8?B?${Buffer.from(assunto).toString('base64')}?=\r\nContent-Type: text/plain; charset="UTF-8"\r\nMIME-Version: 1.0\r\n\r\n${corpo}`
         )
           .toString('base64')
           .replace(/\+/g, '-')
@@ -341,8 +351,9 @@ export async function executeExternalConnector({
       }
 
       // 3. Ler mensagens / Caixa de entrada
-      const max = Number(payload.maxResults || 5);
-      const q = payload.query ? `&q=${encodeURIComponent(payload.query)}` : '';
+      const max = Number(payload.maxResults || payload.limite || 5);
+      const termoBusca = payload.query || payload.busca || '';
+      const q = termoBusca ? `&q=${encodeURIComponent(termoBusca)}` : '';
       const listRes = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${max}${q}`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -380,108 +391,193 @@ export async function executeExternalConnector({
     }
 
     // --------------------------------------------------------------------------
-    // GOOGLE CALENDAR: LISTAR E CRIAR EVENTOS
+    // GOOGLE CALENDAR: TOTALMENTE FLEXÍVEL PARA QUALQUER TÍTULO, DATA E DETALHE
     // --------------------------------------------------------------------------
     case 'google_calendar': {
-      const accessToken = await getGoogleAccessToken();
+      const accessToken = await obterTokenAcessoGoogle();
+      const acaoAtual = String(action || payload.action || 'list_events').toLowerCase();
+      const calendarBase = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 
-      if (action === 'create_event') {
-        const res = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+      // 1. Criar novo evento dinâmico
+      if (
+        acaoAtual === 'create_event' ||
+        acaoAtual === 'schedule' ||
+        acaoAtual === 'criar_evento' ||
+        acaoAtual === 'agendar' ||
+        acaoAtual === 'agendamento'
+      ) {
+        const parametros = payload.parameters || payload.params || payload;
+
+        // Captura qualquer título ou assunto fornecido (sem fixar em 'Reunião')
+        const titulo =
+          parametros.summary ||
+          parametros.title ||
+          parametros.assunto ||
+          parametros.nome ||
+          parametros.compromisso ||
+          parametros.task_details ||
+          parametros.query ||
+          'Compromisso';
+
+        // Detalhes e descrição
+        const descricao =
+          parametros.description ||
+          parametros.descricao ||
+          parametros.detalhes ||
+          'Agendado via JARVIS.';
+
+        // Horário de Início
+        const horarioInicioBruto =
+          parametros.startTime ||
+          parametros.start ||
+          parametros.start_time ||
+          parametros.data ||
+          parametros.horario ||
+          parametros.data_hora;
+
+        let dataInicio: Date;
+        if (!horarioInicioBruto) {
+          dataInicio = new Date();
+        } else if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(horarioInicioBruto).trim())) {
+          // Se for passado apenas "14:00" ou "14:00:00"
+          const [horas, minutos] = String(horarioInicioBruto).trim().split(':').map(Number);
+          dataInicio = new Date();
+          dataInicio.setHours(horas, minutos, 0, 0);
+          if (dataInicio.getTime() < Date.now()) {
+            dataInicio.setDate(dataInicio.getDate() + 1);
+          }
+        } else {
+          dataInicio = new Date(horarioInicioBruto);
+        }
+
+        if (isNaN(dataInicio.getTime())) {
+          dataInicio = new Date();
+        }
+
+        // Horário de Término
+        const horarioFimBruto =
+          parametros.endTime ||
+          parametros.end ||
+          parametros.end_time ||
+          parametros.termino;
+
+        const dataFim =
+          horarioFimBruto && !isNaN(new Date(horarioFimBruto).getTime())
+            ? new Date(horarioFimBruto)
+            : new Date(dataInicio.getTime() + 60 * 60 * 1000); // 1h de duração padrão
+
+        const fuso = parametros.timezone || 'America/Campo_Grande';
+
+        const corpoEvento: any = {
+          summary: titulo,
+          description: descricao,
+          start: {
+            dateTime: dataInicio.toISOString(),
+            timeZone: fuso
+          },
+          end: {
+            dateTime: dataFim.toISOString(),
+            timeZone: fuso
+          },
+          reminders: {
+            useDefault: false,
+            overrides: [
+              { method: 'popup', minutes: 30 },
+              { method: 'popup', minutes: 10 }
+            ]
+          }
+        };
+
+        if (parametros.location || parametros.local || parametros.endereco) {
+          corpoEvento.location = parametros.location || parametros.local || parametros.endereco;
+        }
+
+        const respostaEvento = await fetch(calendarBase, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            summary: payload.summary || payload.title || 'Evento JARVIS',
-            description: payload.description || 'Criado via JARVIS Automação',
-            start: { dateTime: payload.startTime || new Date().toISOString() },
-            end: { dateTime: payload.endTime || new Date(Date.now() + 3600000).toISOString() }
-          })
+          body: JSON.stringify(corpoEvento)
         });
-        const data = await res.json().catch(() => ({}));
-        return { success: true, provider: 'google_calendar', event: data };
+
+        const dadosRetorno: any = await respostaEvento.json().catch(() => ({}));
+        if (!respostaEvento.ok) {
+          throw new Error(
+            dadosRetorno.error?.message || `Erro HTTP ${respostaEvento.status} ao agendar evento no Google Calendar.`
+          );
+        }
+
+        const dataFormatada = dataInicio.toLocaleString('pt-BR', {
+          timeZone: fuso,
+          weekday: 'long',
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        return {
+          success: true,
+          provider: 'google_calendar',
+          action: 'create_event',
+          eventId: dadosRetorno.id,
+          summary: dadosRetorno.summary,
+          start: dadosRetorno.start?.dateTime,
+          end: dadosRetorno.end?.dateTime,
+          htmlLink: dadosRetorno.htmlLink,
+          message: `Agendamento confirmado! O compromisso **"${titulo}"** foi adicionado à sua agenda para ${dataFormatada}.`
+        };
       }
 
-      const timeMin = payload.timeMin || new Date().toISOString();
-      const res = await fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=10&orderBy=startTime&singleEvents=true&timeMin=${encodeURIComponent(timeMin)}`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-      const data: any = await res.json().catch(() => ({}));
-      return { success: true, provider: 'google_calendar', events: data.items || [] };
-    }
+      // 2. Listar compromissos existentes
+      const maxResults = Number(payload.maxResults || payload.pageSize || payload.limite || 10);
+      const timeMin = payload.timeMin ? new Date(payload.timeMin).toISOString() : new Date().toISOString();
 
-    // --------------------------------------------------------------------------
-    // GOOGLE DRIVE: LISTAGEM E PESQUISA DE ARQUIVOS
-    // --------------------------------------------------------------------------
-    case 'google_drive': {
-      const accessToken = await getGoogleAccessToken();
-      const q = payload.query ? `&q=${encodeURIComponent(payload.query)}` : '';
-      const res = await fetch(
-        `https://www.googleapis.com/drive/v3/files?pageSize=10&fields=files(id,name,mimeType,modifiedTime)${q}`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-      const data: any = await res.json().catch(() => ({}));
-      return { success: true, provider: 'google_drive', files: data.files || [] };
-    }
-
-    case 'outlook': {
-      const accessToken = token || process.env.OUTLOOK_ACCESS_TOKEN || '';
-      const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          message: payload.message || {
-            subject: payload.subject || 'Notificação JARVIS',
-            body: { contentType: 'Text', content: payload.body || payload.text || '' },
-            toRecipients: [{ emailAddress: { address: payload.to || '' } }]
-          },
-          saveToSentItems: 'true'
-        })
+      const urlListagem = `${calendarBase}?maxResults=${maxResults}&orderBy=startTime&singleEvents=true&timeMin=${encodeURIComponent(timeMin)}`;
+      const res = await fetch(urlListagem, {
+        headers: { Authorization: `Bearer ${accessToken}` }
       });
-      return { success: res.ok, provider: 'outlook', status: res.status };
+      const data: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error?.message || `Erro HTTP ${res.status} ao listar agenda.`);
+      }
+
+      const eventos = (data.items || []).map((item: any) => ({
+        id: item.id,
+        summary: item.summary || '(Sem Título)',
+        description: item.description || '',
+        start: item.start?.dateTime || item.start?.date,
+        end: item.end?.dateTime || item.end?.date,
+        link: item.htmlLink
+      }));
+
+      return {
+        success: true,
+        provider: 'google_calendar',
+        action: 'list_events',
+        total: eventos.length,
+        events: eventos
+      };
     }
 
-    case 'google_sheets': {
-      const accessToken = token || process.env.GOOGLE_SHEETS_TOKEN || '';
-      const spreadsheetId = config.spreadsheet_id || payload.spreadsheetId;
-      const range = payload.range || 'Sheet1!A1';
-      const res = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            values: payload.values || [[new Date().toISOString(), JSON.stringify(payload)]]
-          })
-        }
-      );
-      return await res.json().catch(() => ({ success: res.ok }));
-    }
-
-    // =========================================================================
-    // GOOGLE DRIVE: LISTAR, BUSCAR, CRIAR PASTAS, UPLOAD E EXCLUSÃO
-    // =========================================================================
+    // --------------------------------------------------------------------------
+    // GOOGLE DRIVE: CRIAR PASTAS, UPLOAD, LIXEIRA E LISTAGEM
+    // --------------------------------------------------------------------------
     case 'google_drive': {
-      const accessToken = await getGoogleAccessToken();
-      const currentAction = String(action || payload.action || 'list_files').toLowerCase();
+      const accessToken = await obterTokenAcessoGoogle();
+      const acaoAtual = String(action || payload.action || 'list_files').toLowerCase();
 
-      // 1. CRIAR NOVA PASTA NO DRIVE
-      if (currentAction === 'create_folder') {
-        const folderName = payload.name || payload.folderName || 'Nova Pasta JARVIS';
-        const folderMetadata: Record<string, any> = {
-          name: folderName,
+      // 1. Criar Nova Pasta
+      if (acaoAtual === 'create_folder' || acaoAtual === 'criar_pasta') {
+        const nomePasta = payload.name || payload.folderName || payload.nome || 'Nova Pasta JARVIS';
+        const metadadosPasta: Record<string, any> = {
+          name: nomePasta,
           mimeType: 'application/vnd.google-apps.folder'
         };
-        if (payload.parentId) {
-          folderMetadata.parents = [payload.parentId];
+        if (payload.parentId || payload.pastaPaiId) {
+          metadadosPasta.parents = [payload.parentId || payload.pastaPaiId];
         }
 
         const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
@@ -490,39 +586,39 @@ export async function executeExternalConnector({
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(folderMetadata)
+          body: JSON.stringify(metadadosPasta)
         });
 
         const folderData: any = await createRes.json().catch(() => ({}));
-        if (!createRes.ok) throw new Error(folderData.error?.message || 'Falha ao criar pasta no Drive.');
+        if (!createRes.ok) throw new Error(folderData.error?.message || 'Falha ao criar pasta no Google Drive.');
         return { success: true, provider: 'google_drive', action: 'create_folder', folder: folderData };
       }
 
-      // 2. UPLOAD DE ARQUIVO (TEXTO / MARKDOWN / JSON / RELATÓRIO)
-      if (currentAction === 'upload_file' || currentAction === 'upload_text_file') {
-        const fileName = payload.name || payload.fileName || `jarvis_log_${Date.now()}.txt`;
-        const fileContent = payload.content || payload.body || payload.text || '';
-        const mimeType = payload.mimeType || 'text/plain; charset=UTF-8';
+      // 2. Upload de Arquivo
+      if (acaoAtual === 'upload_file' || acaoAtual === 'upload_text_file' || acaoAtual === 'enviar_arquivo') {
+        const nomeArquivo = payload.name || payload.fileName || payload.nome || `jarvis_log_${Date.now()}.txt`;
+        const conteudoArquivo = payload.content || payload.body || payload.text || payload.conteudo || '';
+        const tipoMime = payload.mimeType || 'text/plain; charset=UTF-8';
 
         const boundary = '-------314159265358979323846';
         const delimiter = `\r\n--${boundary}\r\n`;
         const closeDelimiter = `\r\n--${boundary}--`;
 
-        const metadata: Record<string, any> = {
-          name: fileName,
-          mimeType: mimeType.split(';')[0]
+        const metadados: Record<string, any> = {
+          name: nomeArquivo,
+          mimeType: tipoMime.split(';')[0]
         };
-        if (payload.parentId) {
-          metadata.parents = [payload.parentId];
+        if (payload.parentId || payload.pastaPaiId) {
+          metadados.parents = [payload.parentId || payload.pastaPaiId];
         }
 
-        const multipartRequestBody =
+        const corpoRequisicaoMultipart =
           delimiter +
           'Content-Type: application/json\r\n\r\n' +
-          JSON.stringify(metadata) +
+          JSON.stringify(metadados) +
           delimiter +
-          `Content-Type: ${mimeType}\r\n\r\n` +
-          fileContent +
+          `Content-Type: ${tipoMime}\r\n\r\n` +
+          conteudoArquivo +
           closeDelimiter;
 
         const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
@@ -531,17 +627,17 @@ export async function executeExternalConnector({
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': `multipart/related; boundary=${boundary}`
           },
-          body: multipartRequestBody
+          body: corpoRequisicaoMultipart
         });
 
         const uploadData: any = await uploadRes.json().catch(() => ({}));
-        if (!uploadRes.ok) throw new Error(uploadData.error?.message || 'Falha ao enviar arquivo para o Drive.');
+        if (!uploadRes.ok) throw new Error(uploadData.error?.message || 'Falha ao enviar arquivo para o Google Drive.');
         return { success: true, provider: 'google_drive', action: 'upload_file', file: uploadData };
       }
 
-      // 3. MOVER ARQUIVO PARA A LIXEIRA
-      if (currentAction === 'trash_file' || currentAction === 'delete_file') {
-        const fileId = payload.id || payload.fileId;
+      // 3. Mover Arquivo para a Lixeira
+      if (acaoAtual === 'trash_file' || acaoAtual === 'delete_file' || acaoAtual === 'excluir_arquivo') {
+        const fileId = payload.id || payload.fileId || payload.arquivoId;
         if (!fileId) throw new Error('Parâmetro fileId ou id é obrigatório para exclusão.');
 
         const trashRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
@@ -551,20 +647,21 @@ export async function executeExternalConnector({
 
         if (!trashRes.ok && trashRes.status !== 204) {
           const errData: any = await trashRes.json().catch(() => ({}));
-          throw new Error(errData.error?.message || 'Falha ao mover arquivo para a lixeira.');
+          throw new Error(errData.error?.message || 'Falha ao mover arquivo para a lixeira do Drive.');
         }
         return { success: true, provider: 'google_drive', action: 'trash_file', fileId };
       }
 
-      // 4. AÇÃO PADRÃO: LISTAGEM E PESQUISA DE ARQUIVOS RECENTES
-      const pageSize = Number(payload.pageSize || payload.maxResults || 10);
-      let queryFilter = "trashed = false";
-      if (payload.query) {
-        queryFilter += ` and name contains '${payload.query.replace(/'/g, "\\'")}'`;
+      // 4. Listagem e Pesquisa de Arquivos
+      const pageSize = Number(payload.pageSize || payload.maxResults || payload.limite || 10);
+      let filtroConsulta = 'trashed = false';
+      if (payload.query || payload.busca) {
+        const termo = String(payload.query || payload.busca).replace(/'/g, "\\'");
+        filtroConsulta += ` and name contains '${termo}'`;
       }
 
       const listRes = await fetch(
-        `https://www.googleapis.com/drive/v3/files?pageSize=${pageSize}&fields=files(id,name,mimeType,size,modifiedTime,webViewLink)&q=${encodeURIComponent(queryFilter)}&orderBy=modifiedTime desc`,
+        `https://www.googleapis.com/drive/v3/files?pageSize=${pageSize}&fields=files(id,name,mimeType,size,modifiedTime,webViewLink)&q=${encodeURIComponent(filtroConsulta)}&orderBy=modifiedTime desc`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
 
@@ -580,25 +677,87 @@ export async function executeExternalConnector({
       };
     }
 
+    // --------------------------------------------------------------------------
+    // MICROSOFT OUTLOOK
+    // --------------------------------------------------------------------------
+    case 'outlook': {
+      const accessToken = token || process.env.OUTLOOK_ACCESS_TOKEN || '';
+      const destinatario = payload.to || payload.destinatario || payload.para || '';
+      const assunto = payload.subject || payload.assunto || 'Notificação JARVIS';
+      const corpo = payload.body || payload.text || payload.corpo || '';
+
+      const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          message: payload.message || {
+            subject: assunto,
+            body: { contentType: 'Text', content: corpo },
+            toRecipients: [{ emailAddress: { address: destinatario } }]
+          },
+          saveToSentItems: 'true'
+        })
+      });
+      return { success: res.ok, provider: 'outlook', status: res.status };
+    }
+
+    // --------------------------------------------------------------------------
+    // GOOGLE SHEETS
+    // --------------------------------------------------------------------------
+    case 'google_sheets': {
+      const accessToken = token || (await obterTokenAcessoGoogle().catch(() => process.env.GOOGLE_SHEETS_TOKEN || ''));
+      const spreadsheetId = config.spreadsheet_id || payload.spreadsheetId || payload.planilhaId;
+      const range = payload.range || payload.intervalo || 'Sheet1!A1';
+      const valores = payload.values || payload.valores || [[new Date().toISOString(), JSON.stringify(payload)]];
+
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            values: valores
+          })
+        }
+      );
+      return await res.json().catch(() => ({ success: res.ok }));
+    }
+
+    // --------------------------------------------------------------------------
+    // TELEGRAM
+    // --------------------------------------------------------------------------
     case 'telegram': {
       const botToken = token || process.env.TELEGRAM_BOT_TOKEN || '';
       const chatId =
         payload.chatId ||
+        payload.destinatario ||
         payload.recipientId ||
         config.chat_id ||
         process.env.ADMIN_TELEGRAM_CHAT_ID ||
         '';
+      const textoMensagem =
+        payload.text || payload.mensagem || payload.prompt || payload.query || JSON.stringify(payload);
+
       const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
-          text: payload.text || payload.prompt || payload.query || JSON.stringify(payload)
+          text: textoMensagem
         })
       });
       return await res.json().catch(() => ({ success: res.ok }));
     }
 
+    // --------------------------------------------------------------------------
+    // PADRÃO / CONECTORES HTTP GENÉRICOS / PROTOCOLO MCP
+    // --------------------------------------------------------------------------
     default: {
       const endpoint = payload.endpoint || config.endpoint_url;
       if (!endpoint) {
@@ -627,7 +786,7 @@ export async function executeExternalConnector({
       }
 
       const queryVal = String(payload.query || payload.prompt || '').trim();
-      const symbolVal = extractCleanTicker(payload.symbol || queryVal);
+      const symbolVal = extrairTickerLimpo(payload.symbol || queryVal);
       const finalUrl = endpoint
         .replace(/\{\{\s*symbol\s*\}\}/gi, encodeURIComponent(symbolVal))
         .replace(/\{\{\s*query\s*\}\}/gi, encodeURIComponent(queryVal));
@@ -652,65 +811,98 @@ export async function executeExternalConnector({
 }
 
 /**
- * Adaptador universal compatível com ambas as chamadas:
- * - executeNodeIntegration(agentOrSlug, payload)
- * - executeProtocolOrIntegration(providerKey, options)
+ * Adaptador universal compatível com chamadas de 1 ou 2 parâmetros:
+ * - executarIntegracaoNo(agenteOuSlug, carga)
+ * - executarProtocoloOuIntegracao(chaveProvedor, opcoes)
  */
-export async function executeNodeIntegration(
-  agentOrSlug: any,
-  payload: Record<string, any> = {}
+export async function executarIntegracaoNo(
+  agenteOuSlug: any,
+  carga: Record<string, any> = {}
 ): Promise<any> {
-  const flatPayload = {
-    ...(typeof payload.body === 'object' && payload.body !== null ? payload.body : {}),
-    ...payload
+  const cargaNormalizada = {
+    ...(typeof carga.body === 'object' && carga.body !== null ? carga.body : {}),
+    ...carga
   };
 
-  if (typeof agentOrSlug === 'string') {
-    return executeExternalConnector({
-      providerKey: agentOrSlug,
-      action: flatPayload.action || 'execute',
-      payload: flatPayload
+  if (typeof agenteOuSlug === 'string') {
+    return executarConectorExterno({
+      providerKey: agenteOuSlug,
+      action: cargaNormalizada.action || 'execute',
+      payload: cargaNormalizada
     });
   }
 
-  const slug = sanitizeKey(agentOrSlug?.slug || agentOrSlug?.provider || '');
-  const endpoint = (flatPayload.endpoint || agentOrSlug?.endpoint_url || '').trim();
+  const slug = sanitizarChave(agenteOuSlug?.slug || agenteOuSlug?.provider || '');
+  const endpoint = (cargaNormalizada.endpoint || agenteOuSlug?.endpoint_url || '').trim();
 
-  return executeExternalConnector({
+  return executarConectorExterno({
     providerKey: slug || 'custom',
-    action: flatPayload.action || 'execute',
+    action: cargaNormalizada.action || 'execute',
     payload: {
-      ...flatPayload,
+      ...cargaNormalizada,
       endpoint: endpoint || undefined,
-      auth_token: agentOrSlug?.auth_token || agentOrSlug?.api_key || undefined
+      auth_token: agenteOuSlug?.auth_token || agenteOuSlug?.api_key || undefined
     }
   });
 }
 
-export async function executeProtocolOrIntegration(
-  arg1: string | IntegrationRequestPayload,
+export async function executarProtocoloOuIntegracao(
+  arg1: string | CargaRequisicaoIntegracao,
   arg2?: any
 ): Promise<any> {
   if (typeof arg1 === 'string') {
-    const rawAction = arg2?.action || arg2?.body?.action || (arg1.includes('gmail') ? 'read_inbox' : 'execute');
-    const flatPayload = {
+    const acaoBruta =
+      arg2?.action || arg2?.body?.action || (arg1.includes('gmail') ? 'read_inbox' : 'execute');
+    const cargaNormalizada = {
       ...(typeof arg2?.body === 'object' ? arg2.body : {}),
       ...(typeof arg2 === 'object' ? arg2 : {})
     };
-    return executeExternalConnector({
+    return executarConectorExterno({
       providerKey: arg1,
-      action: rawAction,
-      payload: flatPayload
+      action: acaoBruta,
+      payload: cargaNormalizada
     });
   }
-  return executeExternalConnector(arg1);
+  return executarConectorExterno(arg1);
 }
 
+/**
+ * Agendador determinístico de compromissos no Google Calendar
+ */
+export async function agendarCalendarioGoogle(carga: any = {}, env: any = {}) {
+  const acao = carga.action || 'create_event';
+  return executarConectorExterno({
+    providerKey: 'google_calendar',
+    action: acao,
+    payload: carga
+  });
+}
+
+// ============================================================================
+// ALIASES DE RETROCOMPATIBILIDADE (Garante que outros arquivos continuem funcionando)
+// ============================================================================
+export const executeExternalConnector = executarConectorExterno;
+export const executeNodeIntegration = executarIntegracaoNo;
+export const executeProtocolOrIntegration = executarProtocoloOuIntegracao;
+export const getConnectorConfig = obterConfiguracaoConector;
+export const getGoogleAccessToken = obterTokenAcessoGoogle;
+export const extractCleanTicker = extrairTickerLimpo;
+export const scheduleCalendarHandler = agendarCalendarioGoogle;
+
 export default {
+  executarConectorExterno,
+  executarIntegracaoNo,
+  executarProtocoloOuIntegracao,
+  obterConfiguracaoConector,
+  obterTokenAcessoGoogle,
+  extrairTickerLimpo,
+  agendarCalendarioGoogle,
+  // Nomes legados:
   executeExternalConnector,
   executeNodeIntegration,
   executeProtocolOrIntegration,
   getConnectorConfig,
   getGoogleAccessToken,
-  extractCleanTicker
+  extractCleanTicker,
+  scheduleCalendarHandler
 };
