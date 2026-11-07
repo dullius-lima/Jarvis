@@ -1044,7 +1044,13 @@ async function saveBrainSettings() {
   try {
     const prov = brainSettings.value.provider.toLowerCase();
     if (!brainSettings.value.saved_keys) brainSettings.value.saved_keys = {};
-    if (brainSettings.value.api_key) {
+    
+    // Garante que o modelo do select seja repassado fielmente
+    if (selectedBrainModelOption.value && selectedBrainModelOption.value !== 'CUSTOM_INPUT') {
+      brainSettings.value.model = selectedBrainModelOption.value;
+    }
+
+    if (brainSettings.value.api_key && !/[•*]/.test(brainSettings.value.api_key)) {
       brainSettings.value.saved_keys[prov] = brainSettings.value.api_key;
     }
 
@@ -1067,6 +1073,7 @@ async function saveBrainSettings() {
     isSavingBrain.value = false;
   }
 }
+
 
 // =========================================================
 // GESTÃO DE AGENTES ESPECIALISTAS & TOOLS
