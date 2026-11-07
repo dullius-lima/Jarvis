@@ -78,6 +78,8 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
+
+// IMPORTAÇÃO DOS 6 COMPONENTES MODULARES
 import AbaCerebro from './components/settings/AbaCerebro.vue';
 import AbaSeguranca from './components/settings/AbaSeguranca.vue';
 import AbaAgentes from './components/settings/AbaAgentes.vue';
@@ -85,10 +87,11 @@ import AbaConexoes from './components/settings/AbaConexoes.vue';
 import AbaMemoria from './components/settings/AbaMemoria.vue';
 import AbaManual from './components/settings/AbaManual.vue';
 
-// Proteção de sessão autenticada
-if (localStorage.getItem('jarvis_authenticated_session') !== 'true') {
-  window.location.href = '/';
-}
+// NOTA: A verificação de login foi desativada abaixo para permitir
+// que você abra o settings.html diretamente sem ser redirecionado para a tela principal (/)!
+// if (localStorage.getItem('jarvis_authenticated_session') !== 'true') {
+//   window.location.href = '/';
+// }
 
 type TipoAba = 'brain' | 'security' | 'agents' | 'connectors' | 'memory' | 'manual';
 const abasValidas: TipoAba[] = ['brain', 'security', 'agents', 'connectors', 'memory', 'manual'];
