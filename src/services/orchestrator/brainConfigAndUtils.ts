@@ -183,29 +183,43 @@ export function sanitizeRawApiKey(rawKey?: string): string {
   return cleaned;
 }
 
+function cleanKey(rawKey?: any): string {
+  if (!rawKey) return '';
+  let k = String(rawKey)
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^["']+|["']+$/g, '')
+    .replace(/[•*]/g, '')
+    .trim();
+
+  if (!k || k === 'undefined' || k === 'null' || k.length < 5) {
+    return '';
+  }
+
+  if (/^gsk_/i.test(k)) k = 'gsk_' + k.slice(4);
+  else if (/^aiza/i.test(k)) k = 'AIza' + k.slice(4);
+  else if (/^sk-or-/i.test(k)) k = 'sk-or-' + k.slice(6);
+
+  return k;
+}
+
 export function resolveProviderCredentials(
   provider?: string,
   customKey?: string,
   customUrl?: string,
   customModel?: string
 ) {
-  let apiKey = sanitizeRawApiKey(customKey);
   let p = (provider || process.env.LLM_PROVIDER || 'groq').toLowerCase().trim();
+  let apiKey = cleanKey(customKey);
 
-  // Detecta provedor pelo prefixo real da chave se presente
-  if (apiKey.startsWith('gsk_')) p = 'groq';
-  else if (apiKey.startsWith('AIza')) p = 'gemini';
-  else if (apiKey.startsWith('sk-or-')) p = 'openrouter';
-
-  // Fallback para variáveis de ambiente se a chave estiver vazia ou era máscara
   if (!apiKey) {
-    if (p === 'groq') apiKey = sanitizeRawApiKey(process.env.GROQ_API_KEY || process.env.LLM_API_KEY);
-    else if (p === 'openai') apiKey = sanitizeRawApiKey(process.env.OPENAI_API_KEY || process.env.LLM_API_KEY);
-    else if (p === 'gemini') apiKey = sanitizeRawApiKey(process.env.GEMINI_API_KEY || process.env.LLM_API_KEY);
-    else if (p === 'deepseek') apiKey = sanitizeRawApiKey(process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY);
-    else if (p === 'openrouter') apiKey = sanitizeRawApiKey(process.env.OPENROUTER_API_KEY || process.env.LLM_API_KEY);
+    if (p === 'groq') apiKey = cleanKey(process.env.GROQ_API_KEY || process.env.LLM_API_KEY);
+    else if (p === 'openai') apiKey = cleanKey(process.env.OPENAI_API_KEY || process.env.LLM_API_KEY);
+    else if (p === 'gemini') apiKey = cleanKey(process.env.GEMINI_API_KEY || process.env.LLM_API_KEY);
+    else if (p === 'deepseek') apiKey = cleanKey(process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY);
+    else if (p === 'openrouter') apiKey = cleanKey(process.env.OPENROUTER_API_KEY || process.env.LLM_API_KEY);
     else if (p === 'ollama') apiKey = 'ollama';
-    else apiKey = sanitizeRawApiKey(process.env.GROQ_API_KEY || process.env.LLM_API_KEY);
+    else apiKey = cleanKey(process.env.LLM_API_KEY || process.env.GROQ_API_KEY);
   }
 
   if (apiKey.startsWith('gsk_')) p = 'groq';
@@ -214,50 +228,18 @@ export function resolveProviderCredentials(
 
   const endpoints = { ...DEFAULT_KNOWN_ENDPOINTS, ...(KNOWN_ENDPOINTS || {}) };
   let baseURL = (customUrl && customUrl.trim()) || endpoints[p] || endpoints.groq;
-
-  if (p === 'groq' && !baseURL.includes('groq.com')) baseURL = endpoints.groq;
-  else if (p === 'gemini' && !baseURL.includes('googleapis.com')) baseURL = endpoints.gemini;
-  else if (p === 'openrouter' && !baseURL.includes('openrouter.ai')) baseURL = endpoints.openrouter;
-  else if (p === 'deepseek' && !baseURL.includes('deepseek.com')) baseURL = endpoints.deepseek;
-  else if (p === 'openai' && !baseURL.includes('openai.com')) baseURL = endpoints.openai;
-
   baseURL = baseURL.replace(/\/+$/, '');
 
-  const defaultModels: Record<string, string> = {
-    groq: 'llama-3.3-70b-versatile',
-    gemini: 'gemini-2.5-flash',
-    openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
-    deepseek: 'deepseek-chat',
-    openai: 'gpt-4o-mini',
-    ollama: 'llama3.1:8b'
-  };
-
-  let model =
-    customModel && customModel.trim() && customModel !== 'CUSTOM_INPUT'
-      ? customModel.trim()
-      : defaultModels[p] || 'llama-3.3-70b-versatile';
+  let model = customModel && customModel.trim() && customModel !== 'CUSTOM_INPUT'
+    ? customModel.trim()
+    : p === 'groq'
+    ? 'llama-3.3-70b-versatile'
+    : 'gpt-4o-mini';
 
   if (p === 'groq') {
-    if (
-      model.includes('gemini') ||
-      model.startsWith('gpt-4') ||
-      model.startsWith('claude') ||
-      model.includes(':free') ||
-      model.includes('gpt-oss')
-    ) {
+    if (!model || model.includes('8b-instant') || model.includes('deepseek-r1')) {
       model = 'llama-3.3-70b-versatile';
     }
-  } else if (
-    p === 'gemini' &&
-    (!model.startsWith('gemini') || model.includes('argon') || model.includes('3.8'))
-  ) {
-    model = 'gemini-2.5-flash';
-  } else if (p === 'openrouter' && (model === 'llama-3.3-70b-versatile' || model === 'llama-3.1-8b-instant')) {
-    model = 'meta-llama/llama-3.3-70b-instruct:free';
-  } else if (p === 'deepseek' && !model.startsWith('deepseek')) {
-    model = 'deepseek-chat';
-  } else if (p === 'openai' && !model.startsWith('gpt') && !model.startsWith('o1') && !model.startsWith('o3')) {
-    model = 'gpt-4o-mini';
   }
 
   return { provider: p, apiKey: apiKey || 'ollama', baseURL, model };
@@ -266,10 +248,7 @@ export function resolveProviderCredentials(
 export async function getCentralBrainConfig() {
   let activePort = 3333;
   try {
-    activePort =
-      typeof getEnvRegisteredPort === 'function'
-        ? getEnvRegisteredPort()
-        : Number(process.env.PORT || 3333);
+    activePort = typeof getEnvRegisteredPort === 'function' ? getEnvRegisteredPort() : Number(process.env.PORT || 3333);
   } catch {
     activePort = Number(process.env.PORT || 3333);
   }
@@ -277,7 +256,7 @@ export async function getCentralBrainConfig() {
   try {
     const result = await pool.query(`
       SELECT value FROM system_configs 
-      WHERE key IN ('brain_llm_config', 'brain_llm', 'brain_config') 
+      WHERE key IN ('brain_llm_config', 'brain_llm') 
       ORDER BY updated_at DESC LIMIT 1;
     `);
 
@@ -286,20 +265,21 @@ export async function getCentralBrainConfig() {
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
       if (parsed && typeof parsed === 'object') {
         const activeProv = String(parsed.provider || 'groq').toLowerCase().trim();
-        const savedKeysObj =
-          parsed.saved_keys && typeof parsed.saved_keys === 'object' ? parsed.saved_keys : {};
 
-        const cleanDirectKey = sanitizeRawApiKey(parsed.api_key);
-        const cleanVaultProvKey = sanitizeRawApiKey(savedKeysObj[activeProv]);
-        const cleanAnyVaultKey = Object.values(savedKeysObj)
-          .map((v: any) => sanitizeRawApiKey(v))
-          .find((v) => v.length > 8) || '';
+        // 1. Busca primeiro a chave real limpa no cofre do provedor
+        const vaultKey = cleanKey(parsed.saved_keys?.[activeProv]);
+        // 2. Se não estiver no cofre, verifica se a chave principal não é máscara
+        const mainKey = cleanKey(parsed.api_key);
+        // 3. Busca qualquer chave válida salva em outros provedores
+        const anyVaultKey = parsed.saved_keys
+          ? (Object.values(parsed.saved_keys).map(cleanKey).find((v) => v.length > 5) || '')
+          : '';
 
-        const keyFromVault = cleanDirectKey || cleanVaultProvKey || cleanAnyVaultKey;
+        const effectiveKey = vaultKey || mainKey || anyVaultKey || '';
 
         const creds = resolveProviderCredentials(
           activeProv,
-          keyFromVault,
+          effectiveKey,
           parsed.base_url,
           parsed.model
         );
@@ -310,15 +290,11 @@ export async function getCentralBrainConfig() {
           model: creds.model,
           api_key: creds.apiKey,
           base_url: creds.baseURL,
-          saved_keys: savedKeysObj,
-          server_base_url:
-            parsed.server_base_url ||
-            process.env.SERVER_BASE_URL ||
-            `http://localhost:${activePort}`,
+          server_base_url: parsed.server_base_url || process.env.SERVER_BASE_URL || `http://localhost:${activePort}`,
           temperature: Number(parsed.temperature ?? 0.2),
           system_prompt:
             parsed.system_prompt ||
-            'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema. Analise os estímulos, consulte a memória, crie ou evolua Agentes/Tools economizando tokens e acione os Agentes Especialistas.'
+            'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema.'
         };
       }
     }
@@ -328,7 +304,7 @@ export async function getCentralBrainConfig() {
 
   const creds = resolveProviderCredentials(
     process.env.LLM_PROVIDER || 'groq',
-    process.env.GROQ_API_KEY || process.env.LLM_API_KEY || '',
+    process.env.LLM_API_KEY || process.env.GROQ_API_KEY || '',
     process.env.LLM_BASE_URL,
     process.env.LLM_MODEL
   );
@@ -339,7 +315,6 @@ export async function getCentralBrainConfig() {
     model: creds.model,
     api_key: creds.apiKey,
     base_url: creds.baseURL,
-    saved_keys: {},
     server_base_url: process.env.SERVER_BASE_URL || `http://localhost:${activePort}`,
     temperature: 0.2,
     system_prompt: 'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema.'
