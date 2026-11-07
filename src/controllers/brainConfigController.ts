@@ -1,3 +1,4 @@
+// src/controllers/brainConfigController.ts
 import { Request, Response } from 'express';
 import { pool } from '../config/database.js';
 import fs from 'fs';
@@ -25,8 +26,8 @@ export const DEFAULT_MODELS: Record<string, string> = {
 export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string }>> = {
   groq: [
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
-    { label: 'Llama 3.3 70B Versatile (Free Tier)', value: 'llama-3.3-70b-versatile' },
-    { label: 'Llama 3.1 8B Instant (Free Tier)', value: 'llama-3.1-8b-instant' },
+    { label: 'Llama 3.3 70B Versatile (Free Tier Recomendado)', value: 'llama-3.3-70b-versatile' },
+    { label: 'Llama 3.1 8B Instant (Free Tier Ultra-Rápido)', value: 'llama-3.1-8b-instant' },
     { label: 'DeepSeek R1 Distill Llama 70B (Free Tier)', value: 'deepseek-r1-distill-llama-70b' },
     { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' }
   ],
@@ -87,20 +88,55 @@ async function ensureSystemConfigsTable() {
   `);
 }
 
+function cleanAndNormalizeApiKey(rawKey?: string): string {
+  if (!rawKey) return '';
+  let k = String(rawKey)
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^["']+|["']+$/g, '')
+    .trim();
+
+  // Descarta máscaras de interface (•••• ou ****)
+  if (!k || /[•*]/.test(k) || k === 'undefined' || k === 'null') {
+    return '';
+  }
+
+  // Normaliza prefixos caso o teclado do celular coloque a 1ª letra maiúscula
+  if (/^gsk_/i.test(k)) k = 'gsk_' + k.slice(4);
+  else if (/^aiza/i.test(k)) k = 'AIza' + k.slice(4);
+  else if (/^sk-or-/i.test(k)) k = 'sk-or-' + k.slice(6);
+
+  return k;
+}
+
+function getEnvKeyForProvider(provider: string): string {
+  const p = (provider || 'groq').toLowerCase().trim();
+  if (p === 'groq') return cleanAndNormalizeApiKey(process.env.GROQ_API_KEY || process.env.LLM_API_KEY);
+  if (p === 'gemini') return cleanAndNormalizeApiKey(process.env.GEMINI_API_KEY || process.env.LLM_API_KEY);
+  if (p === 'openrouter') return cleanAndNormalizeApiKey(process.env.OPENROUTER_API_KEY || process.env.LLM_API_KEY);
+  if (p === 'deepseek') return cleanAndNormalizeApiKey(process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY);
+  if (p === 'openai') return cleanAndNormalizeApiKey(process.env.OPENAI_API_KEY || process.env.LLM_API_KEY);
+  return '';
+}
+
 function detectProviderFromKeyAndInput(rawProvider: string, apiKey: string, baseUrl?: string): string {
-  const cleanKey = (apiKey || '').trim();
+  const cleanKey = cleanAndNormalizeApiKey(apiKey);
   const cleanUrl = (baseUrl || '').toLowerCase().trim();
 
   if (cleanKey.startsWith('gsk_')) return 'groq';
   if (cleanKey.startsWith('AIza')) return 'gemini';
   if (cleanKey.startsWith('sk-or-')) return 'openrouter';
 
+  if (rawProvider && rawProvider.trim()) {
+    return rawProvider.toLowerCase().trim();
+  }
+
   if (cleanUrl.includes('openrouter.ai')) return 'openrouter';
   if (cleanUrl.includes('generativelanguage.googleapis.com')) return 'gemini';
   if (cleanUrl.includes('api.groq.com')) return 'groq';
   if (cleanUrl.includes('api.deepseek.com')) return 'deepseek';
 
-  return (rawProvider || 'groq').toLowerCase().trim();
+  return 'groq';
 }
 
 function sanitizeModelForProvider(provider: string, rawModel?: string): string {
@@ -117,7 +153,15 @@ function sanitizeModelForProvider(provider: string, rawModel?: string): string {
   }
 
   if (provider === 'groq') {
-    if (m.startsWith('gemini') || m.startsWith('gpt-4') || m.startsWith('claude') || m.includes(':free')) {
+    if (
+      m.startsWith('gemini') ||
+      m.startsWith('gpt-4') ||
+      m.startsWith('claude') ||
+      m.includes(':free') ||
+      m.includes('gpt-oss') ||
+      m.includes('mixtral') ||
+      m.includes('gemma2')
+    ) {
       return DEFAULT_MODELS.groq;
     }
     return m;
@@ -166,7 +210,6 @@ function normalizeModelsCatalog(rawCatalog: any): Record<string, Array<{ label: 
       for (const item of list) {
         if (!item || typeof item !== 'object' || !item.value) continue;
         const cleanVal = String(item.value).replace(/^models\//, '').trim();
-        // Ignora modelos fictícios de teste que quebram a validação
         if (cleanVal === 'gemini-3.8-flash' || cleanVal === 'gemini-4-argon') continue;
 
         if (!existingValues.has(cleanVal)) {
@@ -244,17 +287,18 @@ export async function getBrainConfig(_req: Request, res: Response) {
 
     if (result.rows.length === 0) {
       const defaultProvider = (process.env.LLM_PROVIDER || 'groq').toLowerCase();
+      const envKey = getEnvKeyForProvider(defaultProvider);
       const fallbackConfig = {
         agent_name: 'JARVIS',
         provider: defaultProvider,
         model: sanitizeModelForProvider(defaultProvider, process.env.LLM_MODEL),
-        api_key: process.env.LLM_API_KEY || '',
+        api_key: envKey,
         base_url: process.env.LLM_BASE_URL || KNOWN_ENDPOINTS[defaultProvider] || KNOWN_ENDPOINTS.groq,
         temperature: 0.2,
         server_base_url: process.env.SERVER_BASE_URL || `http://localhost:${activePort}`,
         system_prompt:
           'Você é o JARVIS, o Cérebro Central e Agente Líder permanente do sistema. Analise os estímulos, consulte a memória e acione os Agentes Especialistas quando necessário.',
-        saved_keys: {}
+        saved_keys: envKey ? { [defaultProvider]: envKey } : {}
       };
 
       await pool.query(
@@ -267,11 +311,29 @@ export async function getBrainConfig(_req: Request, res: Response) {
 
     const raw = result.rows[0].value;
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    const savedKeys = parsed.saved_keys && typeof parsed.saved_keys === 'object' ? parsed.saved_keys : {};
-    const provider = detectProviderFromKeyAndInput(parsed.provider || 'groq', parsed.api_key || '', parsed.base_url);
+    const rawSavedKeys = parsed.saved_keys && typeof parsed.saved_keys === 'object' ? parsed.saved_keys : {};
+    const savedKeys: Record<string, string> = {};
 
-    if (parsed.api_key && !savedKeys[provider]) {
-      savedKeys[provider] = parsed.api_key;
+    for (const [k, v] of Object.entries(rawSavedKeys)) {
+      const cleaned = cleanAndNormalizeApiKey(String(v || ''));
+      if (cleaned) savedKeys[k.toLowerCase()] = cleaned;
+    }
+
+    const cleanActiveKey = cleanAndNormalizeApiKey(parsed.api_key);
+    const provider = detectProviderFromKeyAndInput(parsed.provider || 'groq', cleanActiveKey, parsed.base_url);
+
+    if (cleanActiveKey && !savedKeys[provider]) {
+      savedKeys[provider] = cleanActiveKey;
+    }
+
+    const effectiveKey =
+      savedKeys[provider] ||
+      cleanActiveKey ||
+      getEnvKeyForProvider(provider) ||
+      '';
+
+    if (effectiveKey) {
+      savedKeys[provider] = effectiveKey;
     }
 
     return res.status(200).json({
@@ -280,7 +342,7 @@ export async function getBrainConfig(_req: Request, res: Response) {
         agent_name: parsed.agent_name || parsed.name || 'JARVIS',
         provider,
         model: sanitizeModelForProvider(provider, parsed.model),
-        api_key: parsed.api_key || savedKeys[provider] || '',
+        api_key: effectiveKey,
         base_url: KNOWN_ENDPOINTS[provider] || parsed.base_url || KNOWN_ENDPOINTS.groq,
         temperature: Number(parsed.temperature ?? 0.2),
         server_base_url: parsed.server_base_url || `http://localhost:${activePort}`,
@@ -298,7 +360,7 @@ export async function getBrainConfig(_req: Request, res: Response) {
         agent_name: 'JARVIS',
         provider: 'groq',
         model: 'llama-3.3-70b-versatile',
-        api_key: '',
+        api_key: getEnvKeyForProvider('groq'),
         base_url: KNOWN_ENDPOINTS.groq,
         temperature: 0.2,
         server_base_url: `http://localhost:${activePort}`,
@@ -326,26 +388,45 @@ export async function updateBrainConfig(req: Request, res: Response) {
       saved_keys
     } = req.body || {};
 
-    const cleanApiKey = (api_key ?? '').trim();
+    const cleanApiKey = cleanAndNormalizeApiKey(api_key);
     const normalizedProvider = detectProviderFromKeyAndInput(provider || 'groq', cleanApiKey, base_url);
 
-    const existingRes = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_llm_config';");
+    const existingRes = await pool.query(`
+      SELECT value FROM system_configs
+      WHERE key IN ('brain_llm_config', 'brain_llm', 'brain_config')
+      ORDER BY updated_at DESC LIMIT 1;
+    `);
     let existingData: any = {};
     if (existingRes.rows.length > 0) {
       const raw = existingRes.rows[0].value;
       existingData = typeof raw === 'string' ? JSON.parse(raw) : raw;
     }
 
-    const mergedKeys: Record<string, string> = {
-      ...(existingData.saved_keys || {}),
-      ...(saved_keys || {})
-    };
+    const mergedKeys: Record<string, string> = {};
+    for (const [k, v] of Object.entries({ ...(existingData.saved_keys || {}), ...(saved_keys || {}) })) {
+      const cleaned = cleanAndNormalizeApiKey(String(v || ''));
+      if (cleaned) mergedKeys[k.toLowerCase()] = cleaned;
+    }
+
+    const prevMainKey = cleanAndNormalizeApiKey(existingData.api_key);
+    if (prevMainKey && existingData.provider) {
+      const prevProv = String(existingData.provider).toLowerCase();
+      if (!mergedKeys[prevProv]) mergedKeys[prevProv] = prevMainKey;
+    }
 
     if (cleanApiKey) {
       mergedKeys[normalizedProvider] = cleanApiKey;
     }
 
-    const finalApiKey = cleanApiKey || mergedKeys[normalizedProvider] || '';
+    const finalApiKey =
+      cleanApiKey ||
+      mergedKeys[normalizedProvider] ||
+      getEnvKeyForProvider(normalizedProvider) ||
+      '';
+
+    if (finalApiKey) {
+      mergedKeys[normalizedProvider] = finalApiKey;
+    }
 
     const isKnownOtherEndpoint = Object.entries(KNOWN_ENDPOINTS).some(
       ([k, url]) => k !== normalizedProvider && base_url?.trim().replace(/\/+$/, '') === url.replace(/\/+$/, '')
@@ -372,13 +453,39 @@ export async function updateBrainConfig(req: Request, res: Response) {
       saved_keys: mergedKeys
     };
 
-    await pool.query(
-      `INSERT INTO system_configs (key, value, updated_at)
-       VALUES ('brain_llm_config', $1, NOW())
-       ON CONFLICT (key) DO UPDATE
-       SET value = EXCLUDED.value, updated_at = NOW();`,
-      [JSON.stringify(newConfig)]
-    );
+    const serializedConfig = JSON.stringify(newConfig);
+
+    // Sincroniza todas as chaves de configuração no banco para evitar leituras divergentes
+    for (const cfgKey of ['brain_llm_config', 'brain_config', 'brain_llm']) {
+      await pool.query(
+        `INSERT INTO system_configs (key, value, updated_at)
+         VALUES ($1, $2::jsonb, NOW())
+         ON CONFLICT (key) DO UPDATE
+         SET value = EXCLUDED.value, updated_at = NOW();`,
+        [cfgKey, serializedConfig]
+      );
+    }
+
+    // Se o provedor for groq e houver chave válida, sincroniza também no arquivo .env local
+    if (normalizedProvider === 'groq' && finalApiKey.startsWith('gsk_')) {
+      try {
+        const envPath = path.resolve(process.cwd(), '.env');
+        if (fs.existsSync(envPath)) {
+          let envContent = fs.readFileSync(envPath, 'utf-8');
+          process.env.GROQ_API_KEY = finalApiKey;
+          process.env.LLM_API_KEY = finalApiKey;
+          if (/^GROQ_API_KEY=/m.test(envContent)) {
+            envContent = envContent.replace(/^GROQ_API_KEY=.*$/m, `GROQ_API_KEY=${finalApiKey}`);
+          } else {
+            envContent += `\nGROQ_API_KEY=${finalApiKey}\n`;
+          }
+          if (/^LLM_API_KEY=/m.test(envContent)) {
+            envContent = envContent.replace(/^LLM_API_KEY=.*$/m, `LLM_API_KEY=${finalApiKey}`);
+          }
+          fs.writeFileSync(envPath, envContent, 'utf-8');
+        }
+      } catch {}
+    }
 
     try {
       const historyRes = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_prompt_versions';");
@@ -392,7 +499,7 @@ export async function updateBrainConfig(req: Request, res: Response) {
       });
       await pool.query(
         `INSERT INTO system_configs (key, value, updated_at)
-         VALUES ('brain_prompt_versions', $1, NOW())
+         VALUES ('brain_prompt_versions', $1::jsonb, NOW())
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
         [JSON.stringify(versions.slice(0, 20))]
       );
@@ -412,19 +519,43 @@ export async function updateBrainConfig(req: Request, res: Response) {
 export async function validateLLMConnection(req: Request, res: Response) {
   try {
     const { provider = 'groq', model, api_key, base_url } = req.body || {};
-    const cleanKey = api_key ? String(api_key).trim() : '';
+    let cleanKey = cleanAndNormalizeApiKey(api_key);
     const effectiveProvider = detectProviderFromKeyAndInput(provider, cleanKey, base_url);
+
+    // Se a chave veio vazia ou mascarada (••••), busca no cofre salvo no PostgreSQL ou no .env
+    if (!cleanKey && effectiveProvider !== 'ollama') {
+      try {
+        const dbRes = await pool.query(`
+          SELECT value FROM system_configs
+          WHERE key IN ('brain_llm_config', 'brain_llm', 'brain_config')
+          ORDER BY updated_at DESC LIMIT 1;
+        `);
+        if (dbRes.rows.length > 0) {
+          const parsed = typeof dbRes.rows[0].value === 'string' ? JSON.parse(dbRes.rows[0].value) : dbRes.rows[0].value;
+          const vaultKey = cleanAndNormalizeApiKey(parsed?.saved_keys?.[effectiveProvider]);
+          const mainKey =
+            String(parsed?.provider || '').toLowerCase() === effectiveProvider
+              ? cleanAndNormalizeApiKey(parsed?.api_key)
+              : '';
+          cleanKey = vaultKey || mainKey;
+        }
+      } catch {}
+
+      if (!cleanKey) {
+        cleanKey = getEnvKeyForProvider(effectiveProvider);
+      }
+    }
 
     if (!cleanKey && effectiveProvider !== 'ollama') {
       return res.status(200).json({
         success: false,
-        error: `A Chave de API (API Key) para ${effectiveProvider.toUpperCase()} não foi informada.`
+        error: `A Chave de API (API Key) para ${effectiveProvider.toUpperCase()} não foi informada ou estava mascarada.`
       });
     }
 
     const selectedModel = sanitizeModelForProvider(effectiveProvider, model);
 
-    // 1. VALIDAÇÃO GOOGLE GEMINI (Suporte total ao Free Tier do Google AI Studio)
+    // 1. VALIDAÇÃO GOOGLE GEMINI (Free Tier AI Studio)
     if (effectiveProvider === 'gemini') {
       const candidateModels = Array.from(
         new Set([
@@ -501,7 +632,7 @@ export async function validateLLMConnection(req: Request, res: Response) {
           provider: 'gemini',
           model: 'gemini-2.0-flash',
           usedModel: 'gemini-2.0-flash',
-          message: 'Chave Google Gemini autenticada com sucesso (modelos em alta demanda momentânea, fallback gemini-2.0-flash vinculado)!'
+          message: 'Chave Google Gemini autenticada com sucesso (fallback gemini-2.0-flash vinculado)!'
         });
       }
 
@@ -516,13 +647,18 @@ export async function validateLLMConnection(req: Request, res: Response) {
       ([k, url]) => k !== effectiveProvider && base_url?.trim().replace(/\/+$/, '') === url.replace(/\/+$/, '')
     );
     const targetBaseUrl = (
-      !base_url?.trim() || isOtherKnown
+      !base_url?.trim() || isOtherKnown || effectiveProvider === 'groq'
         ? KNOWN_ENDPOINTS[effectiveProvider] || KNOWN_ENDPOINTS.groq
         : base_url.trim()
     ).replace(/\/+$/, '');
 
     const fallbackMap: Record<string, string[]> = {
-      groq: [selectedModel, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+      groq: [
+        selectedModel,
+        'llama-3.3-70b-versatile',
+        'llama-3.1-8b-instant',
+        'deepseek-r1-distill-llama-70b'
+      ],
       openrouter: [
         selectedModel,
         'meta-llama/llama-3.3-70b-instruct:free',
@@ -538,10 +674,39 @@ export async function validateLLMConnection(req: Request, res: Response) {
 
     const candidateModels = Array.from(new Set(fallbackMap[effectiveProvider] || [selectedModel]));
 
+    // Auto-Discovery via /models na Groq para garantir que a chave e os modelos ativos da conta funcionem
+    if (effectiveProvider === 'groq') {
+      try {
+        const groqModelsResp = await fetch(`${targetBaseUrl}/models`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${cleanKey}` },
+          signal: AbortSignal.timeout(8000)
+        });
+        if (groqModelsResp.status === 401) {
+          return res.status(200).json({
+            success: false,
+            error: 'Chave da Groq rejeitada (401 Invalid API Key). Verifique se a chave começa com gsk_ e se está ativa em console.groq.com/keys.'
+          });
+        }
+        if (groqModelsResp.ok) {
+          const groqModelsJson: any = await groqModelsResp.json();
+          const activeGroqIds: string[] = (groqModelsJson?.data || [])
+            .map((m: any) => String(m.id || ''))
+            .filter((id: string) => id && !id.includes('whisper') && !id.includes('guard') && !id.includes('tts'));
+          for (const id of activeGroqIds) {
+            if (!candidateModels.includes(id)) {
+              candidateModels.push(id);
+            }
+          }
+        }
+      } catch {}
+    }
+
     let firstErrorMsg = '';
     let lastStatus = 0;
 
     for (const candidate of candidateModels) {
+      if (!candidate) continue;
       const resp = await fetch(`${targetBaseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -575,12 +740,9 @@ export async function validateLLMConnection(req: Request, res: Response) {
         firstErrorMsg = `HTTP ${resp.status}: ${errText.slice(0, 220)}`;
       }
 
-      // Se a chave for 401 Unauthorized, não adianta testar outros modelos
       if (resp.status === 401) break;
     }
 
-    // Se retornou 402 (Payment Required) ou 429 (Insufficient Quota) na OpenAI/DeepSeek,
-    // verifica na rota /models se a chave é autêntica porém sem saldo pré-pago
     if ((lastStatus === 402 || lastStatus === 429) && (effectiveProvider === 'openai' || effectiveProvider === 'deepseek')) {
       try {
         const modelsCheck = await fetch(`${targetBaseUrl}/models`, {
@@ -591,7 +753,7 @@ export async function validateLLMConnection(req: Request, res: Response) {
         if (modelsCheck.ok) {
           return res.status(200).json({
             success: false,
-            error: `A sua chave da ${effectiveProvider.toUpperCase()} é válida, mas a conta não possui saldo de créditos (HTTP ${lastStatus}). A API oficial da ${effectiveProvider.toUpperCase()} não possui camada gratuita direta — para usar modelos gratuitamente, utilize chaves do Google Gemini (AI Studio), Groq ou OpenRouter (:free).`
+            error: `A sua chave da ${effectiveProvider.toUpperCase()} é válida, mas a conta não possui saldo de créditos (HTTP ${lastStatus}). Para usar modelos gratuitamente, utilize chaves da Groq, Google Gemini (AI Studio) ou OpenRouter (:free).`
           });
         }
       } catch {}
