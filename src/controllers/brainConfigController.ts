@@ -4,6 +4,7 @@ import { pool } from '../config/database.js';
 import fs from 'fs';
 import path from 'path';
 import net from 'net';
+import OpenAI from 'openai';
 
 export const KNOWN_ENDPOINTS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
@@ -88,20 +89,24 @@ async function ensureSystemConfigsTable() {
   `);
 }
 
-function cleanAndNormalizeApiKey(rawKey?: string): string {
+/**
+ * Higieniza a chave: remove resíduos de máscara ('•' e '*'), espaços invisíveis
+ * e normaliza prefixos colocados com maiúsculas por teclados mobile.
+ */
+function cleanAndNormalizeApiKey(rawKey?: any): string {
   if (!rawKey) return '';
   let k = String(rawKey)
     .trim()
     .replace(/^Bearer\s+/i, '')
     .replace(/^["']+|["']+$/g, '')
+    .replace(/[•*]/g, '') // Remove caracteres de máscara colados por acidente
     .trim();
 
-  // Descarta máscaras de interface (•••• ou ****)
-  if (!k || /[•*]/.test(k) || k === 'undefined' || k === 'null') {
+  if (!k || k === 'undefined' || k === 'null' || k.length < 5) {
     return '';
   }
 
-  // Normaliza prefixos caso o teclado do celular coloque a 1ª letra maiúscula
+  // Normalização de prefixos mobile
   if (/^gsk_/i.test(k)) k = 'gsk_' + k.slice(4);
   else if (/^aiza/i.test(k)) k = 'AIza' + k.slice(4);
   else if (/^sk-or-/i.test(k)) k = 'sk-or-' + k.slice(6);
@@ -139,6 +144,9 @@ function detectProviderFromKeyAndInput(rawProvider: string, apiKey: string, base
   return 'groq';
 }
 
+/**
+ * Valida o modelo sem bloquear modelos homologados válidos (como openai/gpt-oss-120b na Groq)
+ */
 function sanitizeModelForProvider(provider: string, rawModel?: string): string {
   const m = (rawModel || '').trim().replace(/^models\//, '');
   if (!m || m === 'CUSTOM_INPUT') {
@@ -146,44 +154,22 @@ function sanitizeModelForProvider(provider: string, rawModel?: string): string {
   }
 
   if (provider === 'gemini') {
-    if (!m.startsWith('gemini') || m.includes('3.8') || m.includes('4-argon')) {
+    if (m.includes('3.8') || m.includes('4-argon')) {
       return DEFAULT_MODELS.gemini;
     }
     return m;
   }
 
   if (provider === 'groq') {
+    // Permite explicitamente gpt-oss-120b, llama, deepseek-r1 e modelos homologados da Groq
     if (
       m.startsWith('gemini') ||
-      m.startsWith('gpt-4') ||
       m.startsWith('claude') ||
       m.includes(':free') ||
-      m.includes('gpt-oss') ||
       m.includes('mixtral') ||
       m.includes('gemma2')
     ) {
       return DEFAULT_MODELS.groq;
-    }
-    return m;
-  }
-
-  if (provider === 'openrouter') {
-    if (m === 'llama-3.3-70b-versatile' || m === 'llama-3.1-8b-instant' || m.startsWith('gemini-')) {
-      return DEFAULT_MODELS.openrouter;
-    }
-    return m;
-  }
-
-  if (provider === 'deepseek') {
-    if (!m.startsWith('deepseek')) {
-      return DEFAULT_MODELS.deepseek;
-    }
-    return m;
-  }
-
-  if (provider === 'openai') {
-    if (!m.startsWith('gpt') && !m.startsWith('o1') && !m.startsWith('o3') && !m.startsWith('o4')) {
-      return DEFAULT_MODELS.openai;
     }
     return m;
   }
@@ -224,6 +210,52 @@ function normalizeModelsCatalog(rawCatalog: any): Record<string, Array<{ label: 
     }
   }
   return merged;
+}
+
+/**
+ * Atualiza o arquivo .env em disco para garantir sincronização contra reinícios do PM2
+ */
+function syncKeyToEnvFile(provider: string, apiKey: string, model: string, baseUrl: string) {
+  try {
+    const envPath = path.resolve(process.cwd(), '.env');
+    if (!fs.existsSync(envPath) || !apiKey) return;
+    let envContent = fs.readFileSync(envPath, 'utf8');
+
+    const upsertEnvVar = (key: string, val: string) => {
+      const regex = new RegExp(`^${key}=.*$`, 'm');
+      if (regex.test(envContent)) {
+        envContent = envContent.replace(regex, `${key}=${val}`);
+      } else {
+        envContent += `\n${key}=${val}`;
+      }
+    };
+
+    upsertEnvVar('LLM_PROVIDER', provider);
+    upsertEnvVar('LLM_MODEL', model);
+    upsertEnvVar('LLM_BASE_URL', baseUrl);
+    upsertEnvVar('LLM_API_KEY', apiKey);
+
+    const providerEnvMap: Record<string, string> = {
+      groq: 'GROQ_API_KEY',
+      openai: 'OPENAI_API_KEY',
+      gemini: 'GEMINI_API_KEY',
+      deepseek: 'DEEPSEEK_API_KEY',
+      openrouter: 'OPENROUTER_API_KEY'
+    };
+
+    const envVarName = providerEnvMap[provider];
+    if (envVarName) {
+      upsertEnvVar(envVarName, apiKey);
+      process.env[envVarName] = apiKey;
+    }
+    process.env.LLM_API_KEY = apiKey;
+    process.env.LLM_PROVIDER = provider;
+    process.env.LLM_MODEL = model;
+
+    fs.writeFileSync(envPath, envContent, 'utf8');
+  } catch (err: any) {
+    console.warn('⚠️ [BrainConfig] Aviso ao sincronizar .env:', err.message);
+  }
 }
 
 export async function syncModelsFromGistAndHealAgents(): Promise<{
@@ -297,7 +329,7 @@ export async function getBrainConfig(_req: Request, res: Response) {
         temperature: 0.2,
         server_base_url: process.env.SERVER_BASE_URL || `http://localhost:${activePort}`,
         system_prompt:
-          'Você é o JARVIS, o Cérebro Central e Agente Líder permanente do sistema. Analise os estímulos, consulte a memória e acione os Agentes Especialistas quando necessário.',
+          'Você é o JARVIS, o Cérebro Central e Agente Líder permanente do sistema.',
         saved_keys: envKey ? { [defaultProvider]: envKey } : {}
       };
 
@@ -414,6 +446,7 @@ export async function updateBrainConfig(req: Request, res: Response) {
       if (!mergedKeys[prevProv]) mergedKeys[prevProv] = prevMainKey;
     }
 
+    // Se uma chave nova limpa foi enviada, ela ganha prioridade
     if (cleanApiKey) {
       mergedKeys[normalizedProvider] = cleanApiKey;
     }
@@ -436,6 +469,7 @@ export async function updateBrainConfig(req: Request, res: Response) {
         ? KNOWN_ENDPOINTS[normalizedProvider] || KNOWN_ENDPOINTS.groq
         : base_url.trim();
 
+    // Preserva o modelo escolhido (inclusive GPT-OSS 120B)
     const cleanModel = sanitizeModelForProvider(normalizedProvider, model);
 
     const newConfig = {
@@ -455,36 +489,30 @@ export async function updateBrainConfig(req: Request, res: Response) {
 
     const serializedConfig = JSON.stringify(newConfig);
 
-    // Sincroniza todas as chaves de configuração no banco para evitar leituras divergentes
-    for (const cfgKey of ['brain_llm_config', 'brain_config', 'brain_llm']) {
-      await pool.query(
-        `INSERT INTO system_configs (key, value, updated_at)
-         VALUES ($1, $2::jsonb, NOW())
-         ON CONFLICT (key) DO UPDATE
-         SET value = EXCLUDED.value, updated_at = NOW();`,
-        [cfgKey, serializedConfig]
-      );
-    }
+    // Remove entradas duplicadas para manter unicidade na chave principal
+    await pool.query("DELETE FROM system_configs WHERE key IN ('brain_config', 'brain_llm');");
 
-    // Se o provedor for groq e houver chave válida, sincroniza também no arquivo .env local
-    if (normalizedProvider === 'groq' && finalApiKey.startsWith('gsk_')) {
-      try {
-        const envPath = path.resolve(process.cwd(), '.env');
-        if (fs.existsSync(envPath)) {
-          let envContent = fs.readFileSync(envPath, 'utf-8');
-          process.env.GROQ_API_KEY = finalApiKey;
-          process.env.LLM_API_KEY = finalApiKey;
-          if (/^GROQ_API_KEY=/m.test(envContent)) {
-            envContent = envContent.replace(/^GROQ_API_KEY=.*$/m, `GROQ_API_KEY=${finalApiKey}`);
-          } else {
-            envContent += `\nGROQ_API_KEY=${finalApiKey}\n`;
-          }
-          if (/^LLM_API_KEY=/m.test(envContent)) {
-            envContent = envContent.replace(/^LLM_API_KEY=.*$/m, `LLM_API_KEY=${finalApiKey}`);
-          }
-          fs.writeFileSync(envPath, envContent, 'utf-8');
-        }
-      } catch {}
+    await pool.query(
+      `INSERT INTO system_configs (key, value, updated_at)
+       VALUES ('brain_llm_config', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE
+       SET value = EXCLUDED.value, updated_at = NOW();`,
+      [serializedConfig]
+    );
+
+    // PROPAGAÇÃO PARA OS AGENTES: Propaga a chave nova para os Agentes Especialistas daquele provedor
+    if (finalApiKey) {
+      await pool.query(
+        `UPDATE ai_agents
+         SET api_key = $1,
+             base_url = $2,
+             updated_at = NOW()
+         WHERE LOWER(provider) = $3;`,
+        [finalApiKey, resolvedBaseUrl, normalizedProvider]
+      );
+
+      // Sincroniza também no .env
+      syncKeyToEnvFile(normalizedProvider, finalApiKey, cleanModel, resolvedBaseUrl);
     }
 
     try {
@@ -507,7 +535,7 @@ export async function updateBrainConfig(req: Request, res: Response) {
 
     return res.status(200).json({
       success: true,
-      message: `Configurações do Núcleo JARVIS (${normalizedProvider.toUpperCase()} - ${cleanModel}) e Cofre de Chaves salvas!`,
+      message: `Configurações do Núcleo JARVIS (${normalizedProvider.toUpperCase()} - ${cleanModel}) salvas e propagadas com sucesso!`,
       data: newConfig
     });
   } catch (error: any) {
@@ -522,7 +550,7 @@ export async function validateLLMConnection(req: Request, res: Response) {
     let cleanKey = cleanAndNormalizeApiKey(api_key);
     const effectiveProvider = detectProviderFromKeyAndInput(provider, cleanKey, base_url);
 
-    // Se a chave veio vazia ou mascarada (••••), busca no cofre salvo no PostgreSQL ou no .env
+    // Se o campo veio vazio ou mascarado no teste, recupera a chave salva do banco ou .env
     if (!cleanKey && effectiveProvider !== 'ollama') {
       try {
         const dbRes = await pool.query(`
@@ -555,7 +583,7 @@ export async function validateLLMConnection(req: Request, res: Response) {
 
     const selectedModel = sanitizeModelForProvider(effectiveProvider, model);
 
-    // 1. VALIDAÇÃO GOOGLE GEMINI (Free Tier AI Studio)
+    // 1. VALIDAÇÃO GOOGLE GEMINI
     if (effectiveProvider === 'gemini') {
       const candidateModels = Array.from(
         new Set([
@@ -655,6 +683,7 @@ export async function validateLLMConnection(req: Request, res: Response) {
     const fallbackMap: Record<string, string[]> = {
       groq: [
         selectedModel,
+        'openai/gpt-oss-120b',
         'llama-3.3-70b-versatile',
         'llama-3.1-8b-instant',
         'deepseek-r1-distill-llama-70b'
@@ -674,7 +703,6 @@ export async function validateLLMConnection(req: Request, res: Response) {
 
     const candidateModels = Array.from(new Set(fallbackMap[effectiveProvider] || [selectedModel]));
 
-    // Auto-Discovery via /models na Groq para garantir que a chave e os modelos ativos da conta funcionem
     if (effectiveProvider === 'groq') {
       try {
         const groqModelsResp = await fetch(`${targetBaseUrl}/models`, {

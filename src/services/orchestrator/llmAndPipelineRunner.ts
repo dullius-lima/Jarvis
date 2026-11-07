@@ -25,6 +25,42 @@ function normalizeText(str: string): string {
     .trim();
 }
 
+/**
+ * Remove resíduos de máscara ('•' ou '*'), espaços e normaliza prefixos mobile
+ */
+function cleanKeyString(rawKey?: any): string {
+  if (!rawKey) return '';
+  let k = String(rawKey)
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^["']+|["']+$/g, '')
+    .replace(/[•*]/g, '')
+    .trim();
+
+  if (!k || k === 'undefined' || k === 'null' || k.length < 5) {
+    return '';
+  }
+
+  if (/^gsk_/i.test(k)) k = 'gsk_' + k.slice(4);
+  else if (/^aiza/i.test(k)) k = 'AIza' + k.slice(4);
+  else if (/^sk-or-/i.test(k)) k = 'sk-or-' + k.slice(6);
+
+  return k;
+}
+
+/**
+ * Recupera chave real do arquivo .env / process.env como contingência contra máscaras
+ */
+function getEnvFallbackKey(provider: string): string {
+  const p = (provider || 'groq').toLowerCase().trim();
+  if (p === 'groq') return cleanKeyString(process.env.GROQ_API_KEY || process.env.LLM_API_KEY);
+  if (p === 'gemini') return cleanKeyString(process.env.GEMINI_API_KEY || process.env.LLM_API_KEY);
+  if (p === 'openrouter') return cleanKeyString(process.env.OPENROUTER_API_KEY || process.env.LLM_API_KEY);
+  if (p === 'deepseek') return cleanKeyString(process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY);
+  if (p === 'openai') return cleanKeyString(process.env.OPENAI_API_KEY || process.env.LLM_API_KEY);
+  return '';
+}
+
 export async function callOpenAICompatibleLLM(options: {
   provider: string;
   model: string;
@@ -41,9 +77,10 @@ export async function callOpenAICompatibleLLM(options: {
     options.model
   );
 
-  let provider = creds.provider;
-  let apiKey = creds.apiKey;
+  let provider = creds.provider.toLowerCase().trim();
+  let apiKey = cleanKeyString(creds.apiKey) || cleanKeyString(options.apiKey) || getEnvFallbackKey(provider);
 
+  // 1. SUPORTE GOOGLE GEMINI (AI Studio / OpenAI Compatible)
   if (provider === 'gemini') {
     const requestedModel = (creds.model || 'gemini-2.5-flash').trim();
     const cleanPrimary =
@@ -84,7 +121,7 @@ export async function callOpenAICompatibleLLM(options: {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: formattedParts }],
-            generationConfig: { temperature: options.temperature ?? 0.3 }
+            generationConfig: { temperature: options.temperature ?? 0.2 }
           }),
           signal: AbortSignal.timeout(25000)
         });
@@ -105,17 +142,25 @@ export async function callOpenAICompatibleLLM(options: {
     throw new Error(`Gemini indisponível no momento: ${lastGeminiError.slice(0, 200)}`);
   }
 
+  // 2. SUPORTE GROQ, OPENROUTER, DEEPSEEK, OPENAI E OLLAMA
   const client = new OpenAI({
     apiKey: apiKey || 'ollama',
     baseURL: creds.baseURL,
     timeout: 30000
   });
 
-  // Remove completamente o llama-3.1-8b-instant e respeita o modelo configurado (ex: openai/gpt-oss-120b)
+  // Remove permanentemente o llama-3.1-8b-instant descontinuado para evitar erro 404
+  let safeTargetModel = creds.model;
+  if (provider === 'groq') {
+    if (safeTargetModel.includes('8b-instant')) {
+      safeTargetModel = 'llama-3.3-70b-versatile';
+    }
+  }
+
   const candidateModels =
-  provider === 'groq'
-    ? Array.from(new Set([creds.model, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant']))
-    : [creds.model];
+    provider === 'groq'
+      ? Array.from(new Set([safeTargetModel, 'llama-3.3-70b-versatile', 'deepseek-r1-distill-llama-70b']))
+      : [safeTargetModel];
 
   let lastError: any = null;
 
@@ -125,10 +170,9 @@ export async function callOpenAICompatibleLLM(options: {
       const payload: any = {
         model: modelToUse,
         messages: options.messages,
-        temperature: options.temperature ?? 0.3
+        temperature: options.temperature ?? 0.2
       };
 
-      // Modelos de raciocínio como gpt-oss-120b ou deepseek-reasoner muitas vezes rejeitam tool_choice/tools nativos
       const isReasoningModel =
         modelToUse.includes('gpt-oss') ||
         modelToUse.includes('reasoner') ||
@@ -142,13 +186,13 @@ export async function callOpenAICompatibleLLM(options: {
       return await client.chat.completions.create(payload);
     } catch (err: any) {
       lastError = err;
-      // Se falhou por causa do parâmetro tools, tenta imediatamente o mesmo modelo sem tools
+      // Contingência imediata: se falhou com tools, tenta o mesmo modelo de forma direta
       if (options.tools && options.tools.length > 0) {
         try {
           return await client.chat.completions.create({
             model: modelToUse,
             messages: options.messages,
-            temperature: options.temperature ?? 0.3
+            temperature: options.temperature ?? 0.2
           });
         } catch (innerErr: any) {
           lastError = innerErr;
@@ -159,6 +203,7 @@ export async function callOpenAICompatibleLLM(options: {
 
   throw lastError || new Error(`Falha ao comunicar com provedor ${provider.toUpperCase()}`);
 }
+
 export async function executeUniversalApiConnector(
   connectorSlugOrAgent: string | Record<string, any>,
   taskArgs: Record<string, any>,
@@ -257,7 +302,7 @@ export async function executeUniversalApiConnector(
     }
   }
 
-  const cleanToken = authToken.replace(/^Bearer\s+/i, '').trim();
+  const cleanToken = cleanKeyString(authToken);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
@@ -519,7 +564,7 @@ export async function executeBoundTool(
     }
   }
 
-  // Conectores customizados com endpoint configurado (ex: consultar_mercado_de_valores / Brapi)
+  // Conectores customizados com endpoint configurado (ex: Brapi / Bolsa)
   const rawEndpoint =
     cfg.endpoint_url ||
     customConn?.endpoint_url ||
@@ -534,7 +579,7 @@ export async function executeBoundTool(
     );
   }
 
-  // Integrações nativas Google Workspace / Brapi / Outlook / Telegram
+  // Integrações nativas especializadas
   const isNativeSpecialized =
     cleanKey.startsWith('brapi') ||
     cleanKey.includes('mercado') ||
@@ -782,10 +827,25 @@ export async function executeSpecialistPipeline(
         }
       ];
 
+      // HERANÇA INTELIGENTE: busca a chave no agente, no cofre salvo para o provedor ou no Cérebro
+      const specProvider = (currentAgent.provider || brainConfig?.provider || 'groq').toLowerCase().trim();
+      const specAgentKey = cleanKeyString(currentAgent.api_key);
+      const specVaultKey =
+        brainConfig?.saved_keys && brainConfig.saved_keys[specProvider]
+          ? cleanKeyString(brainConfig.saved_keys[specProvider])
+          : '';
+      const specBrainKey =
+        specProvider === (brainConfig?.provider || '').toLowerCase()
+          ? cleanKeyString(brainConfig?.api_key)
+          : '';
+
+      const effectiveSpecKey =
+        specAgentKey || specVaultKey || specBrainKey || getEnvFallbackKey(specProvider);
+
       const llmRes: any = await callOpenAICompatibleLLM({
-        provider: currentAgent.provider || brainConfig?.provider || 'groq',
+        provider: specProvider,
         model: currentAgent.model || brainConfig?.model || 'llama-3.3-70b-versatile',
-        apiKey: currentAgent.api_key || brainConfig?.api_key || '',
+        apiKey: effectiveSpecKey,
         baseUrl: currentAgent.base_url || brainConfig?.base_url || '',
         messages: specialistMessages,
         tools: specialistTools.length > 0 ? specialistTools : undefined,
@@ -810,9 +870,9 @@ export async function executeSpecialistPipeline(
         }
 
         const followUpRes: any = await callOpenAICompatibleLLM({
-          provider: currentAgent.provider || brainConfig?.provider || 'groq',
+          provider: specProvider,
           model: currentAgent.model || brainConfig?.model || 'llama-3.3-70b-versatile',
-          apiKey: currentAgent.api_key || brainConfig?.api_key || '',
+          apiKey: effectiveSpecKey,
           baseUrl: currentAgent.base_url || brainConfig?.base_url || '',
           messages: [
             ...specialistMessages,
@@ -830,7 +890,6 @@ export async function executeSpecialistPipeline(
       } else {
         const rawContent = specChoice?.content || 'Processado pelo especialista.';
 
-        // Intercepta qualquer JSON de ferramenta gerado em texto pelo especialista ("toolName", "action", "tool", "slug")
         const looksLikeJsonToolCall =
           rawContent.includes('"toolName"') ||
           rawContent.includes('"tool_name"') ||
@@ -871,14 +930,13 @@ export async function executeSpecialistPipeline(
                 serverBaseUrl
               );
 
-              // Sintetiza o resultado real da ferramenta (ex: cotação AZUL4, evento da agenda ou Home Assistant)
               if (toolOutput?.status === 'executed' && toolOutput?.entity_id) {
                 stepOutput = `Dispositivo acionado com sucesso (${toolOutput.entity_id}).`;
               } else {
                 const synthFollowUp: any = await callOpenAICompatibleLLM({
-                  provider: currentAgent.provider || brainConfig?.provider || 'groq',
+                  provider: specProvider,
                   model: currentAgent.model || brainConfig?.model || 'llama-3.3-70b-versatile',
-                  apiKey: currentAgent.api_key || brainConfig?.api_key || '',
+                  apiKey: effectiveSpecKey,
                   baseUrl: currentAgent.base_url || brainConfig?.base_url || '',
                   messages: [
                     {
@@ -915,7 +973,6 @@ export async function executeSpecialistPipeline(
       }
     }
 
-    // Grava memória de contexto do especialista em background sem atrasar a resposta
     pool
       .query(
         `INSERT INTO specialist_context_memory (session_id, specialist_slug, context_data)

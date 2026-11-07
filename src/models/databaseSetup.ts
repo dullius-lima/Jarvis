@@ -6,7 +6,7 @@ export async function initializeDatabaseSchema() {
   try {
     console.log('🔄 Inicializando e alinhando esquema unificado JARVIS & n8n no PostgreSQL...');
 
-    // 1. Extensão pgvector com fallback seguro para Windows
+    // 1. Extensão pgvector com fallback seguro para Windows/Linux
     let hasVectorExtension = false;
     try {
       await client.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
@@ -41,6 +41,12 @@ export async function initializeDatabaseSchema() {
       ALTER TABLE system_configs ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';
     `);
 
+    // Limpeza profilática de chaves concorrentes legadas para manter unificado em 'brain_llm_config'
+    await client.query(`
+      DELETE FROM system_configs WHERE key IN ('brain_config', 'brain_llm');
+    `);
+
+    // Insere a configuração inicial apenas se a tabela estiver 100% vazia (NUNCA sobrescreve o que você salvou)
     await client.query(`
       INSERT INTO system_configs (key, provider, model, base_url, temperature, value)
       VALUES (
@@ -48,19 +54,28 @@ export async function initializeDatabaseSchema() {
         'groq',
         'llama-3.3-70b-versatile',
         'https://api.groq.com/openai/v1',
-        0.3,
+        0.2,
         '{
           "agent_name": "JARVIS",
           "provider": "groq",
           "model": "llama-3.3-70b-versatile",
           "api_key": "",
           "base_url": "https://api.groq.com/openai/v1",
-          "temperature": 0.3,
+          "temperature": 0.2,
           "server_base_url": "http://localhost:3333",
-          "system_prompt": "Você é o JARVIS, o Agente Líder permanente e Orquestrador Central deste ecossistema."
+          "system_prompt": "Você é o JARVIS, o Agente Líder permanente e Orquestrador Central deste ecossistema.",
+          "saved_keys": {}
         }'::jsonb
       )
       ON CONFLICT (key) DO NOTHING;
+    `);
+
+    // Limpa eventuais resíduos de máscara ('•' ou '*') que possam ter ficado gravados no JSONB do cérebro
+    await client.query(`
+      UPDATE system_configs
+      SET value = jsonb_set(value, '{api_key}', '""'::jsonb)
+      WHERE key = 'brain_llm_config'
+        AND (value->>'api_key' LIKE '%•%' OR value->>'api_key' LIKE '%*%');
     `);
 
     // 3. Tabela Unificada de Identidades e Acesso
@@ -133,9 +148,25 @@ export async function initializeDatabaseSchema() {
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS payload_template TEXT;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS next_agent_slug VARCHAR(100) DEFAULT NULL;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS response_instruction TEXT DEFAULT '';
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS schedule_enabled BOOLEAN DEFAULT FALSE;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS cron_expression VARCHAR(100) DEFAULT '*/5 * * * *';
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS schedule_prompt TEXT DEFAULT '';
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS is_error_trigger BOOLEAN DEFAULT FALSE;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS error_notify_channel VARCHAR(50) DEFAULT 'telegram';
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS requires_approval BOOLEAN DEFAULT FALSE;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS approval_message TEXT DEFAULT '';
     `);
 
-    // 5. Tabelas de Memória de Chat e Contexto
+    // HIGIENIZAÇÃO: Remove máscaras residuais ('••••') que tenham ficado gravadas na coluna api_key dos agentes
+    // Isso libera os Agentes Especialistas para utilizarem de forma transparente a chave válida do cofre do Cérebro
+    await client.query(`
+      UPDATE ai_agents
+      SET api_key = NULL
+      WHERE api_key LIKE '%•%' OR api_key LIKE '%*%';
+    `);
+
+    // 5. Tabelas de Memória de Chat e Contexto por Session ID
     await client.query(`
       CREATE TABLE IF NOT EXISTS jarvis_chat_memory (
         id SERIAL PRIMARY KEY,
@@ -154,6 +185,7 @@ export async function initializeDatabaseSchema() {
         context_data JSONB NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE INDEX IF NOT EXISTS idx_spec_context_session ON specialist_context_memory(session_id);
     `);
 
     // 6. Cofre de Conectores Externos & IoT (Gmail, Outlook, WhatsApp, Telegram, Home Assistant)
@@ -166,12 +198,22 @@ export async function initializeDatabaseSchema() {
         description TEXT DEFAULT '',
         config JSONB NOT NULL DEFAULT '{}'::jsonb,
         is_enabled BOOLEAN DEFAULT TRUE,
+        api_key TEXT DEFAULT '',
+        endpoint_url TEXT DEFAULT '',
         last_tested_at TIMESTAMP WITH TIME ZONE,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
-    // 7. Memória Vetorial (RAG) e Auditoria
+    await client.query(`
+      ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS provider_key VARCHAR(80);
+      ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS category VARCHAR(60) DEFAULT 'Custom Tool';
+      ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN DEFAULT TRUE;
+      ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS api_key TEXT DEFAULT '';
+      ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS endpoint_url TEXT DEFAULT '';
+    `);
+
+    // 7. Memória Vetorial (RAG) e Auditoria de Execução
     const embeddingColumnType = hasVectorExtension ? 'VECTOR(1536)' : 'TEXT';
     await client.query(`
       CREATE TABLE IF NOT EXISTS vector_documents (
@@ -194,28 +236,7 @@ export async function initializeDatabaseSchema() {
       );
     `);
 
-    // Complemento de colunas para Biometria (identities) e Agentes (ai_agents)
-    await client.query(`
-      ALTER TABLE identities ADD COLUMN IF NOT EXISTS full_name VARCHAR(150);
-      ALTER TABLE identities ADD COLUMN IF NOT EXISTS access_level INTEGER DEFAULT 10;
-
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS response_instruction TEXT DEFAULT '';
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS schedule_enabled BOOLEAN DEFAULT FALSE;
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS cron_expression VARCHAR(100) DEFAULT '*/5 * * * *';
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS schedule_prompt TEXT DEFAULT '';
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS is_error_trigger BOOLEAN DEFAULT FALSE;
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS error_notify_channel VARCHAR(50) DEFAULT 'telegram';
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS requires_approval BOOLEAN DEFAULT FALSE;
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS approval_message TEXT DEFAULT '';
-
-      ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS provider_key VARCHAR(80);
-      ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS category VARCHAR(60) DEFAULT 'Custom Tool';
-      ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN DEFAULT TRUE;
-      ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS api_key TEXT DEFAULT '';
-      ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS endpoint_url TEXT DEFAULT '';
-    `);
-
-    // Tabelas de Versionamento de Prompts, Coleções Dinâmicas e Estado Wait (Human-in-the-Loop)
+    // 8. Versionamento de Prompts (Rollback), Coleções Dinâmicas e Estado Wait (Human-in-the-Loop)
     await client.query(`
       CREATE TABLE IF NOT EXISTS prompt_versions (
         id SERIAL PRIMARY KEY,
@@ -255,6 +276,12 @@ export async function initializeDatabaseSchema() {
         decided_at TIMESTAMP WITH TIME ZONE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+    `);
+
+    // Complemento seguro para colunas em identities
+    await client.query(`
+      ALTER TABLE identities ADD COLUMN IF NOT EXISTS full_name VARCHAR(150);
+      ALTER TABLE identities ADD COLUMN IF NOT EXISTS access_level INTEGER DEFAULT 10;
     `);
 
     console.log('✅ [Database Setup] Esquema e tabelas unificadas alinhados com sucesso!');

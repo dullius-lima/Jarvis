@@ -2,8 +2,6 @@
 import { Request, Response } from 'express';
 import { pool } from '../config/database.js';
 import { emitBrainLinkEvent } from '../services/brainSocketService.js';
-import { listAvailableCredentialsMetadata } from '../services/credentialMapperService.js';
-
 import {
   listAvailableCredentialsMetadata,
   resolveSecretByCredentialId
@@ -28,6 +26,29 @@ function slugify(text: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Remove resíduos de máscara ('•' e '*') e espaços invisíveis
+ */
+function sanitizeApiKey(rawKey?: any): string {
+  if (!rawKey) return '';
+  let k = String(rawKey)
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^["']+|["']+$/g, '')
+    .replace(/[•*]/g, '')
+    .trim();
+
+  if (!k || k === 'undefined' || k === 'null' || k.length < 5) {
+    return '';
+  }
+
+  if (/^gsk_/i.test(k)) k = 'gsk_' + k.slice(4);
+  else if (/^aiza/i.test(k)) k = 'AIza' + k.slice(4);
+  else if (/^sk-or-/i.test(k)) k = 'sk-or-' + k.slice(6);
+
+  return k;
 }
 
 function buildAgentWebhookUrls(req: Request, slug: string) {
@@ -66,7 +87,7 @@ export async function executeSingleAgentLogic(
   const startTime = Date.now();
   let outputResult: any = null;
 
-  const brainConfig = await getCentralBrainConfig();
+  const brainConfig: any = await getCentralBrainConfig();
   const serializedInput =
     typeof inputPayload === 'string' ? inputPayload : JSON.stringify(inputPayload, null, 2);
   const userPromptText =
@@ -102,7 +123,7 @@ export async function executeSingleAgentLogic(
       'Content-Type': 'application/json',
       ...(typeof agent.headers_json === 'object' ? agent.headers_json : {})
     };
-    const token = agent.auth_token || agent.api_key;
+    const token = sanitizeApiKey(agent.auth_token || agent.api_key);
     if (token) {
       customHeaders['Authorization'] = token.startsWith('Bearer ') ? token : `Bearer ${token}`;
     }
@@ -132,25 +153,52 @@ export async function executeSingleAgentLogic(
       outputResult = { status: resp.status, raw: textData };
     }
   } else {
-    // Herda a chave do cofre global caso o agente não tenha api_key própria
-    const inheritedKey =
-      (agent.api_key && String(agent.api_key).trim()) || brainConfig.api_key || '';
+    // 🧠 ROTA COGNITIVA (LLM): Resolução Limpa de Credenciais e Cofre Central
+    const targetProvider = (agent.provider || brainConfig.provider || 'groq').toLowerCase().trim();
+    const cleanAgentKey = sanitizeApiKey(agent.api_key);
+
+    // Busca chave no cofre salvo do Cérebro para o provedor deste agente
+    const vaultKey =
+      brainConfig.saved_keys && brainConfig.saved_keys[targetProvider]
+        ? sanitizeApiKey(brainConfig.saved_keys[targetProvider])
+        : '';
+
+    // Se o agente tiver chave própria válida e limpa, utiliza.
+    // Caso contrário, herda do cofre específico do provedor ou da chave mestre do Cérebro.
+    const effectiveKey =
+      cleanAgentKey ||
+      vaultKey ||
+      (targetProvider === (brainConfig.provider || '').toLowerCase() ? sanitizeApiKey(brainConfig.api_key) : '') ||
+      '';
+
     const creds = resolveProviderCredentials(
-      agent.provider || brainConfig.provider,
-      inheritedKey,
-      agent.base_url,
-      agent.model
+      targetProvider,
+      effectiveKey,
+      agent.base_url || brainConfig.base_url,
+      agent.model || brainConfig.model
     );
 
-    const llmRes = await fetch(`${creds.baseURL}/chat/completions`, {
+    const targetUrl = `${creds.baseURL.replace(/\/+$/, '')}/chat/completions`;
+
+    const requestHeaders: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+
+    if (creds.apiKey && targetProvider !== 'ollama') {
+      requestHeaders['Authorization'] = `Bearer ${creds.apiKey}`;
+    }
+
+    if (targetProvider === 'openrouter') {
+      requestHeaders['HTTP-Referer'] = 'https://jarvis.local';
+      requestHeaders['X-Title'] = 'JARVIS Neural Core';
+    }
+
+    const llmRes = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${creds.apiKey}`
-      },
+      headers: requestHeaders,
       body: JSON.stringify({
         model: creds.model,
-        temperature: Number(agent.temperature) || 0.3,
+        temperature: Number(agent.temperature) || 0.2,
         messages: [
           {
             role: 'system',
@@ -168,7 +216,7 @@ export async function executeSingleAgentLogic(
 
     if (!llmRes.ok) {
       const errText = await llmRes.text();
-      throw new Error(`Erro na LLM do agente [${agent.slug}]: ${errText}`);
+      throw new Error(`Erro na LLM do agente [${agent.slug}]: HTTP ${llmRes.status} - ${errText}`);
     }
 
     const completion: any = await llmRes.json();
@@ -347,14 +395,15 @@ export async function createAgent(req: Request, res: Response) {
       : `${slugify(name)}_${Date.now().toString(36).slice(-4)}`;
     const defaultIcon = agent_type === 'mcp' ? '🔌' : agent_type === 'api' ? '🌐' : '🤖';
 
-    // Se enviado um identificador de credencial, resolve no cofre de credenciais
     const resolvedCred = await resolveSecretByCredentialId(
       req.body?.credential_id || req.body?.credentials?.id
     );
-    const finalProvider = resolvedCred.provider || provider;
-    const finalApiKey = (api_key || auth_token || resolvedCred.api_key || '').trim();
-    const finalAuthToken = (auth_token || api_key || resolvedCred.auth_token || '').trim();
-    const finalEndpointUrl = (endpoint_url || resolvedCred.endpoint_url || '').trim();
+    const finalProvider = (resolvedCred.provider || provider || 'groq').toLowerCase().trim();
+
+    // Sanitiza e descarta máscaras: se vazio, grava NULL para herdar do Cérebro
+    const cleanApiKey = sanitizeApiKey(api_key || resolvedCred.api_key) || null;
+    const cleanAuthToken = sanitizeApiKey(auth_token || resolvedCred.auth_token) || null;
+    const finalEndpointUrl = (endpoint_url || resolvedCred.endpoint_url || '').trim() || null;
 
     const values = [
       name,
@@ -364,15 +413,15 @@ export async function createAgent(req: Request, res: Response) {
       system_prompt,
       finalProvider,
       model,
-      finalApiKey,
-      base_url,
+      cleanApiKey,
+      base_url || null,
       Number(temperature) || 0.3,
       icon || defaultIcon,
       script_handler,
       code_snippet ?? script_code,
       http_method,
       finalEndpointUrl,
-      finalAuthToken,
+      cleanAuthToken,
       payload_template,
       response_instruction,
       JSON.stringify(Array.isArray(tools) ? tools : []),
@@ -406,7 +455,7 @@ export async function createAgent(req: Request, res: Response) {
         system_prompt = EXCLUDED.system_prompt,
         provider = EXCLUDED.provider,
         model = EXCLUDED.model,
-        api_key = CASE WHEN EXCLUDED.api_key = '' THEN ai_agents.api_key ELSE EXCLUDED.api_key END,
+        api_key = EXCLUDED.api_key,
         base_url = EXCLUDED.base_url,
         temperature = EXCLUDED.temperature,
         icon = EXCLUDED.icon,
@@ -467,6 +516,20 @@ export async function updateAgent(req: Request, res: Response) {
     }
     const curr = existing.rows[0];
 
+    // Trata a chave de API na edição:
+    // Se o usuário digitou uma nova chave limpa, grava; se veio vazia ou com máscara, preserva ou seta NULL se explicitamente limpa
+    let updatedApiKey = curr.api_key;
+    if (body.api_key !== undefined) {
+      const cleanedInputKey = sanitizeApiKey(body.api_key);
+      updatedApiKey = cleanedInputKey || (body.api_key === '' ? null : curr.api_key);
+    }
+
+    let updatedAuthToken = curr.auth_token;
+    if (body.auth_token !== undefined) {
+      const cleanedInputToken = sanitizeApiKey(body.auth_token);
+      updatedAuthToken = cleanedInputToken || (body.auth_token === '' ? null : curr.auth_token);
+    }
+
     const updated = await pool.query(
       `UPDATE ai_agents SET
         name = $1,
@@ -503,9 +566,9 @@ export async function updateAgent(req: Request, res: Response) {
         body.agent_type ?? curr.agent_type,
         body.description ?? curr.description,
         body.system_prompt ?? curr.system_prompt,
-        body.provider ?? curr.provider,
+        body.provider ? String(body.provider).toLowerCase().trim() : curr.provider,
         body.model ?? curr.model,
-        body.api_key !== undefined && body.api_key !== '' ? body.api_key : curr.api_key,
+        updatedApiKey,
         body.base_url !== undefined ? body.base_url : curr.base_url,
         body.temperature ?? curr.temperature,
         body.icon ?? curr.icon,
@@ -513,7 +576,7 @@ export async function updateAgent(req: Request, res: Response) {
         body.code_snippet !== undefined ? body.code_snippet : curr.code_snippet,
         body.http_method ?? curr.http_method,
         body.endpoint_url !== undefined ? body.endpoint_url : curr.endpoint_url,
-        body.auth_token !== undefined ? body.auth_token : curr.auth_token,
+        updatedAuthToken,
         body.payload_template !== undefined ? body.payload_template : curr.payload_template,
         body.response_instruction !== undefined ? body.response_instruction : curr.response_instruction,
         JSON.stringify(body.tools !== undefined ? body.tools : curr.tools || []),
