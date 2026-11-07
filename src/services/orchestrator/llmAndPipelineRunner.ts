@@ -49,7 +49,7 @@ function cleanKeyString(rawKey?: any): string {
 }
 
 /**
- * Recupera chave real do arquivo .env / process.env como contingência contra máscaras
+ * Recupera chave real do ficheiro .env / process.env como contingência contra máscaras
  */
 function getEnvFallbackKey(provider: string): string {
   const p = (provider || 'groq').toLowerCase().trim();
@@ -143,26 +143,23 @@ export async function callOpenAICompatibleLLM(options: {
   }
 
   // 2. SUPORTE GROQ, OPENROUTER, DEEPSEEK, OPENAI E OLLAMA
-  // 2. SUPORTE GROQ, OPENROUTER, DEEPSEEK, OPENAI E OLLAMA
   const client = new OpenAI({
     apiKey: apiKey || 'ollama',
     baseURL: creds.baseURL,
     timeout: 30000
   });
 
-  // Sanitização de modelos descontinuados na Groq
   let safeTargetModel = creds.model;
   if (provider === 'groq') {
     if (
       !safeTargetModel ||
-      safeTargetModel.includes('deepseek-r1') ||
-      safeTargetModel.includes('8b-instant')
+      safeTargetModel.includes('8b-instant') ||
+      safeTargetModel.includes('deepseek-r1')
     ) {
       safeTargetModel = 'llama-3.3-70b-versatile';
     }
   }
 
-  // Fallback seguro: apenas modelos ativos oficiais da Groq
   const candidateModels =
     provider === 'groq'
       ? Array.from(new Set([safeTargetModel, 'llama-3.3-70b-versatile']))
@@ -184,7 +181,6 @@ export async function callOpenAICompatibleLLM(options: {
         modelToUse.includes('reasoner') ||
         modelToUse.includes('r1');
 
-      // Reasoning models na Groq não aceitam tool calling
       if (options.tools && options.tools.length > 0 && !isReasoningModel) {
         payload.tools = options.tools;
         payload.tool_choice = 'auto';
@@ -193,7 +189,6 @@ export async function callOpenAICompatibleLLM(options: {
       return await client.chat.completions.create(payload);
     } catch (err: any) {
       lastError = err;
-      // Se falhou com tools, tenta imediatamente o mesmo modelo em modo texto puro
       if (options.tools && options.tools.length > 0) {
         try {
           return await client.chat.completions.create({
@@ -209,6 +204,7 @@ export async function callOpenAICompatibleLLM(options: {
   }
 
   throw lastError || new Error(`Falha ao comunicar com provedor ${provider.toUpperCase()}`);
+}
 
 export async function executeUniversalApiConnector(
   connectorSlugOrAgent: string | Record<string, any>,
@@ -405,7 +401,6 @@ export async function executeBoundTool(
   const customConn = connectorsMap?.get(cleanKey);
   const cfg = customConn?.config || {};
 
-  // Auto-Discovery e Acionamento Integrado para Home Assistant
   const isHomeAssistantTool =
     cleanKey.includes('home_assistant') ||
     cleanKey.includes('detector') ||
@@ -570,7 +565,6 @@ export async function executeBoundTool(
     }
   }
 
-  // Conectores customizados com endpoint configurado (ex: Brapi / Bolsa)
   const rawEndpoint =
     cfg.endpoint_url ||
     customConn?.endpoint_url ||
@@ -585,7 +579,6 @@ export async function executeBoundTool(
     );
   }
 
-  // Integrações nativas especializadas
   const isNativeSpecialized =
     cleanKey.startsWith('brapi') ||
     cleanKey.includes('mercado') ||
@@ -833,7 +826,6 @@ export async function executeSpecialistPipeline(
         }
       ];
 
-      // HERANÇA INTELIGENTE: busca a chave no agente, no cofre salvo para o provedor ou no Cérebro
       const specProvider = (currentAgent.provider || brainConfig?.provider || 'groq').toLowerCase().trim();
       const specAgentKey = cleanKeyString(currentAgent.api_key);
       const specVaultKey =
@@ -918,13 +910,13 @@ export async function executeSpecialistPipeline(
 
               const toolToRun = sanitizeToolName(
                 parsed.toolName ||
-                  parsed.tool_name ||
-                  parsed.parameters?.slug ||
-                  parsed.parameters?.tool ||
-                  parsed.action ||
-                  parsed.tool ||
-                  parsed.slug ||
-                  fallbackTool
+                parsed.tool_name ||
+                parsed.parameters?.slug ||
+                parsed.parameters?.tool ||
+                parsed.action ||
+                parsed.tool ||
+                parsed.slug ||
+                fallbackTool
               );
               const toolArgs = parsed.parameters || parsed.arguments || parsed.payload || parsed;
 
@@ -982,7 +974,7 @@ export async function executeSpecialistPipeline(
     pool
       .query(
         `INSERT INTO specialist_context_memory (session_id, specialist_slug, context_data)
-         VALUES ($1, $2, $3);`,
+   VALUES ($1, $2, $3);`,
         [
           sessionId,
           currentAgent.slug,
