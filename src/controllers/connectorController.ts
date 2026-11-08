@@ -23,8 +23,8 @@ export const DEFAULT_CONNECTORS = [
     description: 'Envio e recebimento de mensagens via API.',
     endpoint_url: 'http://localhost:8080',
     http_method: 'POST',
-    api_key: '',
-    is_enabled: false
+    api_key: 'jarvis-evolution-secret-2026',
+    is_enabled: true
   },
   {
     provider_key: 'telegram',
@@ -370,7 +370,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       cfg.auth_token || cfg.api_key || body.api_key || body.auth_token || ''
     ).trim();
 
-    // 3.0 Ecossistema Google (Gmail, Calendar, Drive) via OAuth2 Permanente
+    // 3.0 Google Workspace (Gmail, Calendar, Drive) via OAuth2 Permanente
     const isGoogle =
       providerKey.includes('gmail') ||
       providerKey.includes('calendar') ||
@@ -413,7 +413,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.1 Teste específico do Telegram Bot
+    // 3.1 Telegram Bot
     if (providerKey === 'telegram' || rawUrl.includes('api.telegram.org')) {
       if (!apiKey) {
         return res.status(200).json({
@@ -442,7 +442,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.2 Teste específico da Brapi B3
+    // 3.2 Brapi B3
     if (
       providerKey === 'brapi' ||
       providerKey === 'brapi_b3' ||
@@ -479,7 +479,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.2-B Teste específico do Home Assistant
+    // 3.2-B Home Assistant
     if (
       providerKey === 'home_assistant' ||
       providerKey.includes('hass') ||
@@ -530,7 +530,7 @@ export async function testExternalConnector(req: Request, res: Response) {
 
     // 3.2-C Teste Direto do WhatsApp (Evolution API / Baileys)
     if (providerKey === 'whatsapp' || providerKey.includes('whats')) {
-      let rawNumber = String(
+      let targetNumber = String(
         body.params?.number ||
         body.params?.to ||
         body.number ||
@@ -538,9 +538,9 @@ export async function testExternalConnector(req: Request, res: Response) {
         '5567991289607'
       ).replace(/\D/g, '');
 
-      // Normaliza o DDI 55 para números de 10 ou 11 dígitos
-      if (rawNumber.length >= 10 && rawNumber.length <= 11 && !rawNumber.startsWith('55')) {
-        rawNumber = `55${rawNumber}`;
+      // Garante o DDI 55 caso o usuário passe apenas DDD + Número
+      if (targetNumber.length >= 10 && targetNumber.length <= 11 && !targetNumber.startsWith('55')) {
+        targetNumber = `55${targetNumber}`;
       }
 
       const targetText = String(
@@ -551,15 +551,18 @@ export async function testExternalConnector(req: Request, res: Response) {
         '🟢 Teste operacional JARVIS: WhatsApp validado com sucesso!'
       ).trim();
 
-      const evoUrl = (
+      // Limpa a URL base da Evolution API
+      const baseEvoUrl = String(
         rawUrl ||
         cfg.endpoint_url ||
         process.env.EVOLUTION_URL ||
         'http://127.0.0.1:8080'
-      ).replace(/\/message\/sendText.*$/i, '').replace(/\/+$/, '');
+      )
+        .replace(/\/message\/sendText.*$/i, '')
+        .replace(/\/+$/, '');
 
       const instance = cfg.instance_name || body.params?.instance || 'jarvis-whats';
-      const evoApiKey = (
+      const evoApiKey = String(
         apiKey ||
         cfg.api_key ||
         cfg.auth_token ||
@@ -567,15 +570,16 @@ export async function testExternalConnector(req: Request, res: Response) {
         'jarvis-evolution-secret-2026'
       ).trim();
 
-      // Disparo direto para a Evolution API
-      const evoRes = await fetch(`${evoUrl}/message/sendText/${instance}`, {
+      // Dispara o POST diretamente para a rota /message/sendText/{instancia}
+      const fullEndpoint = `${baseEvoUrl}/message/sendText/${instance}`;
+      const evoRes = await fetch(fullEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'apikey': evoApiKey
         },
         body: JSON.stringify({
-          number: rawNumber,
+          number: targetNumber,
           text: targetText
         }),
         signal: AbortSignal.timeout(15000)
@@ -588,7 +592,7 @@ export async function testExternalConnector(req: Request, res: Response) {
           success: false,
           status: evoRes.status,
           latencyMs: Date.now() - startTime,
-          error: evoData.response?.message?.[0] || evoData.message || `Erro HTTP ${evoRes.status} na Evolution API`
+          error: evoData.response?.message?.[0] || evoData.message || `Erro HTTP ${evoRes.status} na Evolution API (${fullEndpoint})`
         });
       }
 
