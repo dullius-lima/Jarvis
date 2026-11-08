@@ -10,9 +10,10 @@ export interface HackerTaskInput {
   target_url?: string;
   code_to_test?: string;
   proposed_system_prompt?: string;
-   proposed_endpoint_url?: string;
+  proposed_endpoint_url?: string;
   open_github_issue?: boolean;
   custom_instruction?: string;
+  limit_logs?: number;
 }
 
 const RED_TEAM_PAYLOADS = [
@@ -22,7 +23,7 @@ const RED_TEAM_PAYLOADS = [
 ];
 
 /**
- *Verifica se uma resposta de agente vazou segredos ou cedeu ao Prompt Injection
+ * Verifica se uma resposta de agente vazou segredos ou cedeu ao Prompt Injection
  */
 function detectSecurityBreach(responseText: string): { breached: boolean; reason: string } {
   const text = String(responseText || '');
@@ -36,7 +37,26 @@ function detectSecurityBreach(responseText: string): { breached: boolean; reason
 }
 
 /**
- * Executa o Agente Hacker (R&D, Red Teaming, Self-Healing e Exploração em Sandbox)
+ * Disparo seguro de telemetria sináptica para o Cérebro 3D
+ */
+function safeEmitBrainLink(axonId: string, target: string, neurotransmitter: string, metadata: any) {
+  try {
+    if (typeof emitBrainLinkEvent === 'function') {
+      emitBrainLinkEvent({
+        axon_id: axonId,
+        source_dendrite: 'jarvis_core',
+        target_dendrite: 'hacker_sec_agent',
+        direction: 'FORWARD',
+        neurotransmitter_type: neurotransmitter,
+        intensity: 0.95,
+        metadata
+      } as any);
+    }
+  } catch {}
+}
+
+/**
+ * Executa o Agente Hacker (Diagnóstico de Falhas, Red Teaming, Self-Healing e Sandbox)
  */
 export async function runHackerAgent(
   input: HackerTaskInput,
@@ -44,17 +64,10 @@ export async function runHackerAgent(
 ) {
   const mode = input.mode || 'self_healing_debug';
 
-  try {
-    emitBrainLinkEvent({
-      axon_id: 'axon_hacker_agent',
-      source_dendrite: 'jarvis_core',
-      target_dendrite: 'hacker_sec_agent',
-      direction: 'FORWARD',
-      neurotransmitter_type: 'ACETILCOLINA',
-      intensity: 0.95,
-      metadata: { mode, target: input.target_slug || input.target_url || 'ecosystem' }
-    } as any);
-  } catch {}
+  safeEmitBrainLink('axon_hacker_agent', input.target_slug || input.target_url || 'ecosystem', 'ACETILCOLINA', {
+    mode,
+    target: input.target_slug || 'all'
+  });
 
   // =========================================================================
   // MODO 1: AUTO-AUDITORIA DE SEGURANÇA (RED TEAMING / PROMPT INJECTION OWASP)
@@ -114,35 +127,80 @@ export async function runHackerAgent(
   }
 
   // =========================================================================
-  // MODO 2: AUTODEPURAÇÃO POR LOGS EM TEMPO REAL (SELF-HEALING)
+  // MODO 2: AUTODEPURAÇÃO DE FALHAS E ALUCINAÇÕES DE FERRAMENTAS (SELF-HEALING)
   // =========================================================================
   if (mode === 'self_healing_debug') {
-    const logsRes = await pool.query(`
+    const limit = input.limit_logs || 15;
+    const targetSlug = input.target_slug?.trim();
+
+    // 1. Inspeciona a estrutura do agente no banco (se um slug foi indicado)
+    let agentConfig: any = null;
+    let configDefects: string[] = [];
+    if (targetSlug) {
+      const agRes = await pool.query(
+        'SELECT id, name, slug, agent_type, provider, model, system_prompt, tools, is_active FROM ai_agents WHERE slug = $1 LIMIT 1;',
+        [targetSlug]
+      );
+      if (agRes.rows.length > 0) {
+        agentConfig = agRes.rows[0];
+        const tools = Array.isArray(agentConfig.tools) ? agentConfig.tools : [];
+        if (!agentConfig.is_active) configDefects.push('Agente marcado como inativo (is_active = false).');
+        if (agentConfig.agent_type === 'llm' && tools.length === 0) {
+          configDefects.push('Agente cognitivo sem nenhuma Tool vinculada no banco (tools: []).');
+        }
+      } else {
+        configDefects.push(`Agente com slug "${targetSlug}" não existe na tabela ai_agents.`);
+      }
+    }
+
+    // 2. Busca histórico recente de execuções
+    let logsQuery = `
       SELECT id, agent_name, action_payload, response_payload, execution_time_ms, created_at
       FROM agent_audit_logs
-      ORDER BY id DESC
-      LIMIT 15;
-    `);
+    `;
+    const queryParams: any[] = [];
+    if (targetSlug) {
+      logsQuery += ` WHERE agent_name ILIKE $1 OR action_payload::text ILIKE $1 ORDER BY id DESC LIMIT $2;`;
+      queryParams.push(`%${targetSlug}%`, limit);
+    } else {
+      logsQuery += ` ORDER BY id DESC LIMIT $1;`;
+      queryParams.push(limit);
+    }
 
+    const logsRes = await pool.query(logsQuery, queryParams);
+
+    // 3. Classifica erros explícitos e falhas silenciosas (Alucinação sem Tool)
     const recentFailures = logsRes.rows.filter((row) => {
       const respStr = JSON.stringify(row.response_payload || {}).toLowerCase();
-      return (
+      const actStr = JSON.stringify(row.action_payload || {}).toLowerCase();
+      
+      const hasExplicitError =
         respStr.includes('error') ||
         respStr.includes('falha') ||
+        respStr.includes('400') ||
         respStr.includes('401') ||
         respStr.includes('404') ||
         respStr.includes('500') ||
-        respStr.includes('timeout')
-      );
+        respStr.includes('timeout');
+
+      // Detecção de falha silenciosa: intenção de ação (agendar, criar, enviar), mas retorno puramente textual sem tool
+      const intentToAction = actStr.includes('agendar') || actStr.includes('reuni') || actStr.includes('calend') || actStr.includes('marcar');
+      const hasToolCall = respStr.includes('tool_calls') || respStr.includes('calendar') || respStr.includes('event_id') || respStr.includes('htmlLink');
+      const isSilentFailure = intentToAction && !hasToolCall;
+
+      return hasExplicitError || isSilentFailure;
     });
 
-    let aiDiagnosis = 'Nenhuma falha crítica recente localizada nos últimos 15 registros.';
-    if (callLLMHelper && (recentFailures.length > 0 || input.custom_instruction)) {
+    let aiDiagnosis = 'Nenhuma falha crítica ou alucinação localizada nos logs analisados.';
+    if (callLLMHelper && (recentFailures.length > 0 || configDefects.length > 0 || input.custom_instruction)) {
       aiDiagnosis = await callLLMHelper(
-        `Você é o Agente Hacker Sênior (Engenharia Reversa, Red Team e Self-Healing do ecossistema JARVIS).
-Analise os logs de erro abaixo (sem nunca solicitar chaves brutas, usando apenas IDs de credenciais como llm_cred:groq ou ext_cred:brapi).
-Identifique a causa-raiz exata e escreva o patch de correção (JSON do nó ou ajuste de System Prompt/Endpoint).`,
-        `Instrução: ${input.custom_instruction || 'Auditar falhas recentes'}\nLogs com falha:\n${JSON.stringify(
+        `Você é o Subagente Hacker Especialista em Diagnóstico de Falhas do JARVIS.
+Sua função é ESTRITAMENTE AUDITAR E IDENTIFICAR FALHAS (Modo Read-Only). Você nunca altera nada sozinho.
+Analise os logs e o cadastro do agente:
+1. Verifique se o agente alucinou dizendo que agendou/fez a tarefa, mas omitiu a chamada nativa de tool_calls.
+2. Verifique se faltavam credenciais, ferramentas no cadastro (tools) ou se a formatação de data/hora estava incorreta.
+3. Apresente um laudo claro: [CAUSA-RAIZ EXATA], [EVIDÊNCIA TÉCNICA] e [PROPOSTA DE CORREÇÃO PARA O USUÁRIO REVISAR].`,
+        `Instrução: ${input.custom_instruction || 'Investigar por que a tarefa falhou silenciosamente'}\nDefeitos Cadastrais: ${JSON.stringify(configDefects)}\nDados do Agente: ${JSON.stringify(agentConfig)}\nLogs com Suspeita de Falha:\n${JSON.stringify(
           recentFailures.slice(0, 5),
           null,
           2
@@ -150,12 +208,12 @@ Identifique a causa-raiz exata e escreva o patch de correção (JSON do nó ou a
       );
     }
 
-    // Se houver uma correção proposta para um agente existente, envia para o Estado Wait (Read-Only por padrão!)
+    // 4. Trava de Segurança Read-Only com Aprovação Humana (Wait Gate)
     let waitGateRecord: any = null;
     if (input.target_slug && (input.proposed_system_prompt || input.proposed_endpoint_url)) {
       waitGateRecord = await createWorkflowWaitState({
         agentSlug: input.target_slug,
-        agentName: `Patch do Agente Hacker -> [${input.target_slug}]`,
+        agentName: `Diagnóstico Hacker -> [${input.target_slug}]`,
         environment: 'production',
         triggerSource: 'hacker_self_healing',
         inputPayload: {
@@ -164,18 +222,19 @@ Identifique a causa-raiz exata e escreva o patch de correção (JSON do nó ou a
           proposed_endpoint_url: input.proposed_endpoint_url
         },
         proposedOutput: { diagnosis: aiDiagnosis },
-        approvalPrompt: `🛡️ [Agente Hacker] Correção pronta para o agente "${input.target_slug}". Aprovar injeção em produção?`
+        approvalPrompt: `🛡️ [Subagente Hacker] Falha identificada no agente "${input.target_slug}". Proposta de patch pronta. Revisar e aplicar?`
       });
+      safeEmitBrainLink('axon_wait_gate', input.target_slug, 'GABA', { status: 'WAITING_HUMAN_APPROVAL' });
     }
 
-    // Opcional: Abrir Issue/Relatório técnico no GitHub se solicitado
+    // 5. Integração com GitHub Issues (opcional)
     let githubIssueResult: any = null;
     if (input.open_github_issue) {
       githubIssueResult = await executeExternalConnector({
         providerKey: 'github',
         action: 'create_issue',
         payload: {
-          title: `[Self-Healing Hacker Agent] Diagnóstico Automático (${input.target_slug || 'Core'})`,
+          title: `[Auditoria Hacker] Falha no Agente (${input.target_slug || 'Geral'})`,
           body: aiDiagnosis
         }
       }).catch((e) => ({ error: e.message }));
@@ -184,15 +243,18 @@ Identifique a causa-raiz exata e escreva o patch de correção (JSON do nó ou a
     return {
       success: true,
       mode: 'SELF_HEALING_DEBUG',
+      agent_inspected: targetSlug || 'global',
+      config_defects: configDefects,
       failures_found: recentFailures.length,
-      diagnosis_and_patch: aiDiagnosis,
+      diagnosis: aiDiagnosis,
       safety_gate: waitGateRecord
         ? {
             status: 'WAITING_HUMAN_APPROVAL',
             resumeToken: waitGateRecord.resume_token,
-            message: 'Modificação retida na trava Read-Only. Aprove no painel para aplicar em produção.'
+            message: 'Modificação retida na trava Read-Only. O Administrador deve aprovar antes de qualquer injeção.'
           }
-        : 'READ_ONLY_DIAGNOSIS_COMPLETE',
+        : 'READ_ONLY_AUDIT_COMPLETE',
+      evidence_sample: recentFailures.slice(0, 3),
       github_sync: githubIssueResult
     };
   }
@@ -239,18 +301,17 @@ Identifique a causa-raiz exata e escreva o patch de correção (JSON do nó ou a
   }
 
   // =========================================================================
-  // MODO 4: SANDBOX DE CÓDIGO ISOLADO (TESTE DE SCRIPT JS/TS ANTES DE INJETAR)
+  // MODO 4: SANDBOX DE CÓDIGO ISOLADO (TESTE DE SCRIPT ANTES DE INJETAR)
   // =========================================================================
   if (mode === 'sandbox_code_test' && input.code_to_test) {
     const start = Date.now();
     try {
-      // Bloqueia acesso a process.env ou módulos destrutivos dentro do Sandbox
-      if (/process\.env|child_process|fs\.rm|fs\.unlink/i.test(input.code_to_test)) {
+      if (/process\.env|child_process|fs\.rm|fs\.unlink|require\s*\(|import\s*\(/i.test(input.code_to_test)) {
         return {
           success: false,
           mode: 'SANDBOX_CODE_TEST',
           sanity_check: 'BLOCKED_BY_SANDBOX_POLICY',
-          error: 'Violação de Sandbox: O código tentou acessar process.env ou comandos de sistema restritos.'
+          error: 'Violação de Sandbox: O código tentou acessar recursos do sistema restritos.'
         };
       }
 
