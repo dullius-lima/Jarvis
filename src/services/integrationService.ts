@@ -387,11 +387,12 @@ export async function executarConectorExterno({
     }
 
     // --------------------------------------------------------------------------
+    // --------------------------------------------------------------------------
     // GMAIL (GOOGLE REST API COM OAUTH2 PERMANENTE)
     // --------------------------------------------------------------------------
     case 'gmail': {
       const accessToken = await obterTokenAcessoGoogle();
-      const acaoAtual = String(action || payload.action || 'read_inbox').toLowerCase();
+      const acaoAtual = String(action || payload.action || 'read_inbox').toLowerCase().trim();
 
       // 1. Enviar E-mail
       if (acaoAtual === 'send_email' || acaoAtual === 'send_message' || acaoAtual === 'enviar_email') {
@@ -500,10 +501,7 @@ export async function executarConectorExterno({
         messages: detailedMessages
       };
     }
-
-    // --------------------------------------------------------------------------
-    // GOOGLE CALENDAR
-    // --------------------------------------------------------------------------
+ 
    // --------------------------------------------------------------------------
     // GOOGLE CALENDAR: BLINDADO (CRIAR, EDITAR/REMARCAR, EXCLUIR E LISTAR)
     // --------------------------------------------------------------------------
