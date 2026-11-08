@@ -3,7 +3,7 @@
     <header class="section-header">
       <div>
         <h1>🤖 Agentes Especialistas &amp; Terminações Nervosas (SNP)</h1>
-        <p>Crie especialistas cognitivos (LLM), nós de API REST, servidores MCP ou scripts JS determinísticos.</p>
+        <p>Crie especialistas cognitivos (LLM com chave própria para tokens), nós de API REST, servidores MCP ou scripts JS determinísticos.</p>
       </div>
       <button @click="abrirModalNovoAgente" class="btn-primary">+ Novo Especialista</button>
     </header>
@@ -22,7 +22,11 @@
         <p class="agent-desc">{{ ag.description || ag.system_prompt || 'Sem descrição configurada.' }}</p>
 
         <div class="agent-meta">
-          <span v-if="ag.provider && ag.agent_type !== 'code'">🧠 {{ ag.provider }} ({{ ag.model }})</span>
+          <span v-if="ag.provider && ag.agent_type !== 'code'" class="meta-row">
+            🧠 {{ String(ag.provider).toUpperCase() }} ({{ ag.model }})
+            <span v-if="ag.api_key" class="key-badge dedicated" title="Consumo isolado: debitado na chave individual deste agente">🔑 Chave Própria</span>
+            <span v-else class="key-badge inherited" title="Herda a chave mestre do JARVIS">🔑 Chave do Cérebro</span>
+          </span>
           <span v-if="ag.endpoint_url">🌐 {{ ag.endpoint_url }}</span>
           <span v-if="ag.next_agent_slug" class="chain-badge">🔗 Próximo Nó: {{ ag.next_agent_slug }}</span>
         </div>
@@ -67,10 +71,10 @@
               <div class="form-group" style="flex: 2;">
                 <label>Modo de Operação</label>
                 <select v-model="agenteEmEdicao.agent_type" class="input-field">
+                  <option value="llm">🧠 Agente de IA Cognitivo (LLM + Tools)</option>
                   <option value="code">💻 Nó de Script JavaScript (0 Tokens)</option>
                   <option value="api">🌐 Nó Direto REST API / Webhook</option>
                   <option value="mcp">🔌 Cliente Direto MCP</option>
-                  <option value="llm">🧠 Agente de IA Cognitivo (LLM + Tools)</option>
                 </select>
               </div>
             </div>
@@ -88,20 +92,20 @@
             </div>
           </div>
 
-          <!-- ETAPA 2A: AGENTE COGNITIVO (LLM) -->
+          <!-- ETAPA 2A: AGENTE COGNITIVO (LLM COM CHAVE INDIVIDUAL E TESTADOR) -->
           <div v-if="agenteEmEdicao.agent_type === 'llm'" class="step-section">
-            <div class="step-badge">2. Cérebro do Agente (LLM &amp; Prompt)</div>
+            <div class="step-badge">2. Cérebro do Agente (LLM, Chave Individual &amp; Prompt)</div>
 
             <div class="form-row">
               <div class="form-group">
                 <label>Provedor de IA do Agente</label>
                 <select v-model="agenteEmEdicao.provider" @change="aoMudarProvedorDoAgente" class="input-field">
                   <option value="groq">Groq (LPU Ultra-Rápido)</option>
-                  <option value="gemini">Google Gemini</option>
-                  <option value="openai">OpenAI</option>
+                  <option value="gemini">Google Gemini (AI Studio)</option>
+                  <option value="openai">OpenAI (GPT-4o / o3-mini)</option>
                   <option value="deepseek">DeepSeek (V3 / R1)</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="ollama">Ollama (Local Offline)</option>
+                  <option value="openrouter">OpenRouter (Modelos Gratuitos :free)</option>
+                  <option value="ollama">Ollama (Local Offline na VM)</option>
                 </select>
               </div>
 
@@ -130,12 +134,55 @@
             </div>
 
             <div class="form-group">
+              <label>
+                Chave de API Individual deste Agente
+                <small style="color: #94a3b8; font-weight: normal;">(Preencha para separar o consumo de tokens deste especialista no console do provedor)</small>
+              </label>
+              <div class="key-input-container">
+                <input
+                  type="password"
+                  v-model="agenteEmEdicao.api_key"
+                  class="input-field"
+                  placeholder="gsk_..., AIza..., sk-... (Deixe vazio para herdar a chave do JARVIS)"
+                  style="flex: 1;"
+                />
+                <button
+                  type="button"
+                  @click="testarIaDoAgente"
+                  :disabled="isTestingAgentLlm"
+                  class="btn-test"
+                  style="padding: 9px 18px; white-space: nowrap;"
+                >
+                  {{ isTestingAgentLlm ? '⏳ Testando...' : '⚡ Testar IA' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Feedback Visual do Teste de Conexão da IA -->
+            <div
+              v-if="agentLlmTestFeedback"
+              :class="['llm-test-feedback', agentLlmTestSuccess ? 'success' : 'error']"
+            >
+              {{ agentLlmTestFeedback }}
+            </div>
+
+            <div class="form-group" style="margin-top: 12px;">
+              <label>Base URL Customizada (Opcional)</label>
+              <input
+                type="text"
+                v-model="agenteEmEdicao.base_url"
+                class="input-field"
+                placeholder="Ex: https://api.groq.com/openai/v1 ou http://localhost:11434/v1"
+              />
+            </div>
+
+            <div class="form-group">
               <label>System Prompt (Regras e Instruções do Especialista)</label>
               <textarea
                 v-model="agenteEmEdicao.system_prompt"
                 rows="4"
                 class="input-field"
-                placeholder="Ex: Você é um analista financeiro sênior especialista na B3..."
+                placeholder="Ex: Você é um analista financeiro sênior especialista na B3. Responda em português direto e analítico..."
               ></textarea>
             </div>
           </div>
@@ -380,7 +427,7 @@ import { ref, reactive, onMounted } from 'vue';
 
 const ENDPOINTS_PADRAO: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
-  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
   openai: 'https://api.openai.com/v1',
   deepseek: 'https://api.deepseek.com/v1',
   openrouter: 'https://openrouter.ai/api/v1',
@@ -391,23 +438,40 @@ const modelosPadrao: Record<string, Array<{ label: string; value: string }>> = {
   groq: [
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
     { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' },
-    { label: 'Llama 3.3 70B Versatile', value: 'llama-3.3-70b-versatile' }
+    { label: 'Llama 3.3 70B Versatile', value: 'llama-3.3-70b-versatile' },
+    { label: 'Llama 3.1 8B Instant', value: 'llama-3.1-8b-instant' }
   ],
   gemini: [
     { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' },
-    { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
+    { label: 'Gemini 2.5 Flash (Recomendado)', value: 'gemini-2.5-flash' },
     { label: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
-    { label: 'Gemini 1.5 Flash', value: 'gemini-1.5-flash' }
+    { label: 'Gemini 1.5 Flash', value: 'gemini-1.5-flash' },
+    { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' }
   ],
   openai: [
     { label: '✍️ Inserir ID Manual da OpenAI', value: 'CUSTOM_INPUT' },
     { label: 'GPT-4o Mini', value: 'gpt-4o-mini' },
-    { label: 'GPT-4o', value: 'gpt-4o' }
+    { label: 'GPT-4o', value: 'gpt-4o' },
+    { label: 'o3-mini (Reasoning)', value: 'o3-mini' }
   ],
   deepseek: [
     { label: '✍️ Inserir ID Manual da DeepSeek', value: 'CUSTOM_INPUT' },
     { label: 'DeepSeek V3 (Chat)', value: 'deepseek-chat' },
     { label: 'DeepSeek R1 (Reasoner)', value: 'deepseek-reasoner' }
+  ],
+  openrouter: [
+    { label: '✍️ Inserir ID Manual do OpenRouter', value: 'CUSTOM_INPUT' },
+    { label: 'Llama 3.3 70B Instruct (:free)', value: 'meta-llama/llama-3.3-70b-instruct:free' },
+    { label: 'DeepSeek R1 (:free)', value: 'deepseek/deepseek-r1:free' },
+    { label: 'DeepSeek V3 (:free)', value: 'deepseek/deepseek-chat:free' },
+    { label: 'Gemini 2.0 Flash (:free)', value: 'google/gemini-2.0-flash-exp:free' },
+    { label: 'Qwen 2.5 72B Instruct (:free)', value: 'qwen/qwen-2.5-72b-instruct:free' }
+  ],
+  ollama: [
+    { label: '✍️ Inserir ID Manual do Ollama', value: 'CUSTOM_INPUT' },
+    { label: 'Llama 3.1 8B (Local)', value: 'llama3.1:8b' },
+    { label: 'Qwen 2.5 Coder (Local)', value: 'qwen2.5-coder' },
+    { label: 'Mistral 7B (Local)', value: 'mistral' }
   ]
 };
 
@@ -417,6 +481,11 @@ const editandoAgenteAtivo = ref(false);
 const catalogoFerramentasDisponiveis = ref<any[]>([]);
 const exibirCriadorDeFerramenta = ref(false);
 const feedbackCriadorFerramenta = ref('');
+
+// Estado reativo do testador de conexão da IA do Agente
+const isTestingAgentLlm = ref(false);
+const agentLlmTestFeedback = ref('');
+const agentLlmTestSuccess = ref(false);
 
 const rascunhoNovaFerramenta = reactive({
   icon: '🛠️',
@@ -436,11 +505,11 @@ const agenteEmEdicao = ref<any>({
   slug: '',
   icon: '🤖',
   description: '',
-  agent_type: 'code',
+  agent_type: 'llm',
   provider: 'groq',
   model: 'llama-3.3-70b-versatile',
   custom_model_id: '',
-  temperature: 0.3,
+  temperature: 0.2,
   api_key: '',
   base_url: ENDPOINTS_PADRAO.groq,
   system_prompt: '',
@@ -458,6 +527,45 @@ const agenteEmEdicao = ref<any>({
 function modelosDoProvedor(prov: string) {
   const chave = (prov || 'groq').toLowerCase();
   return modelosPadrao[chave] || [{ label: `✍️ Inserir ID Manual (${chave.toUpperCase()})`, value: 'CUSTOM_INPUT' }];
+}
+
+async function testarIaDoAgente() {
+  if (!agenteEmEdicao.value) return;
+  isTestingAgentLlm.value = true;
+  agentLlmTestFeedback.value = '';
+  agentLlmTestSuccess.value = false;
+
+  const prov = (agenteEmEdicao.value.provider || 'groq').toLowerCase();
+  const modelToTest =
+    agenteEmEdicao.value.model === 'CUSTOM_INPUT' && agenteEmEdicao.value.custom_model_id?.trim()
+      ? agenteEmEdicao.value.custom_model_id.trim()
+      : agenteEmEdicao.value.model;
+
+  try {
+    const res = await fetch('/api/v1/brain-config/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: prov,
+        model: modelToTest,
+        api_key: agenteEmEdicao.value.api_key?.trim() || undefined,
+        base_url: agenteEmEdicao.value.base_url?.trim() || undefined
+      })
+    });
+    const json = await res.json();
+    if (json.success) {
+      agentLlmTestSuccess.value = true;
+      agentLlmTestFeedback.value = `🟢 Conexão validada com sucesso! Provedor: ${json.provider?.toUpperCase()} | Modelo: ${json.usedModel || modelToTest}`;
+    } else {
+      agentLlmTestSuccess.value = false;
+      agentLlmTestFeedback.value = `🔴 Erro: ${json.error || 'Credenciais recusadas pelo provedor.'}`;
+    }
+  } catch (err: any) {
+    agentLlmTestSuccess.value = false;
+    agentLlmTestFeedback.value = `🔴 Falha de rede: ${err.message}`;
+  } finally {
+    isTestingAgentLlm.value = false;
+  }
 }
 
 async function carregarCatalogoDeFerramentas() {
@@ -642,13 +750,17 @@ async function buscarAgentesEspecialistas() {
 
 function abrirModalNovoAgente() {
   editandoAgenteAtivo.value = false;
+  agentLlmTestFeedback.value = '';
+  agentLlmTestSuccess.value = false;
+  isTestingAgentLlm.value = false;
+
   agenteEmEdicao.value = {
     id: null,
     name: '',
     slug: '',
     icon: '🤖',
     description: '',
-    agent_type: 'code',
+    agent_type: 'llm',
     provider: 'groq',
     model: 'llama-3.3-70b-versatile',
     custom_model_id: '',
@@ -671,6 +783,10 @@ function abrirModalNovoAgente() {
 
 function abrirModalEditarAgente(ag: any) {
   editandoAgenteAtivo.value = true;
+  agentLlmTestFeedback.value = '';
+  agentLlmTestSuccess.value = false;
+  isTestingAgentLlm.value = false;
+
   const prov = ag.provider || 'groq';
   const lista = modelosDoProvedor(prov);
   const existe = lista.some((m) => m.value === ag.model && m.value !== 'CUSTOM_INPUT');
@@ -678,10 +794,13 @@ function abrirModalEditarAgente(ag: any) {
   agenteEmEdicao.value = {
     ...ag,
     icon: ag.icon || '🤖',
+    agent_type: ag.agent_type || 'llm',
     provider: prov,
     model: existe ? ag.model : 'CUSTOM_INPUT',
     custom_model_id: existe ? '' : ag.model || '',
     temperature: Number(ag.temperature ?? 0.2),
+    api_key: ag.api_key || '',
+    base_url: ag.base_url || ENDPOINTS_PADRAO[prov] || '',
     tools: Array.isArray(ag.tools) ? [...ag.tools] : [],
     next_agent_slug: ag.next_agent_slug || null,
     cron_expression: ag.cron_expression || '*/5 * * * *'
@@ -699,6 +818,7 @@ function aoMudarProvedorDoAgente() {
   } else {
     agenteEmEdicao.value.model = 'CUSTOM_INPUT';
   }
+  agentLlmTestFeedback.value = '';
 }
 
 async function salvarAgenteEspecialista() {
@@ -724,6 +844,8 @@ async function salvarAgenteEspecialista() {
     const payload = {
       ...agenteEmEdicao.value,
       model: modeloFinal,
+      api_key: agenteEmEdicao.value.api_key?.trim() || null,
+      base_url: agenteEmEdicao.value.base_url?.trim() || null,
       response_instruction: agenteEmEdicao.value.system_prompt
     };
 
@@ -857,6 +979,32 @@ onMounted(async () => {
   word-break: break-all;
 }
 
+.meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.key-badge {
+  font-size: 0.68rem;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.key-badge.dedicated {
+  background: rgba(34, 197, 94, 0.18);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+}
+
+.key-badge.inherited {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
 .tools-chips {
   display: flex;
   flex-wrap: wrap;
@@ -938,6 +1086,32 @@ onMounted(async () => {
   padding: 4px 10px;
   border-radius: 6px;
   margin-bottom: 12px;
+}
+
+.key-input-container {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.llm-test-feedback {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.llm-test-feedback.success {
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: #4ade80;
+}
+
+.llm-test-feedback.error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #f87171;
 }
 
 .tools-header-row {
