@@ -41,10 +41,68 @@ export async function executarFerramentaVinculada(
     return await executeSshCommand(args?.command || valorConsulta || 'uptime');
   }
 
+  // 4. ECOSSISTEMA NATIVO GOOGLE (GMAIL, CALENDAR, DRIVE), BRAPI B3 E MENSAGERIA
+  // Interceptado ANTES da checagem genérica de URL para garantir o uso de OAuth2 permanente
+  const ehConectorNativoIntegrado =
+    chaveLimpa.includes('gmail') ||
+    chaveLimpa.includes('calendar') ||
+    chaveLimpa.includes('agenda') ||
+    chaveLimpa.includes('drive') ||
+    chaveLimpa.includes('brapi') ||
+    chaveLimpa.includes('telegram') ||
+    chaveLimpa.includes('whatsapp') ||
+    chaveLimpa.includes('outlook');
+
+  if (ehConectorNativoIntegrado) {
+    let acaoAlvo = String(args?.action || '').toLowerCase().trim();
+
+    // Tratamento inteligente de ação e filtros para o Gmail
+    let queryGmail = args?.query || args?.busca || '';
+    if (chaveLimpa.includes('gmail')) {
+      if (!acaoAlvo) {
+        if (/enviar|send|responder|reply/i.test(promptNormalizado)) {
+          acaoAlvo = 'send_email';
+        } else if (/lixeira|trash|delete|excluir|apagar/i.test(promptNormalizado)) {
+          acaoAlvo = 'trash_message';
+        } else {
+          acaoAlvo = 'read_inbox';
+        }
+      }
+      // Se solicitou mensagens não lidas, injeta o filtro nativo do Gmail
+      if (!queryGmail && /não lido|nao lido|unread/i.test(promptNormalizado + ' ' + String(args?.task_details || ''))) {
+        queryGmail = 'is:unread';
+      }
+    }
+
+    // Ação padrão para Google Calendar
+    if ((chaveLimpa.includes('calendar') || chaveLimpa.includes('agenda')) && !acaoAlvo) {
+      acaoAlvo = /agendar|criar|novo|schedule|create/i.test(promptNormalizado) ? 'create_event' : 'list_events';
+    }
+
+    // Ação padrão para Google Drive
+    if (chaveLimpa.includes('drive') && !acaoAlvo) {
+      acaoAlvo = /upload|enviar|salvar/i.test(promptNormalizado) ? 'upload_file' : 'list_files';
+    }
+
+    const payloadIntegracao = {
+      ...args,
+      action: acaoAlvo || 'execute',
+      query: queryGmail || args?.query || (chaveLimpa.includes('gmail') ? '' : valorConsulta)
+    };
+
+    return await executeProtocolOrIntegration(chaveLimpa, {
+      protocol: (chaveLimpa as SupportedProtocolOrPlatform) || 'rest_api',
+      endpoint: args?.endpoint,
+      method: args?.method || 'POST',
+      body: payloadIntegracao,
+      prompt: userPrompt
+    }).catch((err: any) => ({ error: err.message, tool: chaveLimpa }));
+  }
+
   const customConn = connectorsMap?.get(chaveLimpa);
   const cfg = customConn?.config || {};
 
-  // 4. HOME ASSISTANT / DISPOSITIVOS IOT
+  // 5. HOME ASSISTANT / DISPOSITIVOS IOT
   const ehDispositivoCasa =
     chaveLimpa.includes('home_assistant') ||
     chaveLimpa.includes('detector') ||
@@ -56,9 +114,18 @@ export async function executarFerramentaVinculada(
       cfg.endpoint_url ||
       customConn?.endpoint_url ||
       args?.endpoint ||
-      'http://163.176.111.18:8123/api/states';
+      process.env.HOME_ASSISTANT_URL ||
+      'http://localhost:8123/api/states';
 
-    const token = cfg.auth_token || cfg.access_token || cfg.api_key || customConn?.auth_token || args?.auth_token || '';
+    const token =
+      cfg.auth_token ||
+      cfg.access_token ||
+      cfg.api_key ||
+      customConn?.auth_token ||
+      process.env.HOME_ASSISTANT_TOKEN ||
+      args?.auth_token ||
+      '';
+
     const baseUrl = String(endpointAlvo).split('/api')[0];
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = String(token).startsWith('Bearer ') ? String(token) : `Bearer ${token}`;
@@ -114,13 +181,13 @@ export async function executarFerramentaVinculada(
     }
   }
 
-  // 5. APIS HTTP EXTERNAS
+  // 6. APIS HTTP EXTERNAS GENÉRICAS DO CATÁLOGO
   const rawEndpoint = cfg.endpoint_url || customConn?.endpoint_url || (chaveLimpa === 'http_request_universal' ? args?.endpoint || args?.url : '');
   if (rawEndpoint && String(rawEndpoint).startsWith('http')) {
     return await executarConectorApiUniversal(chaveLimpa, { query: valorConsulta, ...args }, userPrompt, serverBaseUrl);
   }
 
-  // 6. SCRIPTS EM CÓDIGO JS PURO
+  // 7. SCRIPTS EM CÓDIGO JS PURO
   if ((cfg.tool_type === 'code' || customConn?.category === 'Code Tool') && cfg.code_snippet) {
     try {
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
