@@ -147,6 +147,9 @@ export async function executarConectorExterno({
     : chaveBruta;
 
   switch (chave) {
+    // --------------------------------------------------------------------------
+    // BRAPI B3
+    // --------------------------------------------------------------------------
     case 'brapi': {
       const tickerBruto =
         payload.symbol || payload.ticker || payload.query || payload.task_details || 'PETR4';
@@ -171,6 +174,9 @@ export async function executarConectorExterno({
       return data;
     }
 
+    // --------------------------------------------------------------------------
+    // HOME ASSISTANT
+    // --------------------------------------------------------------------------
     case 'home_assistant': {
       let rawHaUrl = (
         payload.endpoint ||
@@ -296,132 +302,221 @@ export async function executarConectorExterno({
     // --------------------------------------------------------------------------
     // WHATSAPP (EVOLUTION API / BAILEYS)
     // --------------------------------------------------------------------------
-    // ======================================================================
-      // WHATSAPP (Evolution API / Baileys)
-      // ======================================================================
-      case 'whatsapp': {
-        const creds = await getConnectorCredentials('whatsapp');
-        const evoUrl = (creds.endpoint_url || process.env.EVOLUTION_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
-        const apiKey = creds.api_key || creds.auth_token || process.env.EVOLUTION_API_KEY || 'jarvis-evolution-secret-2026';
-        const instance = creds.instance_name || params.instance || 'jarvis-whats';
+    case 'whatsapp': {
+      const evoUrl = (
+        payload.endpoint ||
+        payload.endpoint_url ||
+        config.endpoint_url ||
+        process.env.EVOLUTION_URL ||
+        'http://127.0.0.1:8080'
+      )
+        .replace(/\/message\/sendText.*$/i, '')
+        .replace(/\/+$/, '');
 
-        const rawTarget = params.number || params.to || params.chat_id || params.destinatario || params.recipientId || '';
-        let targetNumber = String(rawTarget).replace(/\D/g, '');
+      const apiKey =
+        token ||
+        config.api_key ||
+        config.auth_token ||
+        process.env.EVOLUTION_API_KEY ||
+        'jarvis-evolution-secret-2026';
 
-        // Adiciona DDI 55 automaticamente caso o usuário passe apenas DDD + Número
-        if (targetNumber.length >= 10 && targetNumber.length <= 11 && !targetNumber.startsWith('55')) {
-          targetNumber = `55${targetNumber}`;
+      const instance =
+        payload.instance ||
+        payload.params?.instance ||
+        config.instance_name ||
+        'jarvis-whats';
+
+      const rawTarget =
+        payload.number ||
+        payload.to ||
+        payload.chat_id ||
+        payload.destinatario ||
+        payload.recipientId ||
+        payload.target ||
+        payload.params?.number ||
+        payload.params?.to ||
+        '';
+
+      let targetNumber = String(rawTarget).replace(/\D/g, '');
+
+      // Adiciona DDI 55 automaticamente caso o número venha com 10 ou 11 dígitos
+      if (targetNumber.length >= 10 && targetNumber.length <= 11 && !targetNumber.startsWith('55')) {
+        targetNumber = `55${targetNumber}`;
+      }
+
+      const textMessage =
+        payload.text ||
+        payload.message ||
+        payload.mensagem ||
+        payload.body ||
+        payload.params?.text ||
+        payload.params?.message ||
+        payload.query ||
+        payload.task_details ||
+        'Mensagem do ecossistema JARVIS';
+
+      if (!targetNumber) {
+        throw new Error('Número de destino obrigatório para envio via WhatsApp.');
+      }
+
+      const res = await fetch(`${evoUrl}/message/sendText/${instance}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: apiKey
+        },
+        body: JSON.stringify({
+          number: targetNumber,
+          text: textMessage
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+
+      const data: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const erroMsg = data.response?.message?.[0] || data.message || `Erro HTTP ${res.status} na Evolution API`;
+        throw new Error(erroMsg);
+      }
+
+      return {
+        success: true,
+        provider: 'whatsapp',
+        destinatario: targetNumber,
+        data
+      };
+    }
+
+    // --------------------------------------------------------------------------
+    // GMAIL (GOOGLE REST API COM OAUTH2 PERMANENTE)
+    // --------------------------------------------------------------------------
+    case 'gmail': {
+      const accessToken = await obterTokenAcessoGoogle();
+      const acaoAtual = String(action || payload.action || 'read_inbox').toLowerCase();
+
+      // 1. Enviar E-mail
+      if (acaoAtual === 'send_email' || acaoAtual === 'send_message' || acaoAtual === 'enviar_email') {
+        const to = payload.to || payload.destinatario || payload.para;
+        const subject = payload.subject || payload.assunto || 'Mensagem do JARVIS';
+        const bodyText = payload.body || payload.text || payload.mensagem || payload.corpo || '';
+
+        if (!to) {
+          throw new Error('Destinatário (to) é obrigatório para enviar e-mail via Gmail.');
         }
 
-        const textMessage = params.text || params.message || params.mensagem || 'Mensagem do ecossistema JARVIS';
+        const emailLines = [
+          `To: ${to}`,
+          'Content-Type: text/plain; charset=utf-8',
+          'MIME-Version: 1.0',
+          `Subject: =?utf-8?B?${Buffer.from(subject).toString('base64')}?=`,
+          '',
+          bodyText
+        ];
+        const rawEmail = Buffer.from(emailLines.join('\r\n'))
+          .toString('base64')
+          .replace(/\+/g, '-')
+          .replace(/\//g, '_')
+          .replace(/=+$/, '');
 
-        if (!targetNumber) {
-          throw new Error('Número de destino obrigatório para envio via WhatsApp.');
-        }
-
-        const res = await fetch(`${evoUrl}/message/sendText/${instance}`, {
+        const sendRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
-            'apikey': apiKey
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            number: targetNumber,
-            text: textMessage
-          }),
-          signal: AbortSignal.timeout(15000)
+          body: JSON.stringify({ raw: rawEmail })
         });
 
-        const data: any = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          const erroMsg = data.response?.message?.[0] || data.message || `Erro HTTP ${res.status} na Evolution API`;
-          throw new Error(erroMsg);
+        const sendData: any = await sendRes.json().catch(() => ({}));
+        if (!sendRes.ok) {
+          throw new Error(sendData.error?.message || `Erro HTTP ${sendRes.status} ao enviar e-mail.`);
         }
-
-        return {
-          success: true,
-          provider: 'whatsapp',
-          destinatario: targetNumber,
-          data
-        };
+        return { success: true, provider: 'gmail', action: 'send_email', data: sendData };
       }
 
-// --------------------------------------------------------------------------
-  // GOOGLE CALENDAR: TOTALMENTE CORRIGIDO PARA DATA, HORA E FUSO
-  // --------------------------------------------------------------------------
-  case 'google_calendar': {
-    const accessToken = await obterTokenAcessoGoogle();
-    const acaoAtual = String(action || payload.action || 'list_events').toLowerCase();
-    const calendarBase = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+      // 2. Mover Mensagem para a Lixeira
+      if (acaoAtual === 'trash_message' || acaoAtual === 'delete_message' || acaoAtual === 'excluir_email') {
+        const messageId = payload.id || payload.messageId || payload.emailId;
+        if (!messageId) {
+          throw new Error('ID do e-mail é obrigatório para exclusão.');
+        }
 
-    // 1. Criar novo compromisso / agendamento
-    if (
-      acaoAtual === 'create_event' ||
-      acaoAtual === 'schedule' ||
-      acaoAtual === 'criar_evento' ||
-      acaoAtual === 'agendar' ||
-      acaoAtual === 'agendamento'
-    ) {
+        const trashRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/trash`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const trashData: any = await trashRes.json().catch(() => ({}));
+        if (!trashRes.ok) {
+          throw new Error(trashData.error?.message || `Erro HTTP ${trashRes.status} ao mover e-mail para a lixeira.`);
+        }
+        return { success: true, provider: 'gmail', action: 'trash_message', messageId, data: trashData };
+      }
+
+      // 3. Leitura da Caixa de Entrada (read_inbox / list_messages)
+      const maxResults = Number(payload.maxResults || payload.pageSize || payload.limite || 5);
+      let queryFilter = String(payload.query || payload.q || payload.busca || '').trim();
+
+      const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}${
+        queryFilter ? `&q=${encodeURIComponent(queryFilter)}` : ''
+      }`;
+
+      const listRes = await fetch(listUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const listData: any = await listRes.json().catch(() => ({}));
+      if (!listRes.ok) {
+        throw new Error(listData.error?.message || `Erro HTTP ${listRes.status} ao listar mensagens do Gmail.`);
+      }
+
+      const messageList = listData.messages || [];
+      const detailedMessages: any[] = [];
+
+      for (const msg of messageList.slice(0, maxResults)) {
+        try {
+          const msgRes = await fetch(
+            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=full`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          const fullMsg: any = await msgRes.json();
+          const headers = fullMsg.payload?.headers || [];
+          const getHeader = (name: string) =>
+            headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+
+          detailedMessages.push({
+            id: fullMsg.id,
+            threadId: fullMsg.threadId,
+            subject: getHeader('Subject') || '(Sem Assunto)',
+            from: getHeader('From') || '(Remetente Desconhecido)',
+            date: getHeader('Date') || '',
+            snippet: fullMsg.snippet || ''
+          });
+        } catch {}
+      }
+
+      return {
+        success: true,
+        provider: 'gmail',
+        action: 'read_inbox',
+        total: detailedMessages.length,
+        messages: detailedMessages
+      };
+    }
+
+    // --------------------------------------------------------------------------
+    // GOOGLE CALENDAR
+    // --------------------------------------------------------------------------
+   // --------------------------------------------------------------------------
+    // GOOGLE CALENDAR: BLINDADO (CRIAR, EDITAR/REMARCAR, EXCLUIR E LISTAR)
+    // --------------------------------------------------------------------------
+    case 'google_calendar': {
+      const accessToken = await obterTokenAcessoGoogle();
+      const acaoAtual = String(action || payload.action || 'list_events').toLowerCase().trim();
+      const calendarBase = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+      const fuso = payload.timezone || payload.params?.timezone || 'America/Campo_Grande';
       const parametros = payload.parameters || payload.params || payload;
 
-      const titulo =
-        parametros.summary ||
-        parametros.title ||
-        parametros.assunto ||
-        parametros.nome ||
-        parametros.compromisso ||
-        parametros.task_details ||
-        parametros.query ||
-        'Compromisso';
-
-      const descricao =
-        parametros.description ||
-        parametros.descricao ||
-        parametros.detalhes ||
-        'Agendado via JARVIS.';
-
-      const fuso = parametros.timezone || 'America/Campo_Grande';
-
-      // Parser inteligente que combina data e horário caso venham separados
-      const dataStr = String(parametros.data || parametros.date || '').trim();
-      const horaStr = String(parametros.horario || parametros.time || parametros.hora || '').trim();
-      const inicioCombinado = parametros.startTime || parametros.start || parametros.start_time || parametros.data_hora;
-
-      let dataInicio: Date = new Date();
-
-      if (dataStr && horaStr) {
-        // Ex: "2026-11-09" + "15:00"
-        const isoMontado = `${dataStr.replace(/\//g, '-')}T${horaStr.length === 5 ? `${horaStr}:00` : horaStr}`;
-        const d = new Date(isoMontado);
-        if (!isNaN(d.getTime())) dataInicio = d;
-      } else if (inicioCombinado) {
-        const d = new Date(inicioCombinado);
-        if (!isNaN(d.getTime())) {
-          dataInicio = d;
-        } else if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(inicioCombinado).trim())) {
-          const [h, m] = String(inicioCombinado).trim().split(':').map(Number);
-          dataInicio.setHours(h, m, 0, 0);
-          if (dataInicio.getTime() < Date.now()) {
-            dataInicio.setDate(dataInicio.getDate() + 1);
-          }
-        }
-      } else if (horaStr && /^\d{1,2}:\d{2}(:\d{2})?$/.test(horaStr)) {
-        const [h, m] = horaStr.split(':').map(Number);
-        dataInicio.setHours(h, m, 0, 0);
-        if (dataInicio.getTime() < Date.now()) {
-          dataInicio.setDate(dataInicio.getDate() + 1);
-        }
-      }
-
-      // Horário de Término (1 hora de duração padrão)
-      const fimCombinado = parametros.endTime || parametros.end || parametros.end_time || parametros.termino;
-      const dataFim = fimCombinado && !isNaN(new Date(fimCombinado).getTime())
-        ? new Date(fimCombinado)
-        : new Date(dataInicio.getTime() + 60 * 60 * 1000);
-
-      // Formatação RFC3339 com offset explícito (-04:00) para garantir precisão
-      const formatarComFuso = (d: Date) => {
-        const pad = (n: number) => String(n).padStart(2, '0');
+      // Funções auxiliares de fuso e formatação segura (America/Campo_Grande UTC-4)
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const formatarOffsetFuso = (d: Date) => {
         const ano = d.getFullYear();
         const mes = pad(d.getMonth() + 1);
         const dia = pad(d.getDate());
@@ -431,100 +526,324 @@ export async function executarConectorExterno({
         return `${ano}-${mes}-${dia}T${hora}:${min}:${seg}-04:00`;
       };
 
-      const corpoEvento: any = {
-        summary: titulo,
-        description: descricao,
-        start: {
-          dateTime: formatarComFuso(dataInicio),
-          timeZone: fuso
-        },
-        end: {
-          dateTime: formatarComFuso(dataFim),
-          timeZone: fuso
-        },
-        reminders: {
-          useDefault: false,
-          overrides: [
-            { method: 'popup', minutes: 30 },
-            { method: 'popup', minutes: 10 }
-          ]
+      const calcularDataHora = (params: any) => {
+        const dataStr = String(params.nova_data || params.data || params.date || params.dia || '').trim();
+        const horaStr = String(params.novo_horario || params.horario || params.time || params.hora || '').trim();
+        const inicioBruto = params.startTime || params.start || params.start_time || params.data_hora;
+
+        let dataInicio = new Date();
+
+        if (dataStr && horaStr) {
+          // Combina data e hora separadas: ex: "2026-11-09" + "15:00"
+          const iso = `${dataStr.replace(/\//g, '-')}T${horaStr.length === 5 ? `${horaStr}:00` : horaStr}`;
+          const d = new Date(iso);
+          if (!isNaN(d.getTime())) dataInicio = d;
+        } else if (inicioBruto) {
+          const d = new Date(inicioBruto);
+          if (!isNaN(d.getTime())) {
+            dataInicio = d;
+          } else if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(inicioBruto).trim())) {
+            const [h, m] = String(inicioBruto).trim().split(':').map(Number);
+            dataInicio.setHours(h, m, 0, 0);
+            if (dataInicio.getTime() < Date.now()) dataInicio.setDate(dataInicio.getDate() + 1);
+          }
+        } else if (horaStr && /^\d{1,2}:\d{2}(:\d{2})?$/.test(horaStr)) {
+          const [h, m] = horaStr.split(':').map(Number);
+          dataInicio.setHours(h, m, 0, 0);
+          if (dataInicio.getTime() < Date.now()) dataInicio.setDate(dataInicio.getDate() + 1);
+        } else if (dataStr) {
+          const d = new Date(`${dataStr.replace(/\//g, '-')}T09:00:00`);
+          if (!isNaN(d.getTime())) dataInicio = d;
         }
+
+        const fimBruto = params.endTime || params.end || params.end_time || params.termino;
+        const dataFim = fimBruto && !isNaN(new Date(fimBruto).getTime())
+          ? new Date(fimBruto)
+          : new Date(dataInicio.getTime() + 60 * 60 * 1000); // 1 hora padrão
+
+        return { dataInicio, dataFim };
       };
 
-      if (parametros.location || parametros.local || parametros.endereco) {
-        corpoEvento.location = parametros.location || parametros.local || parametros.endereco;
+      // ========================================================================
+      // 1. EXCLUIR / CANCELAR COMPROMISSO
+      // ========================================================================
+      if (
+        acaoAtual === 'delete_event' ||
+        acaoAtual === 'delete' ||
+        acaoAtual === 'remover_evento' ||
+        acaoAtual === 'cancelar_evento' ||
+        acaoAtual === 'excluir_evento' ||
+        acaoAtual === 'cancel'
+      ) {
+        let eventId = String(parametros.eventId || parametros.id || parametros.event_id || '').trim();
+        let tituloEvento = String(parametros.summary || parametros.title || parametros.assunto || parametros.nome || '').trim();
+
+        // Se a LLM não tem o eventId, faz busca inteligente pelo título ou termo
+        if (!eventId) {
+          const termo = tituloEvento || String(parametros.query || parametros.busca || parametros.task_details || '').trim();
+          if (termo) {
+            const buscaUrl = `${calendarBase}?q=${encodeURIComponent(termo)}&maxResults=5&singleEvents=true`;
+            const buscaRes = await fetch(buscaUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+            const buscaData: any = await buscaRes.json().catch(() => ({}));
+            if (buscaData.items && buscaData.items.length > 0) {
+              eventId = buscaData.items[0].id;
+              tituloEvento = buscaData.items[0].summary || tituloEvento;
+            }
+          }
+        }
+
+        if (!eventId) {
+          throw new Error('Compromisso não localizado para cancelamento. Informe o ID ou o título exato.');
+        }
+
+        const delRes = await fetch(`${calendarBase}/${eventId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+
+        if (!delRes.ok && delRes.status !== 204) {
+          const errData: any = await delRes.json().catch(() => ({}));
+          throw new Error(errData.error?.message || `Erro HTTP ${delRes.status} ao remover compromisso.`);
+        }
+
+        return {
+          success: true,
+          provider: 'google_calendar',
+          action: 'delete_event',
+          eventId,
+          message: `🗑️ Compromisso ${tituloEvento ? `**"${tituloEvento}"** ` : ''}cancelado e removido com sucesso da sua agenda!`
+        };
       }
 
-      const respostaEvento = await fetch(calendarBase, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(corpoEvento)
-      });
+      // ========================================================================
+      // 2. EDITAR / ATUALIZAR / REMARCAR COMPROMISSO
+      // ========================================================================
+      if (
+        acaoAtual === 'update_event' ||
+        acaoAtual === 'patch_event' ||
+        acaoAtual === 'editar_evento' ||
+        acaoAtual === 'remarcar_evento' ||
+        acaoAtual === 'alterar_evento' ||
+        acaoAtual === 'update' ||
+        acaoAtual === 'patch' ||
+        acaoAtual === 'remarcar'
+      ) {
+        let eventId = String(parametros.eventId || parametros.id || parametros.event_id || '').trim();
+        let termoBusca = String(parametros.summary || parametros.title || parametros.query || parametros.assunto || '').trim();
 
-      const dadosRetorno: any = await respostaEvento.json().catch(() => ({}));
-      if (!respostaEvento.ok) {
-        throw new Error(dadosRetorno.error?.message || `Erro HTTP ${respostaEvento.status} no Google Calendar.`);
+        if (!eventId && termoBusca) {
+          const buscaUrl = `${calendarBase}?q=${encodeURIComponent(termoBusca)}&maxResults=5&singleEvents=true`;
+          const buscaRes = await fetch(buscaUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+          const buscaData: any = await buscaRes.json().catch(() => ({}));
+          if (buscaData.items && buscaData.items.length > 0) {
+            eventId = buscaData.items[0].id;
+          }
+        }
+
+        if (!eventId) {
+          throw new Error('ID ou título do compromisso não localizado para remarcação/edição.');
+        }
+
+        const corpoPatch: any = {};
+        if (parametros.novo_titulo || parametros.new_summary) {
+          corpoPatch.summary = parametros.novo_titulo || parametros.new_summary;
+        } else if (parametros.summary && !parametros.query) {
+          corpoPatch.summary = parametros.summary;
+        }
+
+        if (parametros.description || parametros.descricao || parametros.detalhes) {
+          corpoPatch.description = parametros.description || parametros.descricao || parametros.detalhes;
+        }
+        if (parametros.location || parametros.local || parametros.endereco) {
+          corpoPatch.location = parametros.location || parametros.local || parametros.endereco;
+        }
+
+        // Se informou nova data ou horário para remarcar
+        const temNovaDataOuHora =
+          parametros.novo_horario ||
+          parametros.nova_data ||
+          parametros.startTime ||
+          parametros.start ||
+          parametros.horario ||
+          parametros.hora ||
+          parametros.data;
+
+        if (temNovaDataOuHora) {
+          const { dataInicio, dataFim } = calcularDataHora(parametros);
+          corpoPatch.start = { dateTime: formatarOffsetFuso(dataInicio), timeZone: fuso };
+          corpoPatch.end = { dateTime: formatarOffsetFuso(dataFim), timeZone: fuso };
+        }
+
+        const patchRes = await fetch(`${calendarBase}/${eventId}`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(corpoPatch)
+        });
+
+        const patchData: any = await patchRes.json().catch(() => ({}));
+        if (!patchRes.ok) {
+          throw new Error(patchData.error?.message || `Erro HTTP ${patchRes.status} ao atualizar compromisso.`);
+        }
+
+        const dataFormatada = patchData.start?.dateTime
+          ? new Date(patchData.start.dateTime).toLocaleString('pt-BR', {
+              timeZone: fuso,
+              weekday: 'long',
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+          : '';
+
+        return {
+          success: true,
+          provider: 'google_calendar',
+          action: 'update_event',
+          eventId: patchData.id,
+          summary: patchData.summary,
+          start: patchData.start?.dateTime,
+          end: patchData.end?.dateTime,
+          htmlLink: patchData.htmlLink,
+          message: `✏️ Compromisso **"${patchData.summary}"** atualizado/remarcado com sucesso${dataFormatada ? ` para ${dataFormatada}` : ''}!`
+        };
       }
 
-      const dataFormatada = dataInicio.toLocaleString('pt-BR', {
-        timeZone: fuso,
-        weekday: 'long',
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
+      // ========================================================================
+      // 3. CRIAR NOVO COMPROMISSO
+      // ========================================================================
+      if (
+        acaoAtual === 'create_event' ||
+        acaoAtual === 'schedule' ||
+        acaoAtual === 'criar_evento' ||
+        acaoAtual === 'agendar' ||
+        acaoAtual === 'agendamento' ||
+        acaoAtual === 'novo_evento' ||
+        acaoAtual === 'insert'
+      ) {
+        const titulo =
+          parametros.summary ||
+          parametros.title ||
+          parametros.assunto ||
+          parametros.nome ||
+          parametros.compromisso ||
+          parametros.task_details ||
+          parametros.query ||
+          'Compromisso';
+
+        const descricao =
+          parametros.description ||
+          parametros.descricao ||
+          parametros.detalhes ||
+          'Agendado via JARVIS.';
+
+        const { dataInicio, dataFim } = calcularDataHora(parametros);
+
+        const corpoEvento: any = {
+          summary: titulo,
+          description: descricao,
+          start: {
+            dateTime: formatarOffsetFuso(dataInicio),
+            timeZone: fuso
+          },
+          end: {
+            dateTime: formatarOffsetFuso(dataFim),
+            timeZone: fuso
+          },
+          reminders: {
+            useDefault: false,
+            overrides: [
+              { method: 'popup', minutes: 30 },
+              { method: 'popup', minutes: 10 }
+            ]
+          }
+        };
+
+        if (parametros.location || parametros.local || parametros.endereco) {
+          corpoEvento.location = parametros.location || parametros.local || parametros.endereco;
+        }
+
+        const respostaEvento = await fetch(calendarBase, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(corpoEvento)
+        });
+
+        const dadosRetorno: any = await respostaEvento.json().catch(() => ({}));
+        if (!respostaEvento.ok) {
+          throw new Error(dadosRetorno.error?.message || `Erro HTTP ${respostaEvento.status} no Google Calendar.`);
+        }
+
+        const dataFormatada = dataInicio.toLocaleString('pt-BR', {
+          timeZone: fuso,
+          weekday: 'long',
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        return {
+          success: true,
+          provider: 'google_calendar',
+          action: 'create_event',
+          eventId: dadosRetorno.id,
+          summary: dadosRetorno.summary,
+          start: dadosRetorno.start?.dateTime,
+          end: dadosRetorno.end?.dateTime,
+          htmlLink: dadosRetorno.htmlLink,
+          message: `📅 Agendamento confirmado! O compromisso **"${titulo}"** foi adicionado à sua agenda para ${dataFormatada}.`
+        };
+      }
+
+      // ========================================================================
+      // 4. LISTAR / CONSULTAR COMPROMISSOS
+      // ========================================================================
+      const maxResults = Number(parametros.maxResults || parametros.pageSize || parametros.limite || 10);
+      const timeMin = parametros.timeMin ? new Date(parametros.timeMin).toISOString() : new Date().toISOString();
+
+      let urlListagem = `${calendarBase}?maxResults=${maxResults}&orderBy=startTime&singleEvents=true&timeMin=${encodeURIComponent(timeMin)}`;
+
+      if (parametros.query || parametros.q || parametros.busca) {
+        urlListagem += `&q=${encodeURIComponent(parametros.query || parametros.q || parametros.busca)}`;
+      }
+
+      const res = await fetch(urlListagem, {
+        headers: { Authorization: `Bearer ${accessToken}` }
       });
+      const data: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error?.message || `Erro HTTP ${res.status} ao listar agenda.`);
+      }
+
+      const eventos = (data.items || []).map((item: any) => ({
+        id: item.id,
+        summary: item.summary || '(Sem Título)',
+        description: item.description || '',
+        start: item.start?.dateTime || item.start?.date,
+        end: item.end?.dateTime || item.end?.date,
+        link: item.htmlLink
+      }));
 
       return {
         success: true,
         provider: 'google_calendar',
-        action: 'create_event',
-        eventId: dadosRetorno.id,
-        summary: dadosRetorno.summary,
-        start: dadosRetorno.start?.dateTime,
-        end: dadosRetorno.end?.dateTime,
-        htmlLink: dadosRetorno.htmlLink,
-        message: `Agendamento confirmado! O compromisso **"${titulo}"** foi adicionado à sua agenda para ${dataFormatada}.`
+        action: 'list_events',
+        total: eventos.length,
+        events: eventos
       };
     }
 
-    // 2. Listar compromissos existentes (ÚNICA OCORRÊNCIA)
-    const maxResults = Number(payload.maxResults || payload.pageSize || payload.limite || 10);
-    const timeMin = payload.timeMin ? new Date(payload.timeMin).toISOString() : new Date().toISOString();
-
-    const urlListagem = `${calendarBase}?maxResults=${maxResults}&orderBy=startTime&singleEvents=true&timeMin=${encodeURIComponent(timeMin)}`;
-    const res = await fetch(urlListagem, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-    const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.error?.message || `Erro HTTP ${res.status} ao listar agenda.`);
-    }
-
-    const eventos = (data.items || []).map((item: any) => ({
-      id: item.id,
-      summary: item.summary || '(Sem Título)',
-      description: item.description || '',
-      start: item.start?.dateTime || item.start?.date,
-      end: item.end?.dateTime || item.end?.date,
-      link: item.htmlLink
-    }));
-
-    return {
-      success: true,
-      provider: 'google_calendar',
-      action: 'list_events',
-      total: eventos.length,
-      events: eventos
-    };
-  }
-
     // --------------------------------------------------------------------------
-    // GOOGLE DRIVE: CRIAR PASTAS, UPLOAD, LIXEIRA E LISTAGEM
+    // GOOGLE DRIVE
     // --------------------------------------------------------------------------
     case 'google_drive': {
       const accessToken = await obterTokenAcessoGoogle();
@@ -846,6 +1165,7 @@ export const executeExternalConnector = executarConectorExterno;
 export const executeNodeIntegration = executarIntegracaoNo;
 export const executeProtocolOrIntegration = executarProtocoloOuIntegracao;
 export const getConnectorConfig = obterConfiguracaoConector;
+export const getConnectorCredentials = obterConfiguracaoConector;
 export const getGoogleAccessToken = obterTokenAcessoGoogle;
 export const extractCleanTicker = extrairTickerLimpo;
 export const scheduleCalendarHandler = agendarCalendarioGoogle;
@@ -863,6 +1183,7 @@ export default {
   executeNodeIntegration,
   executeProtocolOrIntegration,
   getConnectorConfig,
+  getConnectorCredentials,
   getGoogleAccessToken,
   extractCleanTicker,
   scheduleCalendarHandler
