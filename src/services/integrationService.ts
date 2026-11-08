@@ -299,7 +299,7 @@ export async function executarConectorExterno({
       return data;
     }
 
-    // --------------------------------------------------------------------------
+   // --------------------------------------------------------------------------
     // WHATSAPP (EVOLUTION API / BAILEYS)
     // --------------------------------------------------------------------------
     case 'whatsapp': {
@@ -339,7 +339,7 @@ export async function executarConectorExterno({
 
       let targetNumber = String(rawTarget).replace(/\D/g, '');
 
-      // Adiciona DDI 55 automaticamente caso o número venha com 10 ou 11 dígitos
+      // Normaliza com DDI 55 caso informado com 10 ou 11 dígitos
       if (targetNumber.length >= 10 && targetNumber.length <= 11 && !targetNumber.startsWith('55')) {
         targetNumber = `55${targetNumber}`;
       }
