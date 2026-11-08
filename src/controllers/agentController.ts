@@ -19,6 +19,32 @@ import {
 } from '../services/orchestratorService.js';
 import { executeMcpToolCall } from '../services/mcpHfService.js';
 
+import { runHackerAgent, HackerTaskInput } from '../services/agents/hackerAgent.js';
+import { callOpenAICompatibleLLM } from '../services/orchestrator/brainConfigAndUtils.js';
+
+export async function runHackerAuditController(req: any, res: any) {
+  try {
+    const input: HackerTaskInput = req.body || { mode: 'self_healing_debug' };
+
+    // Helper cognitivo para a LLM gerar diagnósticos e patches
+    const llmHelper = async (sys: string, usr: string) => {
+      const response = await callOpenAICompatibleLLM({
+        systemPrompt: sys,
+        userPrompt: usr,
+        provider: 'groq',
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.1
+      });
+      return response.text;
+    };
+
+    const resultado = await runHackerAgent(input, llmHelper);
+    return res.status(200).json({ success: true, data: resultado });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+
 function slugify(text: string): string {
   return text
     .toLowerCase()
