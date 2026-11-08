@@ -66,13 +66,11 @@ export async function chamarLLMCompativelOpenAI(options: {
     limparMascaraChave(options.apiKey) ||
     obterChaveContingenciaEnv(provider);
 
-  // 1. SUPORTE GOOGLE GEMINI
+  // --------------------------------------------------------------------------
+  // 1. SUPORTE GOOGLE GEMINI NATIVO (COM FUNCTION CALLING / TOOLS)
+  // --------------------------------------------------------------------------
   if (provider === 'gemini') {
-    const modeloDesejado = (creds.model || 'gemini-2.5-flash').trim();
-    const modeloFinal =
-      modeloDesejado.includes('argon') || modeloDesejado.includes('3.8') || !modeloDesejado.startsWith('gemini')
-        ? 'gemini-2.5-flash'
-        : modeloDesejado;
+    const modeloAlvo = (creds.model || options.model || 'gemini-2.5-flash').trim();
 
     const partesFormatadas: any[] = [];
     for (const msg of options.messages) {
@@ -90,84 +88,134 @@ export async function chamarLLMCompativelOpenAI(options: {
       }
     }
 
-    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/${modeloFinal}:generateContent?key=${apiKey}`;
+    // Mapeamento de Tools para a especificação do Google Gemini
+    const geminiToolsPayload =
+      options.tools && options.tools.length > 0
+        ? [
+            {
+              functionDeclarations: options.tools
+                .filter((t: any) => t?.function?.name)
+                .map((t: any) => ({
+                  name: t.function.name,
+                  description: t.function.description || `Executa a ferramenta ${t.function.name}`,
+                  parameters: t.function.parameters || { type: 'OBJECT', properties: {} }
+                }))
+            }
+          ]
+        : undefined;
+
+    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/${modeloAlvo}:generateContent?key=${apiKey}`;
     const payloadGemini: any = {
       contents: [{ parts: partesFormatadas }],
       generationConfig: { temperature: options.temperature ?? 0.2 }
     };
 
-    const resp = await fetch(urlGemini, {
+    if (geminiToolsPayload) {
+      payloadGemini.tools = geminiToolsPayload;
+    }
+
+    let resp = await fetch(urlGemini, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payloadGemini),
       signal: AbortSignal.timeout(25000)
     });
 
+    // Se o modelo rejeitar a declaração de ferramentas, tenta uma vez sem tools
+    if (!resp.ok && geminiToolsPayload) {
+      delete payloadGemini.tools;
+      resp = await fetch(urlGemini, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payloadGemini),
+        signal: AbortSignal.timeout(25000)
+      });
+    }
+
     if (resp.ok) {
       const data: any = await resp.json();
-      const contentText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const candidateParts = data?.candidates?.[0]?.content?.parts || [];
+      const fnCallPart = candidateParts.find((p: any) => p.functionCall);
+
+      // Converte chamada de função do Gemini para o formato universal OpenAI esperado pelo orquestrador
+      if (fnCallPart && fnCallPart.functionCall) {
+        return {
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: `call_${Date.now()}`,
+                    type: 'function',
+                    function: {
+                      name: fnCallPart.functionCall.name,
+                      arguments: JSON.stringify(fnCallPart.functionCall.args || {})
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        };
+      }
+
+      const contentText = candidateParts.map((p: any) => p.text || '').join('\n').trim();
       return { choices: [{ message: { content: contentText, role: 'assistant' } }] };
     }
+
     const erroTexto = await resp.text();
-    throw new Error(`Gemini indisponível: ${erroTexto.slice(0, 180)}`);
+    throw new Error(`Gemini indisponível (${modeloAlvo}): ${erroTexto.slice(0, 200)}`);
   }
 
-  // 2. SUPORTE GROQ, OPENROUTER, DEEPSEEK, OPENAI E OLLAMA
+  // --------------------------------------------------------------------------
+  // 2. SUPORTE OPENAI, GROQ, OPENROUTER, DEEPSEEK E OLLAMA
+  // --------------------------------------------------------------------------
   const client = new OpenAI({
     apiKey: apiKey || 'ollama',
     baseURL: creds.baseURL,
-    timeout: 30000
+    timeout: 30000,
+    defaultHeaders:
+      provider === 'openrouter'
+        ? { 'HTTP-Referer': 'https://jarvis.local', 'X-Title': 'JARVIS Neural Core' }
+        : undefined
   });
 
-  let modeloAlvo = creds.model;
-  if (provider === 'groq') {
-    if (!modeloAlvo || modeloAlvo.includes('8b-instant') || modeloAlvo.includes('deepseek-r1')) {
-      modeloAlvo = 'llama-3.3-70b-versatile';
-    }
+  // Preserva estritamente o modelo escolhido pelo usuário
+  const modeloFinal = creds.model || options.model;
+
+  const isReasoningModel =
+    modeloFinal.includes('gpt-oss') ||
+    modeloFinal.includes('reasoner') ||
+    modeloFinal.includes('r1') ||
+    modeloFinal.includes('o1') ||
+    modeloFinal.includes('o3');
+
+  const payload: any = {
+    model: modeloFinal,
+    messages: options.messages,
+    temperature: options.temperature ?? 0.2
+  };
+
+  if (options.tools && options.tools.length > 0 && !isReasoningModel) {
+    payload.tools = options.tools;
+    payload.tool_choice = 'auto';
   }
 
-  const modelosCandidatos =
-    provider === 'groq'
-      ? Array.from(new Set([modeloAlvo, 'llama-3.3-70b-versatile']))
-      : [modeloAlvo];
-
-  let ultimoErro: any = null;
-
-  for (const modelo of modelosCandidatos) {
-    if (!modelo) continue;
-    try {
-      const payload: any = {
-        model: modelo,
+  try {
+    return await client.chat.completions.create(payload);
+  } catch (err: any) {
+    // Caso o endpoint recuse o parâmetro de ferramentas, executa o mesmo modelo sem tools como contingência
+    if (payload.tools) {
+      return await client.chat.completions.create({
+        model: modeloFinal,
         messages: options.messages,
         temperature: options.temperature ?? 0.2
-      };
-
-      const ehModeloRaciocinio =
-        modelo.includes('gpt-oss') || modelo.includes('reasoner') || modelo.includes('r1');
-
-      if (options.tools && options.tools.length > 0 && !ehModeloRaciocinio) {
-        payload.tools = options.tools;
-        payload.tool_choice = 'auto';
-      }
-
-      return await client.chat.completions.create(payload);
-    } catch (err: any) {
-      ultimoErro = err;
-      if (options.tools && options.tools.length > 0) {
-        try {
-          return await client.chat.completions.create({
-            model: modelo,
-            messages: options.messages,
-            temperature: options.temperature ?? 0.2
-          });
-        } catch (innerErr: any) {
-          ultimoErro = innerErr;
-        }
-      }
+      });
     }
+    throw err;
   }
-
-  throw ultimoErro || new Error(`Falha na comunicação com o provedor ${provider.toUpperCase()}`);
 }
 
 export const callOpenAICompatibleLLM = chamarLLMCompativelOpenAI;
