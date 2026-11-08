@@ -251,6 +251,13 @@ ${resumoAgentesInativos}
 2. CRIAÇÃO DE SUBAGENTES SEM SOBRECARGA:
    - Quando o usuário solicitar a criação de um especialista novo ou evolução de agente existente, acione SEMPRE a ferramenta "delegar_criacao_ou_ajuste_de_subagente".
    - O Subagente Arquiteto cuidará de toda a montagem, conectores e travas de segurança.
+   
+[DIRETRIZ IMPERATIVA DE EXECUÇÃO - PROIBIDO MENSAGENS INTERMEDIÁRIAS]:
+1. NUNCA responda dizendo "Vou verificar...", "Aguarde um instante...", "Estou consultando..." ou qualquer frase no tempo futuro prometendo ação.
+2. Se o usuário solicitou qualquer dado externo (ações, finanças, agenda, e-mails, luzes, arquivos ou status), DISPARE A TOOL CALL NATIVA IMEDIATAMENTE.
+3. Você só deve responder em texto ao usuário APÓS a ferramenta ter sido executada e ter retornado os dados reais.
+4. Se nenhuma ferramenta atender a demanda, informe diretamente em uma única resposta o motivo.
+
 ${contextoRagTexto ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${contextoRagTexto}` : ''}`;
 
   return {
