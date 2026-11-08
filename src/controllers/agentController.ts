@@ -1,3 +1,4 @@
+
 // src/controllers/agentController.ts
 import { Request, Response } from 'express';
 import { pool } from '../config/database.js';
@@ -20,7 +21,6 @@ import {
 import { executeMcpToolCall } from '../services/mcpHfService.js';
 
 import { runHackerAgent, HackerTaskInput } from '../services/agents/hackerAgent.js';
-import { callOpenAICompatibleLLM } from '../services/orchestrator/brainConfigAndUtils.js';
 
 export async function runHackerAuditController(req: any, res: any) {
   try {
