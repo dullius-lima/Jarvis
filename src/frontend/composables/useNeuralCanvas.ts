@@ -112,7 +112,7 @@ export function useNeuralCanvas(opts: CanvasOptions) {
       const cy = height * (isMobile ? 0.44 : 0.48);
       const fov = isMobile ? 540 : 680;
 
-      // Fundo Espacial
+      // Fundo Espacial com gradiente radial profundo
       const bgGrad = ctx.createRadialGradient(cx, cy, 5, cx, cy, Math.max(width, height) * 0.72);
       bgGrad.addColorStop(0, '#0a192f');
       bgGrad.addColorStop(0.5, '#040914');
@@ -138,7 +138,7 @@ export function useNeuralCanvas(opts: CanvasOptions) {
       const effectiveCoreR = coreRadius * voicePulse;
       const screenCoreR = effectiveCoreR * cameraZoom.value;
 
-      // Halo
+      // Halo Luminoso do Núcleo
       ctx.save();
       const outerHalo = ctx.createRadialGradient(cx, cy, screenCoreR * 0.1, cx, cy, screenCoreR * 1.85);
       outerHalo.addColorStop(0, opts.isJarvisAwake.value ? 'rgba(56, 189, 248, 0.55)' : opts.isJarvisSpeaking.value ? 'rgba(34, 211, 238, 0.65)' : 'rgba(14, 165, 233, 0.34)');
@@ -150,7 +150,7 @@ export function useNeuralCanvas(opts: CanvasOptions) {
       ctx.fill();
       ctx.restore();
 
-      // Esfera 3D
+      // Esfera 3D Central
       ctx.save();
       const sphereGrad = ctx.createRadialGradient(cx - screenCoreR * 0.3, cy - screenCoreR * 0.3, screenCoreR * 0.08, cx, cy, screenCoreR);
       sphereGrad.addColorStop(0, 'rgba(186, 230, 253, 0.42)');
@@ -191,7 +191,7 @@ export function useNeuralCanvas(opts: CanvasOptions) {
         ctx.restore();
       });
 
-      // Malha Fibonacci 3D
+      // Malha Geodésica 3D (Fibonacci)
       const projectedGlobePts = globeFibonacciNodes.map((n) => {
         const p = project3D(n.x * effectiveCoreR, n.y * effectiveCoreR, n.z * effectiveCoreR, cx, cy, fov);
         return { ...p, pulseOffset: n.pulseOffset };
@@ -228,7 +228,7 @@ export function useNeuralCanvas(opts: CanvasOptions) {
       }
       ctx.restore();
 
-      // Núcleo
+      // Centro do Núcleo
       ctx.save();
       const innerCoreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, screenCoreR * 0.42);
       innerCoreGrad.addColorStop(0, '#ffffff');
@@ -243,7 +243,6 @@ export function useNeuralCanvas(opts: CanvasOptions) {
       // Memórias em Órbita
       opts.drawMemoryOrbsOnCanvas(ctx, cx, cy, rotationY.value);
 
-      // Agentes e Subnós
       renderedAgentsHitbox = [];
       renderedSubNodesHitbox = [];
       renderedMemoriesHitbox = [];
@@ -259,39 +258,57 @@ export function useNeuralCanvas(opts: CanvasOptions) {
         agentPositionsMap.set(ag.id, { ag, proj: { x: rawProj.x, y: rawProj.y, scale: rawProj.scale }, color });
       });
 
-      // Feixes sinápticos
+      // ======================================================================
+      // 1. FEIXES SINÁPTICOS (COM DESTAQUE EM ALTA ENERGIA PARA O AGENTE ACIONADO)
+      // ======================================================================
       Array.from(agentPositionsMap.values()).forEach(({ ag, proj: agProj, color }, index) => {
+        const isAgentActive = opts.highlightedAgentSlug.value === ag.slug;
+        const beamColor = isAgentActive ? opts.highlightedStatusColor.value : color;
+
         ctx.save();
-        ctx.globalAlpha = 0.35;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.1;
-        ctx.setLineDash([3, 5]);
+        ctx.strokeStyle = beamColor;
+        ctx.lineWidth = isAgentActive ? 3.5 : 1.1;
+        ctx.globalAlpha = isAgentActive ? 1.0 : 0.35;
+        if (isAgentActive) {
+          ctx.setLineDash([]); // Linha sólida luminosa
+          ctx.shadowColor = beamColor;
+          ctx.shadowBlur = 25;
+        } else {
+          ctx.setLineDash([3, 5]);
+        }
+
         ctx.beginPath();
         ctx.moveTo(cx, cy);
         const ctrlX = (cx + agProj.x) * 0.5;
-        const ctrlY = (cy + agProj.y) * 0.5 - 14;
+        const ctrlY = (cy + agProj.y) * 0.5 - (isAgentActive ? 22 : 14);
         ctx.quadraticCurveTo(ctrlX, ctrlY, agProj.x, agProj.y);
         ctx.stroke();
         ctx.restore();
 
-        const agentMemories = opts.memoryDots.value.filter((m) => m.agentId === ag.id || m.agentName === ag.name);
-        for (let d = 0; d < Math.min(Math.max(agentMemories.length, 2), 3); d++) {
-          const t = (time * 0.18 + d * 0.25 + index * 0.17) % 1;
+        // Fótons de Dados viajando no feixe
+        const photonCount = isAgentActive ? 5 : 2;
+        for (let d = 0; d < photonCount; d++) {
+          const speed = isAgentActive ? 0.48 : 0.18;
+          const t = (time * speed + d * (1 / photonCount) + index * 0.15) % 1;
           const invT = 1 - t;
           const mx = invT * invT * cx + 2 * invT * t * ctrlX + t * t * agProj.x;
           const my = invT * invT * cy + 2 * invT * t * ctrlY + t * t * agProj.y;
+
           ctx.save();
-          ctx.globalAlpha = 0.85;
-          ctx.fillStyle = color;
+          ctx.globalAlpha = isAgentActive ? 1.0 : 0.85;
+          ctx.fillStyle = isAgentActive ? '#ffffff' : color;
+          ctx.shadowColor = beamColor;
+          ctx.shadowBlur = isAgentActive ? 18 : 6;
           ctx.beginPath();
-          ctx.arc(mx, my, isMobile ? 2.3 : 3.0, 0, Math.PI * 2);
+          ctx.arc(mx, my, (isAgentActive ? 4.2 : isMobile ? 2.3 : 3.0), 0, Math.PI * 2);
           ctx.fill();
           ctx.restore();
-          if (agentMemories[d]) renderedMemoriesHitbox.push({ x: mx, y: my, r: 8, mem: agentMemories[d] });
         }
       });
 
-      // Conectores Externos
+      // ======================================================================
+      // 2. CONECTORES E TOOLS EXTERNAS (ILUMINAÇÃO SE AGENTE ATIVO ESTIVER VINCULADO)
+      // ======================================================================
       const uniqueToolIds = Array.from(new Set(opts.dynamicAgents.value.flatMap((ag) => ag.tools || []).map((t: string) => String(t).toLowerCase())));
       uniqueToolIds.forEach((toolId, tIdx) => {
         const meta = opts.getConnectionMeta(toolId);
@@ -299,14 +316,22 @@ export function useNeuralCanvas(opts: CanvasOptions) {
         const tProj = project3D(Math.cos(angle) * sharedNodeOrbitRadius, Math.cos(tIdx * 2.1) * (isMobile ? 24 : 40), Math.sin(angle) * sharedNodeOrbitRadius, cx, cy, fov);
         const nodeR = isMobile ? 9 : 11;
 
-        opts.getAgentsUsingTool(toolId).forEach((cAg) => {
+        const agentsUsingThis = opts.getAgentsUsingTool(toolId);
+        const isToolConnectedToActive = agentsUsingThis.some((cAg) => cAg.slug === opts.highlightedAgentSlug.value);
+
+        agentsUsingThis.forEach((cAg) => {
           const agEntry = agentPositionsMap.get(cAg.id);
           if (agEntry) {
+            const isLineActive = cAg.slug === opts.highlightedAgentSlug.value;
             ctx.save();
-            ctx.globalAlpha = 0.28;
-            ctx.strokeStyle = agEntry.color;
-            ctx.lineWidth = 0.9;
-            ctx.setLineDash([2, 4]);
+            ctx.globalAlpha = isLineActive ? 0.95 : 0.28;
+            ctx.strokeStyle = isLineActive ? opts.highlightedStatusColor.value : agEntry.color;
+            ctx.lineWidth = isLineActive ? 2.4 : 0.9;
+            ctx.setLineDash(isLineActive ? [] : [2, 4]);
+            if (isLineActive) {
+              ctx.shadowColor = opts.highlightedStatusColor.value;
+              ctx.shadowBlur = 12;
+            }
             ctx.beginPath();
             ctx.moveTo(agEntry.proj.x, agEntry.proj.y);
             ctx.lineTo(tProj.x, tProj.y);
@@ -316,13 +341,18 @@ export function useNeuralCanvas(opts: CanvasOptions) {
         });
 
         ctx.save();
-        ctx.fillStyle = 'rgba(11, 19, 41, 0.92)';
-        ctx.strokeStyle = 'rgba(56, 189, 248, 0.7)';
-        ctx.lineWidth = 1.1;
+        ctx.fillStyle = isToolConnectedToActive ? 'rgba(6, 78, 59, 0.95)' : 'rgba(11, 19, 41, 0.92)';
+        ctx.strokeStyle = isToolConnectedToActive ? opts.highlightedStatusColor.value : 'rgba(56, 189, 248, 0.7)';
+        ctx.lineWidth = isToolConnectedToActive ? 2.2 : 1.1;
+        if (isToolConnectedToActive) {
+          ctx.shadowColor = opts.highlightedStatusColor.value;
+          ctx.shadowBlur = 16;
+        }
         ctx.beginPath();
-        ctx.arc(tProj.x, tProj.y, nodeR, 0, Math.PI * 2);
+        ctx.arc(tProj.x, tProj.y, nodeR * (isToolConnectedToActive ? 1.25 : 1), 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
+
         ctx.font = `${isMobile ? 9 : 11}px system-ui`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -333,17 +363,90 @@ export function useNeuralCanvas(opts: CanvasOptions) {
         renderedSubNodesHitbox.push({ x: tProj.x, y: tProj.y, r: nodeR + 5, node: { ...meta, toolId } });
       });
 
-      // Agentes
+      // ======================================================================
+      // 3. AGENTES (DESTAQUE CÊNICO MASSIVO NO AGENTE ACIONADO)
+      // ======================================================================
       Array.from(agentPositionsMap.values()).forEach(({ ag, proj, color }) => {
-        const orbR = isMobile ? 16 : 20;
         const isHighlighted = opts.highlightedAgentSlug.value === ag.slug;
+        const statusColor = opts.highlightedStatusColor.value || '#22c55e';
+        const baseOrbR = isMobile ? 16 : 20;
+        const orbR = isHighlighted ? baseOrbR * 1.38 + Math.sin(time * 8) * 2.2 : baseOrbR;
 
+        // ONDAS DE RADAR / SHOCKWAVE EXPANSIVAS (QUANDO O AGENTE ESTÁ ACIONADO)
+        if (isHighlighted) {
+          ctx.save();
+          // Onda de Choque Externa 1
+          const wave1R = orbR + 12 + Math.sin(time * 6) * 5;
+          ctx.strokeStyle = statusColor;
+          ctx.lineWidth = 2.4;
+          ctx.shadowColor = statusColor;
+          ctx.shadowBlur = 28;
+          ctx.beginPath();
+          ctx.arc(proj.x, proj.y, wave1R, 0, Math.PI * 2);
+          ctx.stroke();
+
+          // Onda de Expansão Contínua 2
+          const expansion = (time * 30) % 22;
+          const wave2R = orbR + 14 + expansion;
+          ctx.strokeStyle = statusColor;
+          ctx.globalAlpha = Math.max(0, 1 - expansion / 22);
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.arc(proj.x, proj.y, wave2R, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+
+          // BADGE FLUTUANTE SUPERIOR INDICANDO "⚡ AGENTE ATIVO"
+          ctx.save();
+          const badgeText = opts.isProcessing.value ? '⚡ EXECUTANDO...' : '● AGENTE ATIVO';
+          const badgeY = proj.y - orbR - 16;
+          ctx.font = 'bold 9px system-ui';
+          const textW = ctx.measureText(badgeText).width + 14;
+
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+          ctx.strokeStyle = statusColor;
+          ctx.lineWidth = 1.5;
+          ctx.shadowColor = statusColor;
+          ctx.shadowBlur = 14;
+
+          ctx.beginPath();
+          ctx.roundRect(proj.x - textW / 2, badgeY - 8, textW, 16, 8);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = statusColor;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(badgeText, proj.x, badgeY);
+          ctx.restore();
+        }
+
+        // ESFERA PRINCIPAL DO AGENTE
         ctx.save();
-        ctx.fillStyle = 'rgba(11, 18, 34, 0.92)';
-        ctx.strokeStyle = isHighlighted ? opts.highlightedStatusColor.value : color;
-        ctx.lineWidth = isHighlighted ? 2.2 : 1.4;
-        ctx.shadowColor = isHighlighted ? opts.highlightedStatusColor.value : color;
-        ctx.shadowBlur = isHighlighted ? 14 : 5;
+        if (isHighlighted) {
+          const highlightGrad = ctx.createRadialGradient(
+            proj.x - orbR * 0.3,
+            proj.y - orbR * 0.3,
+            2,
+            proj.x,
+            proj.y,
+            orbR
+          );
+          highlightGrad.addColorStop(0, '#ffffff');
+          highlightGrad.addColorStop(0.4, statusColor);
+          highlightGrad.addColorStop(1, 'rgba(6, 78, 59, 0.95)');
+          ctx.fillStyle = highlightGrad;
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 3.0;
+          ctx.shadowColor = statusColor;
+          ctx.shadowBlur = 35;
+        } else {
+          ctx.fillStyle = 'rgba(11, 18, 34, 0.92)';
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.4;
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 5;
+        }
 
         ctx.beginPath();
         ctx.arc(proj.x, proj.y, orbR, 0, Math.PI * 2);
@@ -351,27 +454,37 @@ export function useNeuralCanvas(opts: CanvasOptions) {
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        ctx.font = `${isMobile ? 12.5 : 15}px system-ui`;
+        // Ícone do Agente
+        ctx.font = `${(isHighlighted ? 18 : isMobile ? 12.5 : 15)}px system-ui`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#ffffff';
         ctx.fillText(ag.icon || '🤖', proj.x, proj.y);
 
+        // Contador de Tools no Canto do Nó
         if ((ag.tools || []).length > 0) {
-          ctx.fillStyle = '#0284c7';
+          ctx.fillStyle = isHighlighted ? statusColor : '#0284c7';
           ctx.beginPath();
-          ctx.arc(proj.x + orbR * 0.72, proj.y - orbR * 0.72, isMobile ? 5.5 : 6.5, 0, Math.PI * 2);
+          ctx.arc(proj.x + orbR * 0.72, proj.y - orbR * 0.72, isMobile ? 5.5 : 7.0, 0, Math.PI * 2);
           ctx.fill();
           ctx.fillStyle = '#ffffff';
-          ctx.font = `bold ${isMobile ? 7 : 8}px system-ui`;
+          ctx.font = `bold ${isMobile ? 7 : 8.5}px system-ui`;
           ctx.fillText(String(ag.tools.length), proj.x + orbR * 0.72, proj.y - orbR * 0.72);
         }
 
-        ctx.font = `500 ${isMobile ? 8.5 : 10}px system-ui, -apple-system, sans-serif`;
-        ctx.fillStyle = 'rgba(203, 213, 225, 0.88)';
+        // Rótulo do Nome do Agente
+        ctx.font = isHighlighted
+          ? `bold ${isMobile ? 10.5 : 12.5}px system-ui`
+          : `500 ${isMobile ? 8.5 : 10}px system-ui, -apple-system, sans-serif`;
+        ctx.fillStyle = isHighlighted ? '#ffffff' : 'rgba(203, 213, 225, 0.88)';
+        if (isHighlighted) {
+          ctx.shadowColor = statusColor;
+          ctx.shadowBlur = 12;
+        }
+
         const rawName = ag.name || 'Agente';
-        const cleanName = rawName.length > 15 ? rawName.slice(0, 13) + '…' : rawName;
-        ctx.fillText(cleanName, proj.x, proj.y + orbR + (isMobile ? 9 : 12));
+        const cleanName = rawName.length > 16 ? rawName.slice(0, 14) + '…' : rawName;
+        ctx.fillText(cleanName, proj.x, proj.y + orbR + (isMobile ? 10 : 14));
         ctx.restore();
 
         renderedAgentsHitbox.push({ x: proj.x, y: proj.y, r: orbR + 6, agent: ag });
@@ -379,6 +492,7 @@ export function useNeuralCanvas(opts: CanvasOptions) {
 
       animationFrameId = requestAnimationFrame(renderFrame);
     };
+
     animationFrameId = requestAnimationFrame(renderFrame);
   }
 
