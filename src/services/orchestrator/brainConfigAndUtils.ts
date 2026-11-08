@@ -363,3 +363,63 @@ export function createLLMClient(config?: any): OpenAI {
     timeout: 30000
   });
 }
+
+/**
+ * Ferramenta Meta-Cognitiva: Grava regras de estilo, preferências do usuário
+ * e aprendizados permanentes diretamente no PostgreSQL.
+ */
+export async function salvarMemoriaPermanente(params: {
+  tipo: 'estilo_de_conversa' | 'fato_do_usuario' | 'regra_de_negocio';
+  conteudo: string;
+  agente_alvo?: string;
+}) {
+  const alvo = (params.agente_alvo || 'jarvis_core').toLowerCase().trim();
+  const novaInstrucao = (params.conteudo || '').trim();
+
+  if (!novaInstrucao) {
+    return { sucesso: false, mensagem: 'Conteúdo de memória vazio.' };
+  }
+
+  try {
+    if (alvo === 'jarvis' || alvo === 'jarvis_core') {
+      const res = await pool.query(
+        "SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;"
+      );
+      let brainConfig = res.rows[0]?.value || {};
+      if (typeof brainConfig === 'string') {
+        try { brainConfig = JSON.parse(brainConfig); } catch { brainConfig = {}; }
+      }
+
+      const promptAtual = brainConfig.system_prompt || 'Você é o JARVIS, o Cérebro Central.';
+      const promptAtualizado = `${promptAtual}\n\n[DIRETRIZ APRENDIDA - ${params.tipo.toUpperCase()}]:\n- ${novaInstrucao}`;
+      brainConfig.system_prompt = promptAtualizado;
+
+      await pool.query(
+        `INSERT INTO system_configs (key, value, updated_at)
+         VALUES ('brain_llm_config', $1::jsonb, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
+        [JSON.stringify(brainConfig)]
+      );
+
+      return {
+        sucesso: true,
+        mensagem: `Aprendizado gravado no núcleo central do JARVIS: "${novaInstrucao}"`
+      };
+    } else {
+      await pool.query(
+        `UPDATE ai_agents 
+         SET system_prompt = CONCAT(COALESCE(system_prompt, ''), E'\n\n[DIRETRIZ APRENDIDA]:\n- ', $1::text),
+             updated_at = NOW()
+         WHERE LOWER(slug) = LOWER($2);`,
+        [novaInstrucao, alvo]
+      );
+
+      return {
+        sucesso: true,
+        mensagem: `Diretriz gravada com sucesso no especialista [${alvo}]: "${novaInstrucao}"`
+      };
+    }
+  } catch (error: any) {
+    return { sucesso: false, mensagem: `Erro ao salvar memória permanente: ${error.message}` };
+  }
+}
