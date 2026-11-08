@@ -296,147 +296,55 @@ export async function executarConectorExterno({
     // --------------------------------------------------------------------------
     // WHATSAPP (EVOLUTION API / BAILEYS)
     // --------------------------------------------------------------------------
-    case 'whatsapp': {
-      const urlBase = (config.endpoint_url || process.env.EVOLUTION_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
-      const apiKey = token || config.api_key || process.env.EVOLUTION_API_KEY || 'jarvis-evolution-secret-2026';
-      const instancia = payload.instance || config.instance_name || 'jarvis-whats';
+    // ======================================================================
+      // WHATSAPP (Evolution API / Baileys)
+      // ======================================================================
+      case 'whatsapp': {
+        const creds = await getConnectorCredentials('whatsapp');
+        const evoUrl = (creds.endpoint_url || process.env.EVOLUTION_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
+        const apiKey = creds.api_key || creds.auth_token || process.env.EVOLUTION_API_KEY || 'jarvis-evolution-secret-2026';
+        const instance = creds.instance_name || params.instance || 'jarvis-whats';
 
-      const numeroBruto = payload.number || payload.to || payload.recipientId || payload.destinatario || payload.chat_id || '';
-      const destinatario = String(numeroBruto).replace(/\D/g, '');
-      const textoMensagem = payload.text || payload.message || payload.mensagem || payload.body || '';
+        const rawTarget = params.number || params.to || params.chat_id || params.destinatario || params.recipientId || '';
+        let targetNumber = String(rawTarget).replace(/\D/g, '');
 
-      if (!destinatario) {
-        throw new Error('Número de telefone do destinatário é obrigatório para envio via WhatsApp.');
-      }
-      if (!textoMensagem) {
-        throw new Error('Texto da mensagem é obrigatório para envio via WhatsApp.');
-      }
-
-      const res = await fetch(`${urlBase}/message/sendText/${instancia}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': apiKey
-        },
-        body: JSON.stringify({
-          number: destinatario,
-          text: textoMensagem
-        }),
-        signal: AbortSignal.timeout(15000)
-      });
-
-      const data: any = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const msgErro = data.response?.message?.[0] || data.message || `Erro HTTP ${res.status} na Evolution API`;
-        throw new Error(msgErro);
-      }
-
-      return {
-        success: true,
-        provider: 'whatsapp',
-        destinatario,
-        data
-      };
-    }
-
-    // --------------------------------------------------------------------------
-    // GMAIL: LEITURA, ENVIO E EXCLUSÃO
-    // --------------------------------------------------------------------------
-    case 'gmail': {
-      const accessToken = await obterTokenAcessoGoogle();
-      const acaoAtual = String(action || payload.action || 'read_inbox').toLowerCase();
-
-      // 1. Excluir mensagem / Mover para a Lixeira
-      if (acaoAtual === 'trash_message' || acaoAtual === 'delete_message' || acaoAtual === 'excluir_mensagem') {
-        const msgId = payload.id || payload.messageId;
-        if (!msgId) {
-          throw new Error('Parâmetro id ou messageId é obrigatório para mover e-mail para a lixeira.');
+        // Adiciona DDI 55 automaticamente caso o usuário passe apenas DDD + Número
+        if (targetNumber.length >= 10 && targetNumber.length <= 11 && !targetNumber.startsWith('55')) {
+          targetNumber = `55${targetNumber}`;
         }
 
-        const trashRes = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/trash`,
-          {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${accessToken}` }
-          }
-        );
-        if (!trashRes.ok) {
-          const errData: any = await trashRes.json().catch(() => ({}));
-          throw new Error(errData.error?.message || 'Falha ao mover mensagem para a lixeira.');
-        }
-        return { success: true, provider: 'gmail', action: 'trash_message', messageId: msgId };
-      }
+        const textMessage = params.text || params.message || params.mensagem || 'Mensagem do ecossistema JARVIS';
 
-      // 2. Enviar e-mail
-      if (acaoAtual === 'send_email' || acaoAtual === 'enviar_email') {
-        const destinatario = payload.to || payload.destinatario || payload.para;
-        if (!destinatario) {
-          throw new Error('Destinatário (campo "to") é obrigatório para envio de e-mail.');
+        if (!targetNumber) {
+          throw new Error('Número de destino obrigatório para envio via WhatsApp.');
         }
 
-        const assunto = payload.subject || payload.assunto || 'JARVIS Notificação';
-        const corpo = payload.body || payload.corpo || payload.text || payload.mensagem || '';
-
-        const rawMessage = Buffer.from(
-          `To: ${destinatario}\r\nSubject: =?utf-8?B?${Buffer.from(assunto).toString('base64')}?=\r\nContent-Type: text/plain; charset="UTF-8"\r\nMIME-Version: 1.0\r\n\r\n${corpo}`
-        )
-          .toString('base64')
-          .replace(/\+/g, '-')
-          .replace(/\//g, '_')
-          .replace(/=+$/, '');
-
-        const sendRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        const res = await fetch(`${evoUrl}/message/sendText/${instance}`, {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'apikey': apiKey
           },
-          body: JSON.stringify({ raw: rawMessage })
+          body: JSON.stringify({
+            number: targetNumber,
+            text: textMessage
+          }),
+          signal: AbortSignal.timeout(15000)
         });
-        const sendData: any = await sendRes.json().catch(() => ({}));
-        if (!sendRes.ok) throw new Error(sendData.error?.message || 'Erro ao enviar e-mail.');
-        return { success: true, provider: 'gmail', action: 'send_email', data: sendData };
+
+        const data: any = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const erroMsg = data.response?.message?.[0] || data.message || `Erro HTTP ${res.status} na Evolution API`;
+          throw new Error(erroMsg);
+        }
+
+        return {
+          success: true,
+          provider: 'whatsapp',
+          destinatario: targetNumber,
+          data
+        };
       }
-
-      // 3. Ler mensagens / Caixa de entrada
-      const max = Number(payload.maxResults || payload.limite || 5);
-      const termoBusca = payload.query || payload.busca || '';
-      const q = termoBusca ? `&q=${encodeURIComponent(termoBusca)}` : '';
-      const listRes = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${max}${q}`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-      const listData: any = await listRes.json().catch(() => ({}));
-      if (!listRes.ok) throw new Error(listData.error?.message || 'Erro ao consultar Gmail.');
-
-      const messages = listData.messages || [];
-      if (messages.length === 0) {
-        return { success: true, provider: 'gmail', count: 0, messages: [], text: 'Nenhum e-mail encontrado.' };
-      }
-
-      const details = await Promise.all(
-        messages.slice(0, max).map(async (msg: any) => {
-          const itemRes = await fetch(
-            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
-            { headers: { Authorization: `Bearer ${accessToken}` } }
-          );
-          const itemData: any = await itemRes.json().catch(() => ({}));
-          const headers = itemData.payload?.headers || [];
-          const getHeader = (name: string) =>
-            headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
-
-          return {
-            id: msg.id,
-            threadId: msg.threadId,
-            subject: getHeader('Subject') || '(Sem assunto)',
-            from: getHeader('From') || '(Remetente desconhecido)',
-            date: getHeader('Date') || '',
-            snippet: itemData.snippet || ''
-          };
-        })
-      );
-      return { success: true, provider: 'gmail', action: 'read_inbox', total: details.length, messages: details };
-    }
 
 // --------------------------------------------------------------------------
   // GOOGLE CALENDAR: TOTALMENTE CORRIGIDO PARA DATA, HORA E FUSO
