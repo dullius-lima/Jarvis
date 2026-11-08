@@ -361,7 +361,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       cfg.auth_token || cfg.api_key || body.api_key || body.auth_token || ''
     ).trim();
 
-    // 3.0 Ecossistema Google (Gmail, Calendar, Drive) via OAuth2 Permanente
+    // 3.0 Google Workspace (Gmail, Calendar, Drive) via OAuth2 Permanente
     const isGoogle =
       providerKey.includes('gmail') ||
       providerKey.includes('calendar') ||
@@ -404,7 +404,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.1 Teste específico do Telegram Bot
+    // 3.1 Telegram Bot
     if (providerKey === 'telegram' || rawUrl.includes('api.telegram.org')) {
       if (!apiKey) {
         return res.status(200).json({
@@ -433,7 +433,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.2 Teste específico da Brapi B3
+    // 3.2 Brapi B3
     if (
       providerKey === 'brapi' ||
       providerKey === 'brapi_b3' ||
@@ -470,7 +470,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.2-B Teste específico do Home Assistant
+    // 3.2-B Home Assistant
     if (
       providerKey === 'home_assistant' ||
       providerKey.includes('hass') ||
@@ -519,7 +519,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.2-C Teste específico do WhatsApp (Evolution API / Baileys)
+    // 3.2-C Teste Direto do WhatsApp (Evolution API / Baileys)
     if (providerKey === 'whatsapp' || providerKey.includes('whats')) {
       const targetNumber = String(
         body.params?.number ||
@@ -537,27 +537,34 @@ export async function testExternalConnector(req: Request, res: Response) {
         '🟢 Teste operacional JARVIS: WhatsApp validado com sucesso!'
       ).trim();
 
-      const cleanEndpoint = (rawUrl || process.env.EVOLUTION_URL || 'http://127.0.0.1:8080')
+      const evoUrl = (rawUrl || process.env.EVOLUTION_URL || 'http://127.0.0.1:8080')
         .replace(/\/message\/sendText.*$/i, '')
         .replace(/\/+$/, '');
+      const instance = cfg.instance_name || body.params?.instance || 'jarvis-whats';
+      const evoApiKey = apiKey || process.env.EVOLUTION_API_KEY || 'jarvis-evolution-secret-2026';
 
-      const result = await executeExternalConnector({
-        providerKey: 'whatsapp',
-        action: body.action || 'send_message',
-        payload: {
-          ...(body.params || {}),
-          endpoint_url: cleanEndpoint,
-          api_key: apiKey || process.env.EVOLUTION_API_KEY || 'jarvis-evolution-secret-2026',
+      // Executa o POST real no endpoint /message/sendText/{instancia}
+      const evoRes = await fetch(`${evoUrl}/message/sendText/${instance}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': evoApiKey
+        },
+        body: JSON.stringify({
           number: targetNumber,
           text: targetText
-        }
+        }),
+        signal: AbortSignal.timeout(15000)
       });
 
-      if (result && (result as any).success === false) {
+      const evoData: any = await evoRes.json().catch(() => ({}));
+
+      if (!evoRes.ok || evoData.error) {
         return res.status(200).json({
           success: false,
+          status: evoRes.status,
           latencyMs: Date.now() - startTime,
-          error: (result as any).error || 'Falha ao enviar mensagem de teste via WhatsApp.'
+          error: evoData.response?.message?.[0] || evoData.message || `Erro HTTP ${evoRes.status} na Evolution API`
         });
       }
 
@@ -574,8 +581,8 @@ export async function testExternalConnector(req: Request, res: Response) {
         success: true,
         status: 200,
         latencyMs: Date.now() - startTime,
-        message: '🟢 WhatsApp testado com sucesso via Evolution API!',
-        data: result
+        message: '🟢 Mensagem de WhatsApp disparada com sucesso!',
+        data: evoData
       });
     }
 
