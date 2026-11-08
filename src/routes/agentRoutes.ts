@@ -5,24 +5,25 @@ import {
   createAgent,
   updateAgent,
   deleteAgent,
-  listAvailableCredentials
+  deleteAllAgents,
+  listAvailableCredentials,
+  runHackerAuditController,
+  testAgentSandbox
 } from '../controllers/agentController.js';
-
-// Adicione junto das suas outras rotas de agentes:
-import { runHackerAuditController } from '../controllers/agentController.js';
-router.post('/hacker/audit', runHackerAuditController);
 
 const router = Router();
 
-// 1. Rota de metadados de credenciais seguras (DEVE vir antes de /:id)
+// 1. Rotas estáticas prioritárias (devem anteceder /:id)
 router.get('/credentials', listAvailableCredentials);
+router.post('/hacker/audit', runHackerAuditController);
+router.post('/sandbox', testAgentSandbox);
+router.delete('/all/clear', deleteAllAgents);
 
-// 2. Rotas CRUD dos Agentes
+// 2. Rotas CRUD
 router.get('/', listAgents);
 router.post('/', createAgent);
 router.put('/:id', updateAgent);
 router.delete('/:id', deleteAgent);
 
-// Exportação dupla: compatível com qualquer formato de import no server.ts
 export const agentRoutes = router;
 export default router;
