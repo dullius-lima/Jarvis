@@ -322,8 +322,14 @@ async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
     const json = await res.json().catch(() => ({}));
     registerAgentExecution(json);
 
-    const payload = json.data || json;
-    const replyText = payload?.response || payload?.data?.response || json?.response || json?.error || 'Comando processado.';
+    // Substitua o bloco de extração por:
+  const replyText =
+  payload?.response ||
+  payload?.data?.response ||
+  json?.response ||
+  (json?.error ? `⚠️ Falha: ${json.error}` : null) ||
+  (json?.message ? `⚠️ Detalhe: ${json.message}` : null) ||
+  'O sistema não retornou uma resposta textual. Verifique os logs do modelo.';
     lastResponse.value = {
       agent: payload?.agent || 'JARVIS',
       text: replyText,
