@@ -128,7 +128,7 @@ export async function executarEsteiraEspecialistas(
         apiResponse: rawApiResult
       };
     }
-    // Rota 3: Especialista Cognitivo LLM
+    // Rota 3: Especialista Cognitivo LLM (Multi-turn Tool Calling)
     else {
       let enabledTools: string[] = [];
       if (Array.isArray(currentAgent.tools)) {
@@ -141,6 +141,7 @@ export async function executarEsteiraEspecialistas(
         }
       }
 
+      // Parâmetros estruturados para permitir ações completas em Gmail, Calendar, Home Assistant e APIs
       const specialistTools: OpenAI.Chat.Completions.ChatCompletionTool[] = enabledTools
         .filter((tId: string) => Boolean(tId && String(tId).trim()))
         .map((tId: string) => {
@@ -154,34 +155,42 @@ export async function executarEsteiraEspecialistas(
               parameters: {
                 type: 'object',
                 properties: {
-                  query: { type: 'string', description: 'Comando principal, termo de busca ou ticker.' },
+                  action: {
+                    type: 'string',
+                    description: 'Ação técnica (ex: read_inbox, trash_message, send_email, list_events, create_event, turn_on, turn_off).'
+                  },
+                  id: {
+                    type: 'string',
+                    description: 'ID exato da mensagem de e-mail, compromisso ou dispositivo que deve ser manipulado/excluído.'
+                  },
+                  query: { type: 'string', description: 'Termo de busca, ticker ou filtro (ex: is:unread, PETR4).' },
                   symbol: { type: 'string', description: 'Código do ativo financeiro (ex: PETR4, VALE3).' },
-                  task_details: { type: 'string', description: 'Detalhes ou parâmetros adicionais da tarefa.' }
+                  to: { type: 'string', description: 'Destinatário de e-mail quando aplicável.' },
+                  subject: { type: 'string', description: 'Assunto de e-mail ou compromisso.' },
+                  body: { type: 'string', description: 'Corpo da mensagem ou detalhes da tarefa.' },
+                  task_details: { type: 'string', description: 'Parâmetros ou detalhes adicionais da instrução.' }
                 }
               }
             }
           };
         });
 
-      const specialistMessages: any[] = [
+      const mensagensTrabalho: any[] = [
         {
           role: 'system',
           content: `${
             currentAgent.system_prompt || `Você é o agente especialista ${currentAgent.name}.`
-          }\nTools vinculadas a você: ${
+          }\nTools autorizadas: ${
             enabledTools.join(', ') || 'Nenhuma'
-          }.\nDIRETRIZ TÉCNICA: Se precisar de dados externos e houver uma Tool vinculada, acione-a imediatamente. Ao responder ao usuário, seja claro, preciso, natural e fale em português, sem expor estruturas internas de JSON.`
+          }.\nDIRETRIZ OBRIGATÓRIA: Dispare a tool call necessária para obter ou alterar dados. Ao concluir todas as ações com sucesso, responda em linguagem natural, clara e em português.`
         },
         ...conversationThread.slice(-6),
         {
           role: 'user',
-          content: `Pedido do Usuário: "${userPrompt}"\nParâmetros Recebidos do Orquestrador: ${JSON.stringify(
-            currentPayload
-          )}`
+          content: `Pedido do Usuário: "${userPrompt}"\nContexto: ${JSON.stringify(currentPayload)}`
         }
       ];
 
-      // Provedor, Modelo e Chave PRÓPRIOS do subagente (com fallback para o cofre do cérebro)
       const specProvider = (currentAgent.provider || brainConfig?.provider || 'groq').toLowerCase().trim();
       const specAgentKey = limparMascaraChave(currentAgent.api_key);
       const specVaultKey = brainConfig?.saved_keys?.[specProvider]
@@ -202,75 +211,99 @@ export async function executarEsteiraEspecialistas(
       );
 
       try {
-        const llmRes: any = await chamarLLMCompativelOpenAI({
-          provider: credsSubagente.provider,
-          model: credsSubagente.model,
-          apiKey: credsSubagente.apiKey,
-          baseUrl: credsSubagente.baseURL,
-          messages: specialistMessages,
-          tools: specialistTools.length > 0 ? specialistTools : undefined,
-          temperature: Number(currentAgent.temperature ?? 0.2)
-        });
+        let toolIteration = 0;
+        const MAX_TOOL_ITERATIONS = 3;
+        let respostaConcluida = false;
 
-        const specChoice = llmRes?.choices?.[0]?.message;
+        while (toolIteration < MAX_TOOL_ITERATIONS && !respostaConcluida) {
+          toolIteration++;
 
-        if (Array.isArray(specChoice?.tool_calls) && specChoice.tool_calls.length > 0) {
-          const subToolResults: any[] = [];
-          for (const subCall of specChoice.tool_calls) {
-            const subFn = sanitizeToolName(subCall.function?.name);
-            let subArgs: any = {};
-            try {
-              subArgs = JSON.parse(subCall.function?.arguments || '{}');
-            } catch {
-              subArgs = { query: promptText };
+          const llmRes: any = await chamarLLMCompativelOpenAI({
+            provider: credsSubagente.provider,
+            model: credsSubagente.model,
+            apiKey: credsSubagente.apiKey,
+            baseUrl: credsSubagente.baseURL,
+            messages: mensagensTrabalho,
+            tools: specialistTools.length > 0 ? specialistTools : undefined,
+            temperature: Number(currentAgent.temperature ?? 0.2)
+          });
+
+          const escolha = llmRes?.choices?.[0]?.message;
+
+          // Se a IA gerou chamadas de ferramenta
+          if (Array.isArray(escolha?.tool_calls) && escolha.tool_calls.length > 0) {
+            // Anexa a decisão do assistente com os tool_calls
+            mensagensTrabalho.push({
+              role: 'assistant',
+              content: escolha.content || '',
+              tool_calls: escolha.tool_calls
+            });
+
+            for (const subCall of escolha.tool_calls) {
+              const subFn = sanitizeToolName(subCall.function?.name);
+              let subArgs: any = {};
+              try {
+                subArgs = JSON.parse(subCall.function?.arguments || '{}');
+              } catch {
+                subArgs = { query: promptText };
+              }
+
+              const mergedArgs = {
+                ...taskArgs,
+                ...subArgs,
+                action: subArgs.action || taskArgs?.action,
+                id: subArgs.id || subArgs.messageId || taskArgs?.id || taskArgs?.messageId,
+                query: subArgs.query || subArgs.symbol || taskArgs?.query || taskArgs?.symbol || promptText,
+                symbol: subArgs.symbol || taskArgs?.symbol || subArgs.query,
+                to: subArgs.to || taskArgs?.to,
+                subject: subArgs.subject || taskArgs?.subject,
+                body: subArgs.body || taskArgs?.body
+              };
+
+              let saida: any;
+              try {
+                saida = await executarFerramentaVinculada(
+                  subFn,
+                  mergedArgs,
+                  userPrompt || promptText,
+                  map,
+                  serverBaseUrl
+                );
+              } catch (err: any) {
+                saida = { error: err.message, tool: subFn };
+              }
+
+              // Padrão universal OpenAI/Groq: cada tool_call deve ser respondida com role: 'tool'
+              mensagensTrabalho.push({
+                role: 'tool',
+                tool_call_id: subCall.id || `call_${Date.now()}`,
+                content: typeof saida === 'string' ? saida : JSON.stringify(saida)
+              });
             }
-
-            // Preserva ticker/query extraído pelo JARVIS caso a subchamada venha incompleta
-            const mergedSubArgs = {
-              ...taskArgs,
-              ...subArgs,
-              query: subArgs.query || subArgs.symbol || taskArgs?.query || taskArgs?.symbol || promptText,
-              symbol: subArgs.symbol || taskArgs?.symbol || subArgs.query
-            };
-
-            const out = await executarFerramentaVinculada(
-              subFn,
-              mergedSubArgs,
-              userPrompt || promptText,
-              map,
-              serverBaseUrl
-            );
-            subToolResults.push({ tool: subFn, output: out });
+          } else {
+            // A IA respondeu em texto final
+            stepOutput = escolha?.content?.trim() || 'Ação concluída com sucesso pelo especialista.';
+            respostaConcluida = true;
           }
+        }
 
-          const followUpRes: any = await chamarLLMCompativelOpenAI({
+        // Se o loop esgotou as iterações sem texto, realiza uma última síntese
+        if (!stepOutput) {
+          const finalSynth: any = await chamarLLMCompativelOpenAI({
             provider: credsSubagente.provider,
             model: credsSubagente.model,
             apiKey: credsSubagente.apiKey,
             baseUrl: credsSubagente.baseURL,
             messages: [
-              ...specialistMessages,
-              {
-                role: 'system',
-                content:
-                  'ETAPA DE SÍNTESE DO ESPECIALISTA: Os dados reais das ferramentas já foram coletados abaixo. Formule a resposta final completa em português, de forma clara, humana e bem estruturada, sem blocos JSON soltos.'
-              },
+              ...mensagensTrabalho,
               {
                 role: 'user',
-                content: `Resultados reais retornados pelas ferramentas:\n${JSON.stringify(
-                  subToolResults,
-                  null,
-                  2
-                )}\n\nCom base nesses dados, responda ao pedido original: "${userPrompt}"`
+                content: 'Formule agora a resposta final ao usuário em português com base nas ações já executadas.'
               }
             ],
-            temperature: Number(currentAgent.temperature ?? 0.2)
+            temperature: 0.2
           });
-
-          stepOutput =
-            followUpRes?.choices?.[0]?.message?.content?.trim() || JSON.stringify(subToolResults);
-        } else {
-          stepOutput = specChoice?.content?.trim() || 'Análise concluída pelo especialista.';
+          stepOutput = finalSynth?.choices?.[0]?.message?.content?.trim() || 'Operação concluída com sucesso pelo especialista.';
         }
       } catch (llmErr: any) {
         console.error(`❌ [Esteira Especialistas] Erro no subagente ${currentAgent.slug}:`, llmErr?.message);
