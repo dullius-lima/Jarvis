@@ -391,145 +391,169 @@ export async function executarConectorExterno({
     }
 
     // --------------------------------------------------------------------------
-    // GOOGLE CALENDAR: TOTALMENTE FLEXÍVEL PARA QUALQUER TÍTULO, DATA E DETALHE
-    // --------------------------------------------------------------------------
-    case 'google_calendar': {
-      const accessToken = await obterTokenAcessoGoogle();
-      const acaoAtual = String(action || payload.action || 'list_events').toLowerCase();
-      const calendarBase = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+  // GOOGLE CALENDAR: TOTALMENTE CORRIGIDO PARA DATA, HORA E FUSO
+  // --------------------------------------------------------------------------
+  case 'google_calendar': {
+    const accessToken = await obterTokenAcessoGoogle();
+    const acaoAtual = String(action || payload.action || 'list_events').toLowerCase();
+    const calendarBase = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 
-      // 1. Criar novo evento dinâmico
-      if (
-        acaoAtual === 'create_event' ||
-        acaoAtual === 'schedule' ||
-        acaoAtual === 'criar_evento' ||
-        acaoAtual === 'agendar' ||
-        acaoAtual === 'agendamento'
-      ) {
-        const parametros = payload.parameters || payload.params || payload;
+    if (
+      acaoAtual === 'create_event' ||
+      acaoAtual === 'schedule' ||
+      acaoAtual === 'criar_evento' ||
+      acaoAtual === 'agendar' ||
+      acaoAtual === 'agendamento'
+    ) {
+      const parametros = payload.parameters || payload.params || payload;
 
-        // Captura qualquer título ou assunto fornecido (sem fixar em 'Reunião')
-        const titulo =
-          parametros.summary ||
-          parametros.title ||
-          parametros.assunto ||
-          parametros.nome ||
-          parametros.compromisso ||
-          parametros.task_details ||
-          parametros.query ||
-          'Compromisso';
+      const titulo =
+        parametros.summary ||
+        parametros.title ||
+        parametros.assunto ||
+        parametros.nome ||
+        parametros.compromisso ||
+        parametros.task_details ||
+        parametros.query ||
+        'Compromisso';
 
-        // Detalhes e descrição
-        const descricao =
-          parametros.description ||
-          parametros.descricao ||
-          parametros.detalhes ||
-          'Agendado via JARVIS.';
+      const descricao =
+        parametros.description ||
+        parametros.descricao ||
+        parametros.detalhes ||
+        'Agendado via JARVIS.';
 
-        // Horário de Início
-        const horarioInicioBruto =
-          parametros.startTime ||
-          parametros.start ||
-          parametros.start_time ||
-          parametros.data ||
-          parametros.horario ||
-          parametros.data_hora;
+      const fuso = parametros.timezone || 'America/Campo_Grande';
 
-        let dataInicio: Date;
-        if (!horarioInicioBruto) {
-          dataInicio = new Date();
-        } else if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(horarioInicioBruto).trim())) {
-          // Se for passado apenas "14:00" ou "14:00:00"
-          const [horas, minutos] = String(horarioInicioBruto).trim().split(':').map(Number);
-          dataInicio = new Date();
-          dataInicio.setHours(horas, minutos, 0, 0);
+      // Parser inteligente que combina data e horário caso venham em propriedades separadas
+      const dataStr = String(parametros.data || parametros.date || '').trim();
+      const horaStr = String(parametros.horario || parametros.time || parametros.hora || '').trim();
+      const inicioCombinado = parametros.startTime || parametros.start || parametros.start_time || parametros.data_hora;
+
+      let dataInicio: Date = new Date();
+
+      if (dataStr && horaStr) {
+        // Unifica ex: "2026-11-09" + "15:00"
+        const isoMontado = `${dataStr.replace(/\//g, '-')}T${horaStr.length === 5 ? `${horaStr}:00` : horaStr}`;
+        const d = new Date(isoMontado);
+        if (!isNaN(d.getTime())) dataInicio = d;
+      } else if (inicioCombinado) {
+        const d = new Date(inicioCombinado);
+        if (!isNaN(d.getTime())) {
+          dataInicio = d;
+        } else if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(inicioCombinado).trim())) {
+          const [h, m] = String(inicioCombinado).trim().split(':').map(Number);
+          dataInicio.setHours(h, m, 0, 0);
           if (dataInicio.getTime() < Date.now()) {
             dataInicio.setDate(dataInicio.getDate() + 1);
           }
-        } else {
-          dataInicio = new Date(horarioInicioBruto);
         }
-
-        if (isNaN(dataInicio.getTime())) {
-          dataInicio = new Date();
+      } else if (horaStr && /^\d{1,2}:\d{2}(:\d{2})?$/.test(horaStr)) {
+        const [h, m] = horaStr.split(':').map(Number);
+        dataInicio.setHours(h, m, 0, 0);
+        if (dataInicio.getTime() < Date.now()) {
+          dataInicio.setDate(dataInicio.getDate() + 1);
         }
-
-        // Horário de Término
-        const horarioFimBruto =
-          parametros.endTime ||
-          parametros.end ||
-          parametros.end_time ||
-          parametros.termino;
-
-        const dataFim =
-          horarioFimBruto && !isNaN(new Date(horarioFimBruto).getTime())
-            ? new Date(horarioFimBruto)
-            : new Date(dataInicio.getTime() + 60 * 60 * 1000); // 1h de duração padrão
-
-        const fuso = parametros.timezone || 'America/Campo_Grande';
-
-        const corpoEvento: any = {
-          summary: titulo,
-          description: descricao,
-          start: {
-            dateTime: dataInicio.toISOString(),
-            timeZone: fuso
-          },
-          end: {
-            dateTime: dataFim.toISOString(),
-            timeZone: fuso
-          },
-          reminders: {
-            useDefault: false,
-            overrides: [
-              { method: 'popup', minutes: 30 },
-              { method: 'popup', minutes: 10 }
-            ]
-          }
-        };
-
-        if (parametros.location || parametros.local || parametros.endereco) {
-          corpoEvento.location = parametros.location || parametros.local || parametros.endereco;
-        }
-
-        const respostaEvento = await fetch(calendarBase, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(corpoEvento)
-        });
-
-        const dadosRetorno: any = await respostaEvento.json().catch(() => ({}));
-        if (!respostaEvento.ok) {
-          throw new Error(
-            dadosRetorno.error?.message || `Erro HTTP ${respostaEvento.status} ao agendar evento no Google Calendar.`
-          );
-        }
-
-        const dataFormatada = dataInicio.toLocaleString('pt-BR', {
-          timeZone: fuso,
-          weekday: 'long',
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-
-        return {
-          success: true,
-          provider: 'google_calendar',
-          action: 'create_event',
-          eventId: dadosRetorno.id,
-          summary: dadosRetorno.summary,
-          start: dadosRetorno.start?.dateTime,
-          end: dadosRetorno.end?.dateTime,
-          htmlLink: dadosRetorno.htmlLink,
-          message: `Agendamento confirmado! O compromisso **"${titulo}"** foi adicionado à sua agenda para ${dataFormatada}.`
-        };
       }
+
+      // Horário de Término (1 hora de duração padrão)
+      const fimCombinado = parametros.endTime || parametros.end || parametros.end_time || parametros.termino;
+      const dataFim = fimCombinado && !isNaN(new Date(fimCombinado).getTime())
+        ? new Date(fimCombinado)
+        : new Date(dataInicio.getTime() + 60 * 60 * 1000);
+
+      // Formatação RFC3339 com offset explícito (-04:00) para garantir precisão
+      const formatarComFuso = (d: Date) => {
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const ano = d.getFullYear();
+        const mes = pad(d.getMonth() + 1);
+        const dia = pad(d.getDate());
+        const hora = pad(d.getHours());
+        const min = pad(d.getMinutes());
+        const seg = pad(d.getSeconds());
+        return `${ano}-${mes}-${dia}T${hora}:${min}:${seg}-04:00`;
+      };
+
+      const corpoEvento: any = {
+        summary: titulo,
+        description: descricao,
+        start: {
+          dateTime: formatarComFuso(dataInicio),
+          timeZone: fuso
+        },
+        end: {
+          dateTime: formatarComFuso(dataFim),
+          timeZone: fuso
+        },
+        reminders: {
+          useDefault: false,
+          overrides: [
+            { method: 'popup', minutes: 30 },
+            { method: 'popup', minutes: 10 }
+          ]
+        }
+      };
+
+      if (parametros.location || parametros.local || parametros.endereco) {
+        corpoEvento.location = parametros.location || parametros.local || parametros.endereco;
+      }
+
+      const respostaEvento = await fetch(calendarBase, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(corpoEvento)
+      });
+
+      const dadosRetorno: any = await respostaEvento.json().catch(() => ({}));
+      if (!respostaEvento.ok) {
+        throw new Error(dadosRetorno.error?.message || `Erro HTTP ${respostaEvento.status} no Google Calendar.`);
+      }
+
+      const dataFormatada = dataInicio.toLocaleString('pt-BR', {
+        timeZone: fuso,
+        weekday: 'long',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      return {
+        success: true,
+        provider: 'google_calendar',
+        action: 'create_event',
+        eventId: dadosRetorno.id,
+        summary: dadosRetorno.summary,
+        start: dadosRetorno.start?.dateTime,
+        end: dadosRetorno.end?.dateTime,
+        htmlLink: dadosRetorno.htmlLink,
+        message: `Agendamento confirmado! O compromisso **"${titulo}"** foi adicionado à sua agenda para ${dataFormatada}.`
+      };
+    }
+
+    // Listagem existente mantida
+    const maxResults = Number(payload.maxResults || payload.pageSize || payload.limite || 10);
+    const timeMin = payload.timeMin ? new Date(payload.timeMin).toISOString() : new Date().toISOString();
+    const urlListagem = `${calendarBase}?maxResults=${maxResults}&orderBy=startTime&singleEvents=true&timeMin=${encodeURIComponent(timeMin)}`;
+    const res = await fetch(urlListagem, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error?.message || `Erro HTTP ${res.status} ao listar agenda.`);
+
+    const eventos = (data.items || []).map((item: any) => ({
+      id: item.id,
+      summary: item.summary || '(Sem Título)',
+      description: item.description || '',
+      start: item.start?.dateTime || item.start?.date,
+      end: item.end?.dateTime || item.end?.date,
+      link: item.htmlLink
+    }));
+
+    return { success: true, provider: 'google_calendar', action: 'list_events', total: eventos.length, events: eventos };
+  }
 
       // 2. Listar compromissos existentes
       const maxResults = Number(payload.maxResults || payload.pageSize || payload.limite || 10);
