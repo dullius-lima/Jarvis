@@ -1,4 +1,3 @@
-
 // src/controllers/agentController.ts
 import { Request, Response } from 'express';
 import { pool } from '../config/database.js';
@@ -19,20 +18,28 @@ import {
   interpolateApiTemplate
 } from '../services/orchestratorService.js';
 import { executeMcpToolCall } from '../services/mcpHfService.js';
-
 import { runHackerAgent, HackerTaskInput } from '../services/agents/hackerAgent.js';
 
 /**
  * POST /api/v1/agents/hacker/audit
+ * Rota executiva do Subagente Hacker / Auditor de Integridade (Modo Read-Only)
  */
-export async function runHackerAuditController(req: any, res: any) {
+export async function runHackerAuditController(req: Request, res: Response) {
   try {
-    const input = req.body || { mode: 'self_healing_debug' };
+    const input: HackerTaskInput = req.body || { mode: 'self_healing_debug' };
 
-    // Chamada autónoma e direta à API da Groq sem dependências quebradiças
+    // Helper cognitivo resiliente: busca no .env ou no cofre central do banco
     const llmHelper = async (sys: string, usr: string): Promise<string> => {
-      const apiKey = process.env.GROQ_API_KEY || '';
-      if (!apiKey) return 'Chave GROQ_API_KEY não configurada no ficheiro .env.';
+      const brainConfig: any = await getCentralBrainConfig().catch(() => ({}));
+      const apiKey =
+        sanitizeApiKey(process.env.GROQ_API_KEY) ||
+        sanitizeApiKey(brainConfig.saved_keys?.groq) ||
+        sanitizeApiKey(brainConfig.api_key) ||
+        '';
+
+      if (!apiKey) {
+        return 'Chave Groq não configurada no ficheiro .env nem no cofre central do Cérebro.';
+      }
 
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
@@ -50,9 +57,11 @@ export async function runHackerAuditController(req: any, res: any) {
         })
       });
 
-      if (!response.ok) return `Erro na Groq (${response.status}): ${await response.text()}`;
+      if (!response.ok) {
+        return `Erro na Groq (${response.status}): ${await response.text()}`;
+      }
       const data: any = await response.json();
-      return data.choices?.[0]?.message?.content || 'Sem resposta textual.';
+      return data.choices?.[0]?.message?.content || 'Sem resposta textual da LLM.';
     };
 
     const resultado = await runHackerAgent(input, llmHelper);
@@ -92,6 +101,18 @@ function sanitizeApiKey(rawKey?: any): string {
   else if (/^sk-or-/i.test(k)) k = 'sk-or-' + k.slice(6);
 
   return k;
+}
+
+function normalizeToolsArray(rawTools: any): string {
+  if (!rawTools) return '[]';
+  if (Array.isArray(rawTools)) return JSON.stringify(rawTools);
+  if (typeof rawTools === 'string') {
+    try {
+      const parsed = JSON.parse(rawTools);
+      if (Array.isArray(parsed)) return JSON.stringify(parsed);
+    } catch {}
+  }
+  return '[]';
 }
 
 function buildAgentWebhookUrls(req: Request, slug: string) {
@@ -196,18 +217,15 @@ export async function executeSingleAgentLogic(
       outputResult = { status: resp.status, raw: textData };
     }
   } else {
-    // 🧠 ROTA COGNITIVA (LLM): Resolução Limpa de Credenciais e Cofre Central
+    // ROTA COGNITIVA (LLM)
     const targetProvider = (agent.provider || brainConfig.provider || 'groq').toLowerCase().trim();
     const cleanAgentKey = sanitizeApiKey(agent.api_key);
 
-    // Busca chave no cofre salvo do Cérebro para o provedor deste agente
     const vaultKey =
       brainConfig.saved_keys && brainConfig.saved_keys[targetProvider]
         ? sanitizeApiKey(brainConfig.saved_keys[targetProvider])
         : '';
 
-    // Se o agente tiver chave própria válida e limpa, utiliza.
-    // Caso contrário, herda do cofre específico do provedor ou da chave mestre do Cérebro.
     const effectiveKey =
       cleanAgentKey ||
       vaultKey ||
@@ -443,7 +461,6 @@ export async function createAgent(req: Request, res: Response) {
     );
     const finalProvider = (resolvedCred.provider || provider || 'groq').toLowerCase().trim();
 
-    // Sanitiza e descarta máscaras: se vazio, grava NULL para herdar do Cérebro
     const cleanApiKey = sanitizeApiKey(api_key || resolvedCred.api_key) || null;
     const cleanAuthToken = sanitizeApiKey(auth_token || resolvedCred.auth_token) || null;
     const finalEndpointUrl = (endpoint_url || resolvedCred.endpoint_url || '').trim() || null;
@@ -467,7 +484,7 @@ export async function createAgent(req: Request, res: Response) {
       cleanAuthToken,
       payload_template,
       response_instruction,
-      JSON.stringify(Array.isArray(tools) ? tools : []),
+      normalizeToolsArray(tools),
       next_agent_slug || null,
       Boolean(schedule_enabled),
       cron_expression,
@@ -559,8 +576,6 @@ export async function updateAgent(req: Request, res: Response) {
     }
     const curr = existing.rows[0];
 
-    // Trata a chave de API na edição:
-    // Se o usuário digitou uma nova chave limpa, grava; se veio vazia ou com máscara, preserva ou seta NULL se explicitamente limpa
     let updatedApiKey = curr.api_key;
     if (body.api_key !== undefined) {
       const cleanedInputKey = sanitizeApiKey(body.api_key);
@@ -572,6 +587,8 @@ export async function updateAgent(req: Request, res: Response) {
       const cleanedInputToken = sanitizeApiKey(body.auth_token);
       updatedAuthToken = cleanedInputToken || (body.auth_token === '' ? null : curr.auth_token);
     }
+
+    const updatedTools = normalizeToolsArray(body.tools !== undefined ? body.tools : curr.tools);
 
     const updated = await pool.query(
       `UPDATE ai_agents SET
@@ -622,7 +639,7 @@ export async function updateAgent(req: Request, res: Response) {
         updatedAuthToken,
         body.payload_template !== undefined ? body.payload_template : curr.payload_template,
         body.response_instruction !== undefined ? body.response_instruction : curr.response_instruction,
-        JSON.stringify(body.tools !== undefined ? body.tools : curr.tools || []),
+        updatedTools,
         body.next_agent_slug !== undefined ? body.next_agent_slug : curr.next_agent_slug,
         body.schedule_enabled !== undefined ? Boolean(body.schedule_enabled) : curr.schedule_enabled,
         body.cron_expression ?? curr.cron_expression,
