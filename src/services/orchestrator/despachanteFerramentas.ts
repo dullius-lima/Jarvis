@@ -148,47 +148,65 @@ export async function processarChamadasDeFerramentas(params: {
       continue;
     }
 
-    // 3. Subagentes Especialistas Ativos
-    const agenteCorrespondente = agentesAtivos.find(
-      (a: any) => sanitizeToolName(a.slug) === fnName
+    // 3. Subagentes Especialistas Ativos (Busca Tolerante e Resiliente)
+  const normalizar = (str: string) =>
+    (str || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+
+  const alvo = normalizar(fnName);
+
+  const agenteCorrespondente = agentesAtivos.find((a: any) => {
+    const slugNorm = normalizar(a.slug);
+    const nomeNorm = normalizar(a.name);
+    return (
+      slugNorm === alvo ||
+      nomeNorm === alvo ||
+      (slugNorm.length >= 4 && alvo.includes(slugNorm)) ||
+      (alvo.length >= 4 && slugNorm.includes(alvo)) ||
+      (nomeNorm.length >= 4 && alvo.includes(nomeNorm)) ||
+      (alvo.length >= 4 && nomeNorm.includes(alvo))
+    );
+  });
+
+  if (agenteCorrespondente) {
+    triggeredAgentName = agenteCorrespondente.name;
+    triggeredAgentId = agenteCorrespondente.slug;
+    triggeredNodeType = agenteCorrespondente.agent_type || 'llm';
+
+    const agenteComTempo = {
+      ...agenteCorrespondente,
+      system_prompt: `${agenteCorrespondente.system_prompt || ''}\n${contextoTemporal}`
+    };
+
+    const resultadoCadeia = await executeSpecialistPipeline(
+      agenteComTempo,
+      argsParsed,
+      sessionId,
+      activeSpeakerName,
+      threadConversa,
+      configuracaoCerebro.server_base_url,
+      userPrompt,
+      configuracaoCerebro,
+      connectorsMap
     );
 
-    if (agenteCorrespondente) {
-      triggeredAgentName = agenteCorrespondente.name;
-      triggeredAgentId = agenteCorrespondente.slug;
-      triggeredNodeType = agenteCorrespondente.agent_type || 'llm';
+    const ultimaSaida = resultadoCadeia[resultadoCadeia.length - 1]?.output;
+    const ehTextoLimpo =
+      typeof ultimaSaida === 'string' &&
+      ultimaSaida.trim().length > 0 &&
+      extractJsonActionBlocks(ultimaSaida).length === 0;
 
-      const agenteComTempo = {
-        ...agenteCorrespondente,
-        system_prompt: `${agenteCorrespondente.system_prompt || ''}\n${contextoTemporal}`
-      };
-
-      const resultadoCadeia = await executeSpecialistPipeline(
-        agenteComTempo,
-        argsParsed,
-        sessionId,
-        activeSpeakerName,
-        threadConversa,
-        configuracaoCerebro.server_base_url,
-        userPrompt,
-        configuracaoCerebro,
-        connectorsMap
-      );
-
-      const ultimaSaida = resultadoCadeia[resultadoCadeia.length - 1]?.output;
-      const ehTextoLimpo =
-        typeof ultimaSaida === 'string' &&
-        ultimaSaida.trim().length > 0 &&
-        extractJsonActionBlocks(ultimaSaida).length === 0;
-
-      saidasFerramentasParaSintese.push({
-        toolName: agenteCorrespondente.slug,
-        responseInstruction: agenteComTempo.system_prompt || undefined,
-        result: ehTextoLimpo ? ultimaSaida : resultadoCadeia,
-        isReadySpecialistText: ehTextoLimpo
-      });
-      continue;
-    }
+    saidasFerramentasParaSintese.push({
+      toolName: agenteCorrespondente.slug,
+      responseInstruction: agenteComTempo.system_prompt || undefined,
+      result: ehTextoLimpo ? ultimaSaida : resultadoCadeia,
+      isReadySpecialistText: ehTextoLimpo
+    });
+    continue;
+  }
 
     // 4. Conector Direto do Catálogo
     if (connectorsMap.has(fnName) || validToolSlugs.includes(fnName)) {
