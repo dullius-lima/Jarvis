@@ -141,7 +141,11 @@ export async function processarExecucaoWorkflow(
     );
 
     if (filtroSensorial.interceptado) {
-      return filtroSensorial.respostaPronta;
+      const respPronta: any = filtroSensorial.respostaPronta;
+      if (respPronta && typeof respPronta === 'object' && !respPronta.data) {
+        respPronta.data = { ...respPronta };
+      }
+      return respPronta;
     }
 
     const { activeSpeakerName, speakerRole, isVoiceIdentified } = filtroSensorial;
@@ -432,7 +436,7 @@ export async function processarExecucaoWorkflow(
       metadata: { agent: triggeredAgentName, agentId: triggeredAgentId, speaker: activeSpeakerName }
     } as any);
 
-    // Retorno unificado com espelhamento duplo (raiz e data)
+    // Retorno unificado com espelhamento duplo (raiz e data) para alimentar App.vue e useMemoryOrbs
     const retornoExecucao: any = {
       success: true,
       triggeredSuccess: true,
@@ -525,5 +529,6 @@ export default {
   interceptarAcaoAgenda,
   processWorkflowExecution,
   processOrchestratorWorkflow,
-  processOrchestratorStimulus
+  processOrchestratorStimulus,
+  scheduleCalendarInterceptor
 };
