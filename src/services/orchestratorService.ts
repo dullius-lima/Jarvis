@@ -75,6 +75,84 @@ export {
 };
 
 /**
+ * Interceptador especializado: captura blocos JSON de agendamento gerados no texto pela LLM,
+ * extrai qualquer parâmetro dinâmico solicitado pelo usuário (título livre, data, horário, local e detalhes)
+ * e aciona o conector do Google Calendar sem travar valores engessados.
+ */
+export async function interceptarAcaoAgenda(
+  textoResposta: string
+): Promise<{ interceptado: boolean; respostaTexto?: string; dados?: any }> {
+  if (!textoResposta || typeof textoResposta !== 'string') {
+    return { interceptado: false };
+  }
+
+  // 1. Extração segura de JSON formatado em bloco Markdown (```json ... ```) ou texto puro
+  let candidatoJson = textoResposta.trim();
+  const blocoMarkdown = candidatoJson.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (blocoMarkdown && blocoMarkdown[1]) {
+    candidatoJson = blocoMarkdown[1].trim();
+  } else {
+    const matchObjeto = candidatoJson.match(/\{[\s\S]*\}/);
+    if (matchObjeto) {
+      candidatoJson = matchObjeto[0].trim();
+    }
+  }
+
+  if (candidatoJson.startsWith('{') && candidatoJson.endsWith('}')) {
+    try {
+      const acaoParseada = JSON.parse(candidatoJson);
+
+      const nomeTool = String(acaoParseada.tool || acaoParseada.toolName || acaoParseada.slug || '').toLowerCase();
+      const nomeAcao = String(acaoParseada.action || '').toLowerCase();
+
+      // Identifica intenções voltadas ao Google Calendar / Agenda
+      const ehAcaoCalendario =
+        nomeTool === 'google_calendar' ||
+        nomeTool === 'calendar' ||
+        nomeTool === 'agenda' ||
+        nomeAcao === 'create_event' ||
+        nomeAcao === 'schedule' ||
+        nomeAcao === 'agendar' ||
+        nomeAcao === 'criar_evento';
+
+      if (ehAcaoCalendario) {
+        // Coleta todos os parâmetros flexíveis enviados pela IA sem engessamento
+        const parametros = acaoParseada.parameters || acaoParseada.params || acaoParseada.payload || acaoParseada;
+
+        // Importação dinâmica do serviço de integração com suporte à função em português
+        const moduloIntegracao = await import('./integrationService.js');
+        const executorAgenda = moduloIntegracao.agendarCalendarioGoogle || moduloIntegracao.scheduleCalendarHandler;
+
+        const resultadoExecucao = await executorAgenda({
+          action: 'create_event',
+          ...parametros
+        });
+
+        const tituloFinal =
+          parametros.summary ||
+          parametros.title ||
+          parametros.assunto ||
+          parametros.nome ||
+          parametros.compromisso ||
+          'Compromisso';
+
+        return {
+          interceptado: true,
+          respostaTexto:
+            resultadoExecucao.message ||
+            `✅ Compromisso **"${tituloFinal}"** agendado com sucesso no Google Calendar!`,
+          dados: resultadoExecucao
+        };
+      }
+    } catch (erro: any) {
+      console.warn('⚠️ [Interceptor Agenda] Aviso ao processar JSON de agendamento:', erro?.message);
+    }
+  }
+
+  return { interceptado: false };
+}
+
+/**
  * Processa o fluxo principal cognitivo, sensorial e execução de ferramentas do JARVIS
  */
 export async function processarExecucaoWorkflow(
@@ -207,13 +285,13 @@ export async function processarExecucaoWorkflow(
       }
     }
 
-    // 2. FILTRO DE SAUDAÇÕES SIMPLES (Evita invocar ferramentas desnecessárias ao dizer oi/olá)
+    // 2. FILTRO DE SAUDAÇÕES SIMPLES (Evita acionar ferramentas ao dizer "oi" ou "olá")
     const cleanLowerPrompt = userPrompt.trim().toLowerCase().replace(/[!.,?]/g, '');
     const isBasicGreeting = /^(oi|ol[aá]|bom dia|boa tarde|boa noite|e ai|ei|fala ai|jarvis)$/i.test(cleanLowerPrompt);
 
     if (isBasicGreeting) {
       const greetingResponse = `Olá, ${activeSpeakerName}! Todos os sistemas estão operacionais. Como posso ajudar você agora?`;
-      
+
       appendShortTermMemory(sessionId, 'user', userPrompt);
       appendShortTermMemory(sessionId, 'assistant', greetingResponse);
 
@@ -768,7 +846,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
         }
       }
 
-      // ATALHO DE ALTA PERFORMANCE: Se apenas 1 especialista foi acionado e já entregou texto natural pronto
+      // Se apenas 1 especialista foi acionado e já entregou texto natural limpo
       if (
         toolOutputsForSynthesis.length === 1 &&
         toolOutputsForSynthesis[0].isReadySpecialistText &&
@@ -805,27 +883,37 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
       }
     }
 
-    // 7. INTERCEPTAÇÃO UNIVERSAL DE QUALQUER JSON RESIDUAL ("toolName", "action", "tool", "slug")
-    const hasResidualJson =
-      extractJsonActionBlocks(finalResponseText).length > 0 ||
-      finalResponseText.includes('"toolName"') ||
-      finalResponseText.includes('"action"') ||
-      finalResponseText.includes('"tool"') ||
-      finalResponseText.includes('invoke_tool');
+    // 7. INTERCEPTAÇÃO DE AÇÕES DE AGENDAMENTO E JSON RESIDUAL
+    // 7.1 Interceptador de Agendamento Dinâmico do Google Calendar em Texto / JSON
+    const agendamentoInterceptado = await interceptarAcaoAgenda(finalResponseText);
+    if (agendamentoInterceptado.interceptado && agendamentoInterceptado.respostaTexto) {
+      finalResponseText = agendamentoInterceptado.respostaTexto;
+      triggeredAgentName = 'Agente de Agendamento';
+      triggeredAgentId = 'calendar_agent';
+      triggeredNodeType = 'api';
+    } else {
+      // 7.2 Interceptador Universal para outras Tools e Especialistas
+      const hasResidualJson =
+        extractJsonActionBlocks(finalResponseText).length > 0 ||
+        finalResponseText.includes('"toolName"') ||
+        finalResponseText.includes('"action"') ||
+        finalResponseText.includes('"tool"') ||
+        finalResponseText.includes('invoke_tool');
 
-    if (hasResidualJson) {
-      const intercepted = await interceptAndExecuteTextActions({
-        llmText: finalResponseText,
-        userPrompt,
-        sessionId,
-        serverBaseUrl: brainConfig.server_base_url
-      });
+      if (hasResidualJson) {
+        const intercepted = await interceptAndExecuteTextActions({
+          llmText: finalResponseText,
+          userPrompt,
+          sessionId,
+          serverBaseUrl: brainConfig.server_base_url
+        });
 
-      if (intercepted && intercepted.intercepted) {
-        finalResponseText = intercepted.finalText;
-        triggeredAgentName = intercepted.agentName;
-        triggeredAgentId = intercepted.agentSlug;
-        triggeredNodeType = intercepted.nodeType || 'api';
+        if (intercepted && intercepted.intercepted) {
+          finalResponseText = intercepted.finalText;
+          triggeredAgentName = intercepted.agentName;
+          triggeredAgentId = intercepted.agentSlug;
+          triggeredNodeType = intercepted.nodeType || 'api';
+        }
       }
     }
 
@@ -977,3 +1065,14 @@ export const processarEstimuloOrquestrador = async (
 export const processWorkflowExecution = processarExecucaoWorkflow;
 export const processOrchestratorWorkflow = processarFluxoOrquestrador;
 export const processOrchestratorStimulus = processarEstimuloOrquestrador;
+export const scheduleCalendarInterceptor = interceptarAcaoAgenda;
+
+export default {
+  processarExecucaoWorkflow,
+  processarFluxoOrquestrador,
+  processarEstimuloOrquestrador,
+  interceptarAcaoAgenda,
+  processWorkflowExecution,
+  processOrchestratorWorkflow,
+  processOrchestratorStimulus
+};
