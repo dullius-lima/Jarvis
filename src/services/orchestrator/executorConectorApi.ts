@@ -62,6 +62,12 @@ export async function executarConectorApiUniversal(
   }
 
   const baseLimpa = (serverBaseUrl || 'http://localhost:3333').replace(/\/+$/, '');
+
+  // Expande endpoints com caminhos relativos
+  if (endpointUrl.startsWith('/')) {
+    endpointUrl = `${baseLimpa}${endpointUrl}`;
+  }
+
   const tickerFonte = String(taskArgs?.symbol || taskArgs?.ticker || taskArgs?.query || userPrompt || '').toUpperCase();
   const tickerMatch = tickerFonte.match(/\b([A-Z]{4}\d{1,2})\b/);
 
@@ -83,7 +89,11 @@ export async function executarConectorApiUniversal(
   let urlFinal = endpointUrl.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, varName) => {
     const k = varName.trim();
     if (k !== 'BASE_URL' && k !== 'SERVER_IP') tevePlaceholder = true;
-    const subst = variaveisDinamicas[k] ?? variaveisDinamicas[k.toLowerCase()] ?? variaveisDinamicas.query ?? '';
+    const subst =
+      variaveisDinamicas[k] ??
+      variaveisDinamicas[k.toLowerCase()] ??
+      variaveisDinamicas.query ??
+      '';
     return k === 'BASE_URL' || k === 'SERVER_IP' ? subst : encodeURIComponent(subst);
   });
 
@@ -106,7 +116,6 @@ export async function executarConectorApiUniversal(
     if (authType === 'api_key') {
       headers['x-api-key'] = tokenLimpo;
     }
-    // CORREÇÃO: Anexa token na query string APENAS se for Brapi ou authType configurado para query_token
     const jaTemTokenNaUrl = /[?&](token|apikey|api_key|key)=/i.test(urlFinal);
     const deveAnexarTokenNaQuery = authType === 'query_token' || urlFinal.includes('brapi.dev');
     if (!jaTemTokenNaUrl && deveAnexarTokenNaQuery) {
@@ -118,7 +127,13 @@ export async function executarConectorApiUniversal(
   if (httpMethod !== 'GET' && httpMethod !== 'HEAD') {
     if (payloadTemplate && payloadTemplate.trim().startsWith('{')) {
       requestBody = payloadTemplate.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, varName) => {
-        return variaveisDinamicas[varName.trim()] ?? variaveisDinamicas.query ?? '';
+        const k = varName.trim();
+        return (
+          variaveisDinamicas[k] ??
+          variaveisDinamicas[k.toLowerCase()] ??
+          variaveisDinamicas.query ??
+          ''
+        );
       });
     } else {
       requestBody = JSON.stringify({
@@ -129,21 +144,38 @@ export async function executarConectorApiUniversal(
     }
   }
 
-  const resposta = await fetch(urlFinal, {
-    method: httpMethod,
-    headers,
-    body: requestBody,
-    signal: AbortSignal.timeout(15000)
-  });
+  try {
+    const resposta = await fetch(urlFinal, {
+      method: httpMethod,
+      headers,
+      body: requestBody,
+      signal: AbortSignal.timeout(15000)
+    });
 
-  const dadosBrutos = await resposta.json().catch(async () => ({ rawText: await resposta.text() }));
+    // Leitura única e protegida do stream de resposta
+    const rawText = await resposta.text();
+    let dadosBrutos: any;
+    try {
+      dadosBrutos = JSON.parse(rawText);
+    } catch {
+      dadosBrutos = { rawText };
+    }
 
-  return {
-    connector: connectorName,
-    httpStatus: resposta.status,
-    authenticatedWithToken: Boolean(tokenLimpo),
-    data: dadosBrutos
-  };
+    return {
+      connector: connectorName,
+      httpStatus: resposta.status,
+      success: resposta.ok,
+      authenticatedWithToken: Boolean(tokenLimpo),
+      data: dadosBrutos
+    };
+  } catch (err: any) {
+    return {
+      error: `Falha na requisição ao conector "${connectorName}": ${err.message}`,
+      connector: connectorName,
+      httpStatus: 500,
+      success: false
+    };
+  }
 }
 
 export const executeUniversalApiConnector = executarConectorApiUniversal;
