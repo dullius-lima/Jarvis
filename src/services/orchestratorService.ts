@@ -35,6 +35,7 @@ import {
 
 import {
   callOpenAICompatibleLLM,
+  executeBoundTool,
   executeSpecialistPipeline,
   executeSpecialistNode,
   executeAgentChain
@@ -45,7 +46,7 @@ import { montarContextoEConexoes } from './orchestrator/montadorPromptEConexoes.
 import { processarChamadasDeFerramentas } from './orchestrator/despachanteFerramentas.js';
 import { interceptarAcaoAgenda } from './orchestrator/interceptadorAgenda.js';
 
-// Re-exportações de tipos e utilitários para manter compatibilidade total
+// Re-exportações de tipos e utilitários
 export type { SupportedProtocolOrPlatform, ExternalProvider, SensoryAttachments, SensorPayload, DynamicToolCatalogItem };
 export {
   sanitizeToolName,
@@ -69,8 +70,7 @@ export {
 };
 
 /**
- * Localização flexível e tolerante de Agentes Especialistas
- * (Suporta variações de hífen vs underline, maiúsculas ou nome amigável)
+ * Localização flexível e resiliente de Agentes Especialistas
  */
 function encontrarAgenteResiliente(fnName: string, agentes: any[]): any | undefined {
   if (!fnName || !Array.isArray(agentes)) return undefined;
@@ -85,15 +85,12 @@ function encontrarAgenteResiliente(fnName: string, agentes: any[]): any | undefi
   const alvo = normalizar(fnName);
   if (!alvo) return undefined;
 
-  // 1. Casamento direto por slug
   let correspondente = agentes.find((a: any) => normalizar(a.slug) === alvo);
   if (correspondente) return correspondente;
 
-  // 2. Casamento direto por nome do agente
   correspondente = agentes.find((a: any) => normalizar(a.name) === alvo);
   if (correspondente) return correspondente;
 
-  // 3. Casamento por inclusão recíproca (substring relevante)
   correspondente = agentes.find((a: any) => {
     const slugNorm = normalizar(a.slug);
     const nomeNorm = normalizar(a.name);
@@ -150,7 +147,7 @@ export async function processarExecucaoWorkflow(
 
     const { activeSpeakerName, speakerRole, isVoiceIdentified } = filtroSensorial;
 
-    // 2. Visão Multimodal (Webcam / Tela)
+    // 2. Visão Multimodal
     const visual = processarEntradaVisual(sensoryInput, userPrompt, activeSpeakerName);
     if (visual.ehPerguntaVisual && !visual.frameAtivo) {
       const respVisual = {
@@ -180,14 +177,13 @@ export async function processarExecucaoWorkflow(
       visual.instrucaoVisualSistema
     );
 
-    // 3.1 Registra a Ferramenta Nativa de Aprendizado e Gravação de Memória Permanente
+    // 3.1 Registra a Ferramenta Nativa de Aprendizado Permanente
     if (!dadosContexto.tools.some((t: any) => t.function?.name === 'salvar_memoria_permanente')) {
       dadosContexto.tools.push({
         type: 'function',
         function: {
           name: 'salvar_memoria_permanente',
-          description:
-            'Acione OBRIGATORIAMENTE quando o usuário solicitar mudanças na sua forma de falar, tom de voz, regras pessoais, nomes ou preferências permanentes da casa.',
+          description: 'Acione quando o usuário solicitar mudanças na sua forma de falar, tom de voz, regras pessoais ou preferências.',
           parameters: {
             type: 'object',
             properties: {
@@ -198,11 +194,11 @@ export async function processarExecucaoWorkflow(
               },
               conteudo: {
                 type: 'string',
-                description: 'A instrução, preferência ou fato exato a ser memorizado de forma concisa.'
+                description: 'A instrução, preferência ou fato exato a ser memorizado.'
               },
               agente_alvo: {
                 type: 'string',
-                description: 'Deixe vazio ou use "jarvis_core" para regras gerais, ou o slug do especialista alvo.'
+                description: 'Deixe vazio ou use "jarvis_core" para regras gerais.'
               }
             },
             required: ['tipo', 'conteudo']
@@ -211,13 +207,12 @@ export async function processarExecucaoWorkflow(
       });
     }
 
-    // 3.2 Reforço de Diretriz contra Respostas Robotizadas e Delegação Obrigatória
     const promptSistemaBlindado = `${dadosContexto.promptSistemaCompleto}
 
 [DIRETRIZES DE DELEGAÇÃO E APRENDIZADO DO JARVIS]:
 1. DELEGAÇÃO OBRIGATÓRIA: Se a dúvida ou comando for do domínio de um dos Agentes Especialistas Ativos listados acima, você está PROIBIDO de responder diretamente como JARVIS e proibido de inventar dados. É OBRIGATÓRIO acionar a Tool Call do respectivo subagente.
 2. APRENDIZADO ATIVO: Sempre que o usuário disser como deseja ser tratado, estilo de resposta (ex: "seja mais direto", "responda em tópicos") ou pedir para memorizar algo ("guarde na sua memória", "lembre-se disso"), invoque a ferramenta "salvar_memoria_permanente".
-3. HUMANIZAÇÃO: Fale de forma inteligente, polida, empática e objetiva em português. NUNCA gere mensagens em branco nem responda com termos técnicos sobre logs ou modelos.`;
+3. HUMANIZAÇÃO: Fale de forma inteligente, polida, empática e objetiva em português. NUNCA gere mensagens em branco nem responda com comandos técnicos soltos.`;
 
     const mensagensBase = [
       { role: 'system', content: promptSistemaBlindado },
@@ -242,20 +237,15 @@ export async function processarExecucaoWorkflow(
     let triggeredAgentId = 'jarvis_core';
     let triggeredNodeType = 'core';
 
-    // 5. Execução de Ferramentas / Especialistas
+    // 5. Execução de Ferramentas Nativas / Especialistas
     if (Array.isArray(mensagemEscolha?.tool_calls) && mensagemEscolha.tool_calls.length > 0) {
-      // 5.1 Tratamento Nativo da Ferramenta de Memória Permanente
       const callMemoria = mensagemEscolha.tool_calls.find(
         (tc: any) => sanitizeToolName(tc.function?.name) === 'salvar_memoria_permanente'
       );
 
       if (callMemoria) {
         let argsMem: any = {};
-        try {
-          argsMem = JSON.parse(callMemoria.function?.arguments || '{}');
-        } catch {
-          argsMem = {};
-        }
+        try { argsMem = JSON.parse(callMemoria.function?.arguments || '{}'); } catch { argsMem = {}; }
 
         const conteudo = (argsMem.conteudo || userPrompt).trim();
         const alvo = argsMem.agente_alvo || 'jarvis_core';
@@ -271,12 +261,11 @@ export async function processarExecucaoWorkflow(
           { sessionId, category: 'memoria_permanente', speaker: activeSpeakerName }
         ).catch(() => {});
 
-        textoRespostaFinal = `Compreendido perfeitamente, ${activeSpeakerName}! Guardei essa instrução na minha memória permanente. Nossas próximas conversas já seguirão essa diretriz.`;
+        textoRespostaFinal = `Compreendido perfeitamente, ${activeSpeakerName}! Guardei essa instrução na minha memória permanente.`;
         triggeredAgentName = 'JARVIS (Memória Evolutiva)';
         triggeredAgentId = 'jarvis_core';
         triggeredNodeType = 'core';
       } else {
-        // 5.2 Normalização dos Slugs das Chamadas de Ferramentas antes do despacho
         for (const tc of mensagemEscolha.tool_calls) {
           const rawName = tc.function?.name || '';
           const matchAg = encontrarAgenteResiliente(rawName, dadosContexto.agentesAtivos);
@@ -305,7 +294,7 @@ export async function processarExecucaoWorkflow(
         triggeredNodeType = resultadoFerramentas.triggeredNodeType;
       }
     } else {
-      // 5.3 Heurística de Memória: Se o usuário pedir para gravar algo mas a LLM não acionar tool call
+      // 5.1 Heurística de Memória
       const ehComandoDeMemoria =
         /(?:grave|salve|guarde|lembre|memorize|aprenda)\s+(?:na|em)?\s*(?:sua|tua)?\s*mem[oó]ria/i.test(userPrompt) ||
         /(?:a\s+partir\s+de\s+agora|de\s+hoje\s+em\s+diante|sempre\s+que\s+eu\s+falar)\s*[,:]?\s*(?:me\s+chame|responda|fale|seja)/i.test(userPrompt);
@@ -322,20 +311,109 @@ export async function processarExecucaoWorkflow(
             replace_entire_prompt: false
           }).catch(() => {});
 
-          await ingestDocumentToRag(
-            `[MEMÓRIA APRENDIDA]: ${regraExtraida}`,
-            { sessionId, category: 'memoria_permanente', speaker: activeSpeakerName }
-          ).catch(() => {});
+          await ingestDocumentToRag(`[MEMÓRIA APRENDIDA]: ${regraExtraida}`, {
+            sessionId,
+            category: 'memoria_permanente',
+            speaker: activeSpeakerName
+          }).catch(() => {});
 
           textoRespostaFinal = `Entendido, ${activeSpeakerName}! Guardei isso na minha memória permanente: "${regraExtraida}".`;
           triggeredAgentName = 'JARVIS (Memória Evolutiva)';
           triggeredAgentId = 'jarvis_core';
-          triggeredNodeType = 'core';
         }
       }
     }
 
-    // 6. Interceptação de Agendamento e JSON Residual
+    // 6. INTERCEPTAÇÃO DE CHAMADAS PSEUDO-TEXTO (Elimina os erros das imagens)
+    // Se a IA cuspiu "consultar_mercado_de_valores query=SUZB3", "google_calendar..." ou repetições de slugs
+    const textoLimpoPrimeiraLinha = textoRespostaFinal.trim().split('\n')[0].trim();
+    const ehPseudoComandoTexto =
+      /^[a-z0-9_]{3,50}(?:\s+[a-z0-9_]+=[^\s]+.*|\s+list_events.*|\s+get_.*|---.*)?$/i.test(textoLimpoPrimeiraLinha) ||
+      textoLimpoPrimeiraLinha.includes('query=') ||
+      textoLimpoPrimeiraLinha.includes('date=') ||
+      textoLimpoPrimeiraLinha.includes('consultar_mercado') ||
+      textoLimpoPrimeiraLinha.includes('home_detector');
+
+    if (ehPseudoComandoTexto) {
+      const primeiroToken = sanitizeToolName(textoLimpoPrimeiraLinha.split(/[\s=]/)[0]);
+
+      // Procura se esse comando pertence a um Subagente ou Conector
+      const agenteProprietario = dadosContexto.agentesAtivos.find((ag: any) => {
+        const slugNorm = sanitizeToolName(ag.slug);
+        const toolsJson = JSON.stringify(ag.tools || []).toLowerCase();
+        return slugNorm === primeiroToken || toolsJson.includes(primeiroToken);
+      });
+
+      // Extrai ticker ou query do comando
+      const matchTicker = (textoRespostaFinal + ' ' + userPrompt).toUpperCase().match(/\b([A-Z]{4}\d{1,2})\b/);
+      const extractedQuery = matchTicker ? matchTicker[1] : userPrompt;
+
+      if (agenteProprietario) {
+        triggeredAgentName = agenteProprietario.name;
+        triggeredAgentId = agenteProprietario.slug;
+        triggeredNodeType = agenteProprietario.agent_type || 'llm';
+
+        const execCadeia = await executeSpecialistPipeline(
+          agenteProprietario,
+          { task_details: userPrompt, symbol: matchTicker ? matchTicker[1] : undefined, query: extractedQuery },
+          sessionId,
+          activeSpeakerName,
+          dadosContexto.threadConversa,
+          dadosContexto.configuracaoCerebro.server_base_url,
+          userPrompt,
+          dadosContexto.configuracaoCerebro,
+          dadosContexto.connectorsMap
+        );
+
+        const saidaElo = execCadeia[execCadeia.length - 1]?.output;
+        if (typeof saidaElo === 'string' && saidaElo.length > 0 && !saidaElo.startsWith('{')) {
+          textoRespostaFinal = saidaElo;
+        } else {
+          const sintese: any = await callOpenAICompatibleLLM({
+            provider: dadosContexto.configuracaoCerebro.provider,
+            model: dadosContexto.configuracaoCerebro.model,
+            apiKey: dadosContexto.configuracaoCerebro.api_key,
+            baseUrl: dadosContexto.configuracaoCerebro.base_url,
+            messages: [
+              {
+                role: 'system',
+                content: `Você é o JARVIS. Sintetize em português natural e executivo o resultado retornado pelo especialista ${agenteProprietario.name}. NUNCA exiba código JSON nem comandos.`
+              },
+              { role: 'user', content: `Pergunta: "${userPrompt}"\nDados: ${JSON.stringify(saidaElo || execCadeia)}` }
+            ],
+            temperature: 0.2
+          });
+          textoRespostaFinal = sintese?.choices?.[0]?.message?.content || 'Operação concluída pelo especialista.';
+        }
+      } else if (dadosContexto.connectorsMap.has(primeiroToken) || dadosContexto.validToolSlugs.includes(primeiroToken)) {
+        triggeredAgentName = dadosContexto.connectorsMap.get(primeiroToken)?.name || primeiroToken;
+        triggeredAgentId = primeiroToken;
+        triggeredNodeType = 'api';
+
+        const outBound = await executeBoundTool(
+          primeiroToken,
+          { query: extractedQuery, symbol: matchTicker ? matchTicker[1] : undefined, task_details: userPrompt },
+          userPrompt,
+          dadosContexto.connectorsMap,
+          dadosContexto.configuracaoCerebro.server_base_url
+        );
+
+        const sintese: any = await callOpenAICompatibleLLM({
+          provider: dadosContexto.configuracaoCerebro.provider,
+          model: dadosContexto.configuracaoCerebro.model,
+          apiKey: dadosContexto.configuracaoCerebro.api_key,
+          baseUrl: dadosContexto.configuracaoCerebro.base_url,
+          messages: [
+            { role: 'system', content: 'Você é o JARVIS. Apresente os dados obtidos de forma amigável, clara e humana em português.' },
+            { role: 'user', content: `Pergunta: "${userPrompt}"\nDados da ferramenta: ${JSON.stringify(outBound)}` }
+          ],
+          temperature: 0.2
+        });
+        textoRespostaFinal = sintese?.choices?.[0]?.message?.content || JSON.stringify(outBound);
+      }
+    }
+
+    // 7. Interceptação de Agendamento e JSON Residual
     const acaoAgenda = await interceptarAcaoAgenda(textoRespostaFinal);
     if (acaoAgenda.interceptado && acaoAgenda.respostaTexto) {
       textoRespostaFinal = acaoAgenda.respostaTexto;
@@ -364,7 +442,7 @@ export async function processarExecucaoWorkflow(
       }
     }
 
-    // 7. Blindagem Anti-Vazio e Síntese Humanizada
+    // 8. Blindagem Anti-Vazio
     const respostaEstaVazia =
       !textoRespostaFinal ||
       textoRespostaFinal.trim() === '' ||
@@ -378,7 +456,7 @@ export async function processarExecucaoWorkflow(
           ...mensagensBase,
           {
             role: 'system',
-            content: `DIRETRIZ DE SÍNTESE OBRIGATÓRIA: Responda ao usuário (${activeSpeakerName}) de forma amigável, acolhedora, clara e em português. NUNCA deixe o retorno vazio e NUNCA retorne código JSON solto nem frases técnicas sobre logs.`
+            content: `DIRETRIZ DE SÍNTESE OBRIGATÓRIA: Responda ao usuário (${activeSpeakerName}) de forma amigável, acolhedora, clara e em português. NUNCA deixe o retorno vazio e NUNCA retorne código JSON solto.`
           }
         ];
 
@@ -403,7 +481,7 @@ export async function processarExecucaoWorkflow(
     appendShortTermMemory(sessionId, 'assistant', textoRespostaFinal);
     const tempoExecucaoMs = Date.now() - inicioExecucao;
 
-    // 8. Persistência Assíncrona e Emissão de Pulso Sináptico (Dopamina)
+    // 9. Persistência e Emissão Sináptica
     Promise.allSettled([
       pool.query(
         `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
@@ -436,7 +514,6 @@ export async function processarExecucaoWorkflow(
       metadata: { agent: triggeredAgentName, agentId: triggeredAgentId, speaker: activeSpeakerName }
     } as any);
 
-    // Retorno unificado com espelhamento duplo (raiz e data) para alimentar App.vue e useMemoryOrbs
     const retornoExecucao: any = {
       success: true,
       triggeredSuccess: true,
@@ -487,8 +564,7 @@ export async function processarExecucaoWorkflow(
 }
 
 /**
- * Adaptador flexível de entrada para compatibilidade universal com controllers
- * Suporta tanto chamada por objeto quanto posicional
+ * Adaptador flexível de entrada
  */
 export async function processarFluxoOrquestrador(arg1?: any, arg2?: any, arg3?: string, arg4?: any) {
   if (typeof arg1 === 'string') {
@@ -516,7 +592,7 @@ export const processarEstimuloOrquestrador = async (identityToken: string, senso
   return processarFluxoOrquestrador({ identityToken, sensorData });
 };
 
-// Aliases para retrocompatibilidade total com controllers
+// Aliases para retrocompatibilidade
 export const processWorkflowExecution = processarExecucaoWorkflow;
 export const processOrchestratorWorkflow = processarFluxoOrquestrador;
 export const processOrchestratorStimulus = processarEstimuloOrquestrador;
@@ -529,6 +605,5 @@ export default {
   interceptarAcaoAgenda,
   processWorkflowExecution,
   processOrchestratorWorkflow,
-  processOrchestratorStimulus,
-  scheduleCalendarInterceptor
+  processOrchestratorStimulus
 };
