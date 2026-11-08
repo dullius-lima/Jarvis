@@ -22,20 +22,37 @@ import { executeMcpToolCall } from '../services/mcpHfService.js';
 
 import { runHackerAgent, HackerTaskInput } from '../services/agents/hackerAgent.js';
 
+/**
+ * POST /api/v1/agents/hacker/audit
+ */
 export async function runHackerAuditController(req: any, res: any) {
   try {
-    const input: HackerTaskInput = req.body || { mode: 'self_healing_debug' };
+    const input = req.body || { mode: 'self_healing_debug' };
 
-    // Helper cognitivo para a LLM gerar diagnósticos e patches
-    const llmHelper = async (sys: string, usr: string) => {
-      const response = await callOpenAICompatibleLLM({
-        systemPrompt: sys,
-        userPrompt: usr,
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
-        temperature: 0.1
+    // Chamada autónoma e direta à API da Groq sem dependências quebradiças
+    const llmHelper = async (sys: string, usr: string): Promise<string> => {
+      const apiKey = process.env.GROQ_API_KEY || '';
+      if (!apiKey) return 'Chave GROQ_API_KEY não configurada no ficheiro .env.';
+
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: sys },
+            { role: 'user', content: usr }
+          ],
+          temperature: 0.1
+        })
       });
-      return response.text;
+
+      if (!response.ok) return `Erro na Groq (${response.status}): ${await response.text()}`;
+      const data: any = await response.json();
+      return data.choices?.[0]?.message?.content || 'Sem resposta textual.';
     };
 
     const resultado = await runHackerAgent(input, llmHelper);
