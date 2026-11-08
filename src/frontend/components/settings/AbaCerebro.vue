@@ -291,73 +291,95 @@ function aoMudarModeloCerebro() {
 }
 
 async function testarConexaoIA() {
-  testandoIA.value = true;
-  resultadoTesteIA.value = null;
-  try {
-    if (opcaoModeloSelecionado.value && opcaoModeloSelecionado.value !== 'CUSTOM_INPUT') {
-      configuracoesCerebro.value.model = opcaoModeloSelecionado.value;
-    }
+  testandoConexao.value = true;
+  feedbackSalvamento.value = null;
 
+  try {
+    const payload = {
+      provider: configuracoesCerebro.value.provider || 'groq',
+      model: opcaoModeloSelecionado.value === 'CUSTOM_INPUT'
+        ? modeloCustomizado.value.trim()
+        : opcaoModeloSelecionado.value,
+      api_key: configuracoesCerebro.value.api_key || '',
+      base_url: configuracoesCerebro.value.base_url || '',
+      temperature: Number(configuracoesCerebro.value.temperature ?? 0.2)
+    };
+
+    // Rota relativa pura: resolvida pelo Nginx/Vite sem misturar HTTP com HTTPS
     const res = await fetch('/api/v1/brain-config/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(configuracoesCerebro.value)
+      body: JSON.stringify(payload)
     });
-    const json = await res.json();
-    if (json.success) {
-      if (json.usedModel && json.usedModel !== configuracoesCerebro.value.model) {
-        configuracoesCerebro.value.model = json.usedModel;
-        sincronizarSelecaoModelo();
-      }
-      resultadoTesteIA.value = { success: true, message: `✅ ${json.message}` };
+
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json.success) {
+      feedbackSalvamento.value = {
+        tipo: 'sucesso',
+        mensagem: '⚡ Conexão com o provedor estabelecida com sucesso!'
+      };
     } else {
-      resultadoTesteIA.value = { success: false, message: `❌ ${json.error || 'Falha ao validar conexão com o provedor.'}` };
+      feedbackSalvamento.value = {
+        tipo: 'erro',
+        mensagem: `❌ Erro no teste: ${json.error || 'Falha na resposta da API'}`
+      };
     }
   } catch (err: any) {
-    resultadoTesteIA.value = { success: false, message: `❌ Erro de comunicação: ${err.message}` };
+    feedbackSalvamento.value = {
+      tipo: 'erro',
+      mensagem: `❌ Erro de rede: ${err.message}`
+    };
   } finally {
-    testandoIA.value = false;
+    testandoConexao.value = false;
   }
 }
 
+// 2. Função de Salvar Configuração do Cérebro Central
 async function salvarConfiguracoesCerebro() {
   salvandoCerebro.value = true;
-  resultadoTesteIA.value = null;
+  feedbackSalvamento.value = null;
+
   try {
-    const prov = (configuracoesCerebro.value.provider || 'groq').toLowerCase();
-    if (!configuracoesCerebro.value.saved_keys) configuracoesCerebro.value.saved_keys = {};
+    const modeloFinal = opcaoModeloSelecionado.value === 'CUSTOM_INPUT'
+      ? modeloCustomizado.value.trim()
+      : opcaoModeloSelecionado.value;
 
-    // 1. Garante que o modelo selecionado (ex: GPT-OSS 120B) não seja sobrescrito
-    if (opcaoModeloSelecionado.value && opcaoModeloSelecionado.value !== 'CUSTOM_INPUT') {
-      configuracoesCerebro.value.model = opcaoModeloSelecionado.value;
-    }
+    const payload = {
+      agent_name: configuracoesCerebro.value.agent_name || 'JARVIS',
+      provider: configuracoesCerebro.value.provider || 'groq',
+      model: modeloFinal,
+      api_key: configuracoesCerebro.value.api_key || '',
+      base_url: configuracoesCerebro.value.base_url || '',
+      server_base_url: configuracoesCerebro.value.server_base_url || 'http://localhost:3333',
+      temperature: Number(configuracoesCerebro.value.temperature ?? 0.2),
+      system_prompt: configuracoesCerebro.value.system_prompt || ''
+    };
 
-    // 2. Higieniza e grava no cofre sem máscaras
-    const chaveLimpa = (configuracoesCerebro.value.api_key || '').replace(/[•*]/g, '').trim();
-    if (chaveLimpa.length >= 8) {
-      configuracoesCerebro.value.saved_keys[prov] = chaveLimpa;
-      configuracoesCerebro.value.api_key = chaveLimpa;
-    }
-
+    // Chamada SEMPRE em '/api/v1/brain-config'
     const res = await fetch('/api/v1/brain-config', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(configuracoesCerebro.value)
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(payload)
     });
 
-    const json = await res.json();
-    if (json.success) {
-      configuracoesCerebro.value = { ...configuracoesCerebro.value, ...json.data };
-      sincronizarSelecaoModelo();
-      resultadoTesteIA.value = {
-        success: true,
-        message: `💾 Configurações salvas: [${configuracoesCerebro.value.model}] ativo e propagado para os Especialistas!`
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json.success) {
+      feedbackSalvamento.value = {
+        tipo: 'sucesso',
+        mensagem: '💾 Configurações do JARVIS salvas e aplicadas com sucesso!'
       };
     } else {
-      resultadoTesteIA.value = { success: false, message: `❌ ${json.error}` };
+      throw new Error(json.error || `HTTP ${res.status}: Servidor rejeitou a atualização`);
     }
   } catch (err: any) {
-    resultadoTesteIA.value = { success: false, message: `❌ Erro ao salvar: ${err.message}` };
+    console.error('Falha ao salvar Cérebro Central:', err);
+    feedbackSalvamento.value = {
+      tipo: 'erro',
+      mensagem: `❌ Erro ao salvar: ${err.message}`
+    };
   } finally {
     salvandoCerebro.value = false;
   }
