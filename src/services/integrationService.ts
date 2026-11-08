@@ -517,8 +517,8 @@ export async function executarConectorExterno({
       const formatarOffsetFuso = (d: Date) => {
         const ano = d.getFullYear();
         const mes = pad(d.getMonth() + 1);
-        const dia = pad(d.getDate());
-        const hora = pad(d.getHours());
+        const hora = pad(d.getHours()); // No servidor em UTC, 20:00 (-04:00) vira 00:00 do dia seguinte!
+        const dia = pad(d.getDate());   // Vira dia 01 em vez de dia 30!;
         const min = pad(d.getMinutes());
         const seg = pad(d.getSeconds());
         return `${ano}-${mes}-${dia}T${hora}:${min}:${seg}-04:00`;
