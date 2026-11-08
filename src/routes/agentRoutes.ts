@@ -8,6 +8,10 @@ import {
   listAvailableCredentials
 } from '../controllers/agentController.js';
 
+// Adicione junto das suas outras rotas de agentes:
+import { runHackerAuditController } from '../controllers/agentController.js';
+router.post('/hacker/audit', runHackerAuditController);
+
 const router = Router();
 
 // 1. Rota de metadados de credenciais seguras (DEVE vir antes de /:id)
