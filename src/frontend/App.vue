@@ -322,30 +322,33 @@ async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
     const json = await res.json().catch(() => ({}));
     registerAgentExecution(json);
 
-    // Substitua o bloco de extração por:
-  const replyText =
-  payload?.response ||
-  payload?.data?.response ||
-  json?.response ||
-  (json?.error ? `⚠️ Falha: ${json.error}` : null) ||
-  (json?.message ? `⚠️ Detalhe: ${json.message}` : null) ||
-  'O sistema não retornou uma resposta textual. Verifique os logs do modelo.';
+    // Declaração do payload antes da extração (corrige o ReferenceError)
+    const payload = json.data || json;
+
+    const replyText =
+      payload?.response ||
+      payload?.data?.response ||
+      json?.response ||
+      (json?.error ? `⚠️ Falha: ${json.error}` : null) ||
+      (json?.message ? `⚠️ Detalhe: ${json.message}` : null) ||
+      'O sistema não retornou uma resposta textual. Verifique os logs do modelo.';
+
     lastResponse.value = {
-      agent: payload?.agent || 'JARVIS',
+      agent: payload?.agent || json?.agent || 'JARVIS',
       text: replyText,
       executionTimeMs: payload?.executionTimeMs || json?.executionTimeMs || 0
     };
 
     speakJarvisResponse(replyText);
     await loadEcosystemData();
-  } catch {
+  } catch (err: any) {
+    console.error('Falha no envio do comando:', err);
     const msg = 'Erro de comunicação com o núcleo do JARVIS.';
     lastResponse.value = { agent: 'JARVIS', text: msg, executionTimeMs: 0 };
     speakJarvisResponse(msg);
   } finally {
     isProcessing.value = false;
   }
-}
 
 let refreshIntervalId: any = null;
 
