@@ -75,9 +75,15 @@ export async function executarFerramentaVinculada(
     }
 
     // Ação padrão para Google Calendar
-    if ((chaveLimpa.includes('calendar') || chaveLimpa.includes('agenda')) && !acaoAlvo) {
-      acaoAlvo = /agendar|criar|novo|schedule|create/i.test(promptNormalizado) ? 'create_event' : 'list_events';
-    }
+  if ((chaveLimpa.includes('calendar') || chaveLimpa.includes('agenda')) && !acaoAlvo) {
+    acaoAlvo = /agendar|criar|novo|schedule|create/i.test(promptNormalizado)
+      ? 'create_event'
+      : /deletar|excluir|cancelar|remover|delete|cancel/i.test(promptNormalizado)
+      ? 'delete_event'
+      : /editar|alterar|remarcar|update|patch/i.test(promptNormalizado)
+      ? 'update_event'
+      : 'list_events';
+  }
 
     // Ação padrão para Google Drive
     if (chaveLimpa.includes('drive') && !acaoAlvo) {
