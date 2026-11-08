@@ -141,8 +141,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+// src/frontend/components/settings/AbaCerebro.vue
+import { ref, reactive, computed, onMounted } from 'vue';
 
+// 1. Estados Reativos de Carregamento e Feedback (Sem duplicações)
+const salvandoCerebro = ref<boolean>(false);
+const testandoConexao = ref<boolean>(false);
+const testandoIA = testandoConexao; // Alias de retrocompatibilidade
+
+const feedbackSalvamento = ref<{ tipo: 'sucesso' | 'erro'; mensagem: string } | null>(null);
+const resultadoTesteIA = ref<{ success: boolean; message: string } | null>(null);
+const testResult = ref<{ success: boolean; message: string } | null>(null);
+
+// 2. Endpoints Padrão dos Provedores
 const ENDPOINTS_PADRAO: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
   gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -152,30 +163,32 @@ const ENDPOINTS_PADRAO: Record<string, string> = {
   ollama: 'http://localhost:11434/v1'
 };
 
+// 3. Catálogo de Modelos Homologados
 const modelosHomologados = ref<Record<string, Array<{ label: string; value: string }>>>({
   groq: [
-    { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
+    { label: 'Llama 3.3 70B Versatile (Recomendado)', value: 'llama-3.3-70b-versatile' },
     { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' },
-    { label: 'Llama 3.3 70B Versatile (Recomendado)', value: 'llama-3.3-70b-versatile' }
+    { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' }
   ],
   gemini: [
-    { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' },
     { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
     { label: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
-    { label: 'Gemini 1.5 Flash', value: 'gemini-1.5-flash' }
+    { label: 'Gemini 1.5 Flash', value: 'gemini-1.5-flash' },
+    { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' }
   ],
   openai: [
-    { label: '✍️ Inserir ID Manual da OpenAI', value: 'CUSTOM_INPUT' },
     { label: 'GPT-4o Mini', value: 'gpt-4o-mini' },
-    { label: 'GPT-4o', value: 'gpt-4o' }
+    { label: 'GPT-4o', value: 'gpt-4o' },
+    { label: '✍️ Inserir ID Manual da OpenAI', value: 'CUSTOM_INPUT' }
   ],
   deepseek: [
-    { label: '✍️ Inserir ID Manual da DeepSeek', value: 'CUSTOM_INPUT' },
     { label: 'DeepSeek V3 (Chat)', value: 'deepseek-chat' },
-    { label: 'DeepSeek R1 (Reasoner)', value: 'deepseek-reasoner' }
+    { label: 'DeepSeek R1 (Reasoner)', value: 'deepseek-reasoner' },
+    { label: '✍️ Inserir ID Manual da DeepSeek', value: 'CUSTOM_INPUT' }
   ]
 });
 
+// 4. Sincronização via Gist
 const sincronizandoGist = ref(false);
 const fonteGist = ref('local');
 const ultimaSincronizacao = ref<string | null>(null);
@@ -186,6 +199,7 @@ const rotuloFonteGist = computed(() => {
   return 'Catálogo Local Homologado';
 });
 
+// 5. Configuração Principal do JARVIS
 const configuracoesCerebro = ref<any>({
   agent_name: 'JARVIS',
   provider: 'groq',
@@ -199,10 +213,9 @@ const configuracoesCerebro = ref<any>({
 });
 
 const opcaoModeloSelecionado = ref('llama-3.3-70b-versatile');
-const testandoIA = ref(false);
-const salvandoCerebro = ref(false);
-const resultadoTesteIA = ref<{ success: boolean; message: string } | null>(null);
+const modeloCustomizado = ref('');
 
+// 6. Helpers de Manipulação de Modelos
 function modelosDoProvedorAtual(provedor: string) {
   const chave = (provedor || 'groq').toLowerCase();
   return (
@@ -214,10 +227,21 @@ function modelosDoProvedorAtual(provedor: string) {
 
 function sincronizarSelecaoModelo() {
   const lista = modelosDoProvedorAtual(configuracoesCerebro.value.provider);
+  const modeloAtual = configuracoesCerebro.value.model;
   const existeNoCatalogo = lista.some(
-    (m) => m.value === configuracoesCerebro.value.model && m.value !== 'CUSTOM_INPUT'
+    (m) => m.value === modeloAtual && m.value !== 'CUSTOM_INPUT'
   );
-  opcaoModeloSelecionado.value = existeNoCatalogo ? configuracoesCerebro.value.model : 'CUSTOM_INPUT';
+
+  if (existeNoCatalogo) {
+    opcaoModeloSelecionado.value = modeloAtual;
+    modeloCustomizado.value = '';
+  } else if (modeloAtual) {
+    opcaoModeloSelecionado.value = 'CUSTOM_INPUT';
+    modeloCustomizado.value = modeloAtual;
+  } else {
+    opcaoModeloSelecionado.value = 'CUSTOM_INPUT';
+    modeloCustomizado.value = '';
+  }
 }
 
 function limparMascaraAoFocar() {
@@ -229,6 +253,36 @@ function limparMascaraAoFocar() {
   }
 }
 
+function aoMudarProvedorCerebro() {
+  const prov = (configuracoesCerebro.value.provider || 'groq').toLowerCase();
+  configuracoesCerebro.value.base_url = ENDPOINTS_PADRAO[prov] || ENDPOINTS_PADRAO.groq;
+  configuracoesCerebro.value.api_key = configuracoesCerebro.value.saved_keys?.[prov] || '';
+
+  const lista = modelosDoProvedorAtual(prov);
+  const primeiroValido = lista.find((m) => m.value !== 'CUSTOM_INPUT');
+  if (primeiroValido) {
+    configuracoesCerebro.value.model = primeiroValido.value;
+    opcaoModeloSelecionado.value = primeiroValido.value;
+    modeloCustomizado.value = '';
+  } else {
+    opcaoModeloSelecionado.value = 'CUSTOM_INPUT';
+    modeloCustomizado.value = '';
+  }
+
+  resultadoTesteIA.value = null;
+  feedbackSalvamento.value = null;
+  testResult.value = null;
+}
+
+function aoMudarModeloCerebro() {
+  if (opcaoModeloSelecionado.value && opcaoModeloSelecionado.value !== 'CUSTOM_INPUT') {
+    configuracoesCerebro.value.model = opcaoModeloSelecionado.value;
+  } else if (opcaoModeloSelecionado.value === 'CUSTOM_INPUT' && modeloCustomizado.value) {
+    configuracoesCerebro.value.model = modeloCustomizado.value.trim();
+  }
+}
+
+// 7. Chamadas de API ao Servidor (Rotas Relativas)
 async function carregarModelosHomologados(forcarAtualizacao = false) {
   sincronizandoGist.value = true;
   try {
@@ -261,6 +315,13 @@ async function buscarConfiguracoesCerebro() {
         ...json.data,
         saved_keys: json.data.saved_keys || {}
       };
+
+      if (configuracoesCerebro.value.system_prompt) {
+        configuracoesCerebro.value.system_prompt = configuracoesCerebro.value.system_prompt
+          .replace(/^"|"$/g, '')
+          .replace(/\\"/g, '"');
+      }
+
       sincronizarSelecaoModelo();
     }
   } catch (err) {
@@ -268,44 +329,26 @@ async function buscarConfiguracoesCerebro() {
   }
 }
 
-function aoMudarProvedorCerebro() {
-  const prov = (configuracoesCerebro.value.provider || 'groq').toLowerCase();
-  configuracoesCerebro.value.base_url = ENDPOINTS_PADRAO[prov] || ENDPOINTS_PADRAO.groq;
-  configuracoesCerebro.value.api_key = configuracoesCerebro.value.saved_keys?.[prov] || '';
-
-  const lista = modelosDoProvedorAtual(prov);
-  const primeiroValido = lista.find((m) => m.value !== 'CUSTOM_INPUT');
-  if (primeiroValido) {
-    configuracoesCerebro.value.model = primeiroValido.value;
-    opcaoModeloSelecionado.value = primeiroValido.value;
-  } else {
-    opcaoModeloSelecionado.value = 'CUSTOM_INPUT';
-  }
-  resultadoTesteIA.value = null;
-}
-
-function aoMudarModeloCerebro() {
-  if (opcaoModeloSelecionado.value && opcaoModeloSelecionado.value !== 'CUSTOM_INPUT') {
-    configuracoesCerebro.value.model = opcaoModeloSelecionado.value;
-  }
-}
-
 async function testarConexaoIA() {
   testandoConexao.value = true;
   feedbackSalvamento.value = null;
+  resultadoTesteIA.value = null;
+  testResult.value = null;
 
   try {
+    const modeloFinal =
+      opcaoModeloSelecionado.value === 'CUSTOM_INPUT'
+        ? modeloCustomizado.value.trim()
+        : opcaoModeloSelecionado.value;
+
     const payload = {
       provider: configuracoesCerebro.value.provider || 'groq',
-      model: opcaoModeloSelecionado.value === 'CUSTOM_INPUT'
-        ? modeloCustomizado.value.trim()
-        : opcaoModeloSelecionado.value,
+      model: modeloFinal || configuracoesCerebro.value.model || 'llama-3.3-70b-versatile',
       api_key: configuracoesCerebro.value.api_key || '',
       base_url: configuracoesCerebro.value.base_url || '',
       temperature: Number(configuracoesCerebro.value.temperature ?? 0.2)
     };
 
-    // Rota relativa pura: resolvida pelo Nginx/Vite sem misturar HTTP com HTTPS
     const res = await fetch('/api/v1/brain-config/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -313,49 +356,55 @@ async function testarConexaoIA() {
     });
 
     const json = await res.json().catch(() => ({}));
+
     if (res.ok && json.success) {
-      feedbackSalvamento.value = {
-        tipo: 'sucesso',
-        mensagem: '⚡ Conexão com o provedor estabelecida com sucesso!'
-      };
+      const msg = '⚡ Conexão com o provedor estabelecida com sucesso!';
+      feedbackSalvamento.value = { tipo: 'sucesso', mensagem: msg };
+      resultadoTesteIA.value = { success: true, message: msg };
+      testResult.value = { success: true, message: msg };
     } else {
-      feedbackSalvamento.value = {
-        tipo: 'erro',
-        mensagem: `❌ Erro no teste: ${json.error || 'Falha na resposta da API'}`
-      };
+      const msg = `❌ Erro no teste: ${json.error || 'Falha na resposta da API'}`;
+      feedbackSalvamento.value = { tipo: 'erro', mensagem: msg };
+      resultadoTesteIA.value = { success: false, message: msg };
+      testResult.value = { success: false, message: msg };
     }
   } catch (err: any) {
-    feedbackSalvamento.value = {
-      tipo: 'erro',
-      mensagem: `❌ Erro de rede: ${err.message}`
-    };
+    const msg = `❌ Erro de rede: ${err.message}`;
+    feedbackSalvamento.value = { tipo: 'erro', mensagem: msg };
+    resultadoTesteIA.value = { success: false, message: msg };
+    testResult.value = { success: false, message: msg };
   } finally {
     testandoConexao.value = false;
   }
 }
 
-// 2. Função de Salvar Configuração do Cérebro Central
 async function salvarConfiguracoesCerebro() {
   salvandoCerebro.value = true;
   feedbackSalvamento.value = null;
+  resultadoTesteIA.value = null;
+  testResult.value = null;
 
   try {
-    const modeloFinal = opcaoModeloSelecionado.value === 'CUSTOM_INPUT'
-      ? modeloCustomizado.value.trim()
-      : opcaoModeloSelecionado.value;
+    const modeloFinal =
+      opcaoModeloSelecionado.value === 'CUSTOM_INPUT'
+        ? modeloCustomizado.value.trim()
+        : opcaoModeloSelecionado.value;
+
+    const promptLimpo = (configuracoesCerebro.value.system_prompt || '')
+      .replace(/^"|"$/g, '')
+      .replace(/\\"/g, '"');
 
     const payload = {
       agent_name: configuracoesCerebro.value.agent_name || 'JARVIS',
       provider: configuracoesCerebro.value.provider || 'groq',
-      model: modeloFinal,
+      model: modeloFinal || configuracoesCerebro.value.model || 'llama-3.3-70b-versatile',
       api_key: configuracoesCerebro.value.api_key || '',
       base_url: configuracoesCerebro.value.base_url || '',
       server_base_url: configuracoesCerebro.value.server_base_url || 'http://localhost:3333',
       temperature: Number(configuracoesCerebro.value.temperature ?? 0.2),
-      system_prompt: configuracoesCerebro.value.system_prompt || ''
+      system_prompt: promptLimpo
     };
 
-    // Chamada SEMPRE em '/api/v1/brain-config'
     const res = await fetch('/api/v1/brain-config', {
       method: 'PUT',
       headers: {
@@ -366,20 +415,19 @@ async function salvarConfiguracoesCerebro() {
     });
 
     const json = await res.json().catch(() => ({}));
-    if (res.ok && json.success) {
-      feedbackSalvamento.value = {
-        tipo: 'sucesso',
-        mensagem: '💾 Configurações do JARVIS salvas e aplicadas com sucesso!'
-      };
+
+    if (res.ok && (json.success || json.data)) {
+      const msg = '💾 Configurações do JARVIS salvas e aplicadas com sucesso!';
+      feedbackSalvamento.value = { tipo: 'sucesso', mensagem: msg };
+      testResult.value = { success: true, message: msg };
     } else {
       throw new Error(json.error || `HTTP ${res.status}: Servidor rejeitou a atualização`);
     }
   } catch (err: any) {
     console.error('Falha ao salvar Cérebro Central:', err);
-    feedbackSalvamento.value = {
-      tipo: 'erro',
-      mensagem: `❌ Erro ao salvar: ${err.message}`
-    };
+    const msg = `❌ Erro ao salvar: ${err.message}`;
+    feedbackSalvamento.value = { tipo: 'erro', mensagem: msg };
+    testResult.value = { success: false, message: msg };
   } finally {
     salvandoCerebro.value = false;
   }
