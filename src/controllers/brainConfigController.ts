@@ -5,6 +5,61 @@ import fs from 'fs';
 import path from 'path';
 import net from 'net';
 import OpenAI from 'openai';
+// src/controllers/agentController.ts (secção da rota hacker)
+import { Request, Response } from 'express';
+import { runHackerAgent, HackerTaskInput } from '../services/agents/hackerAgent.js';
+
+/**
+ * Invoca a LLM da Groq de forma direta e sem dependências externas
+ */
+async function callGroqDirectly(systemPrompt: string, userPrompt: string): Promise<string> {
+  const apiKey = process.env.GROQ_API_KEY || '';
+  if (!apiKey) {
+    return 'Chave GROQ_API_KEY não configurada no ficheiro .env.';
+  }
+
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.1,
+        max_tokens: 1024
+      })
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return `Erro na API da Groq (${res.status}): ${errText}`;
+    }
+
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || 'Sem resposta da LLM.';
+  } catch (err: any) {
+    return `Falha de rede ao consultar a Groq: ${err.message}`;
+  }
+}
+
+/**
+ * POST /api/v1/agents/hacker/audit
+ */
+export async function runHackerAuditController(req: Request, res: Response) {
+  try {
+    const input: HackerTaskInput = req.body || { mode: 'self_healing_debug' };
+    const resultado = await runHackerAgent(input, callGroqDirectly);
+    return res.status(200).json({ success: true, data: resultado });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
 
 export const KNOWN_ENDPOINTS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
