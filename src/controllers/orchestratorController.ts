@@ -243,9 +243,18 @@ export async function handleWebhookIngress(req: Request, res: Response) {
       });
     }
 
+    // Resposta desestruturada na raiz para consumo imediato do front-end e composables 3D
     return res.status(200).json({
       success: executionResult?.success ?? true,
+      triggeredSuccess: executionResult?.triggeredSuccess ?? true,
+      agent: executionResult?.agent || 'JARVIS',
+      agentId: executionResult?.agentId || 'jarvis_core',
+      nodeType: executionResult?.nodeType || 'core',
+      memoryStored: executionResult?.memoryStored ?? true,
+      memoryCount: executionResult?.memoryCount ?? 0,
+      identity: identityToken,
       sessionId,
+      response: executionResult?.response || executionResult?.textoFinal || '',
       transcribedText: textPrompt,
       biometricBadge: biometricStatus,
       biometricStatus,
