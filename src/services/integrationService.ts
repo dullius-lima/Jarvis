@@ -142,6 +142,8 @@ export async function executarConectorExterno({
     ? 'outlook'
     : chaveBruta.includes('telegram')
     ? 'telegram'
+    : chaveBruta.includes('whatsapp')
+    ? 'whatsapp'
     : chaveBruta;
 
   switch (chave) {
