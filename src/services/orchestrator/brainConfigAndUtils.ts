@@ -76,6 +76,7 @@ let schemaVerified = false;
 export async function ensureOrchestratorSchema(): Promise<void> {
   if (schemaVerified) return;
   try {
+    // 1. Tabela de conectores e ferramentas dinâmicas
     await pool.query(`
       CREATE TABLE IF NOT EXISTS external_connectors (
         provider_key VARCHAR(120) PRIMARY KEY,
@@ -89,6 +90,7 @@ export async function ensureOrchestratorSchema(): Promise<void> {
       );
     `);
 
+    // 2. Colunas complementares da tabela ai_agents
     await pool.query(`
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) DEFAULT 'llm';
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS code_snippet TEXT;
@@ -102,8 +104,38 @@ export async function ensureOrchestratorSchema(): Promise<void> {
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS icon VARCHAR(30) DEFAULT '🤖';
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS temperature NUMERIC DEFAULT 0.2;
     `);
+
+    // 3. Registro persistente do Subagente Arquiteto (Fábrica de Agentes)
+    await pool.query(`
+      INSERT INTO ai_agents (
+        name, 
+        slug, 
+        description, 
+        system_prompt, 
+        agent_type, 
+        icon, 
+        is_active
+      )
+      VALUES (
+        'Arquiteto de Agentes',
+        'fabrica_agentes',
+        'Subagente especialista responsável por projetar, criar e ajustar novos nós e especialistas no ecossistema com travas de segurança.',
+        'Você é o Arquiteto de Sistemas subordinado ao JARVIS. Analise as intenções, conectores disponíveis e projete novos agentes otimizados.',
+        'code',
+        '🏗️',
+        true
+      )
+      ON CONFLICT (slug) DO UPDATE SET
+        name = EXCLUDED.name,
+        description = EXCLUDED.description,
+        icon = EXCLUDED.icon,
+        is_active = true;
+    `);
+
     schemaVerified = true;
-  } catch {}
+  } catch (err: any) {
+    console.warn('⚠️ [Orchestrator Schema] Aviso ao alinhar tabelas e subagente arquiteto:', err?.message);
+  }
 }
 
 export function sanitizeToolName(name: string): string {
@@ -166,12 +198,10 @@ export function sanitizeRawApiKey(rawKey?: string): string {
     .replace(/^["']+|["']+$/g, '')
     .trim();
 
-  // Ignora máscaras visuais de senha (bolinhas ou asteriscos)
   if (!cleaned || /[•*]/.test(cleaned) || cleaned === 'undefined' || cleaned === 'null') {
     return '';
   }
 
-  // Corrige automaticamente erro de digitação mobile (Gsk_ -> gsk_)
   if (/^gsk_/i.test(cleaned)) {
     cleaned = 'gsk_' + cleaned.slice(4);
   } else if (/^aiza/i.test(cleaned)) {
@@ -266,11 +296,8 @@ export async function getCentralBrainConfig() {
       if (parsed && typeof parsed === 'object') {
         const activeProv = String(parsed.provider || 'groq').toLowerCase().trim();
 
-        // 1. Busca primeiro a chave real limpa no cofre do provedor
         const vaultKey = cleanKey(parsed.saved_keys?.[activeProv]);
-        // 2. Se não estiver no cofre, verifica se a chave principal não é máscara
         const mainKey = cleanKey(parsed.api_key);
-        // 3. Busca qualquer chave válida salva em outros provedores
         const anyVaultKey = parsed.saved_keys
           ? (Object.values(parsed.saved_keys).map(cleanKey).find((v) => v.length > 5) || '')
           : '';
