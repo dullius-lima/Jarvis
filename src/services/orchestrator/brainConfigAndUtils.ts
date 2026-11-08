@@ -222,7 +222,7 @@ function cleanKey(rawKey?: any): string {
     .replace(/[•*]/g, '')
     .trim();
 
-  if (!k || k === 'undefined' || k === 'null' || k.length < 5) {
+  if (!k || k === 'undefined' || k === 'null' || k.length < 5 || k.toLowerCase() === 'ollama') {
     return '';
   }
 
@@ -261,7 +261,6 @@ export function resolveProviderCredentials(
 
   const endpoints = { ...DEFAULT_KNOWN_ENDPOINTS, ...(KNOWN_ENDPOINTS || {}) };
   let baseURL = (customUrl && customUrl.trim()) || endpoints[p] || endpoints.groq;
-  // Evita que base_url do Gemini seja usada na Groq ou vice-versa
   if (p === 'groq' && !baseURL.includes('groq.com')) {
     baseURL = DEFAULT_KNOWN_ENDPOINTS.groq;
   } else if (p === 'gemini' && !baseURL.includes('googleapis.com')) {
@@ -269,39 +268,28 @@ export function resolveProviderCredentials(
   }
   baseURL = baseURL.replace(/\/+$/, '');
 
+  // Preserva estritamente o modelo escolhido pelo usuário (inclusive openai/gpt-oss-120b)
   let model =
     customModel && customModel.trim() && customModel !== 'CUSTOM_INPUT'
       ? customModel.trim()
       : p === 'groq'
-      ? 'llama-3.3-70b-versatile'
+      ? 'openai/gpt-oss-120b'
       : p === 'gemini'
       ? 'gemini-2.5-flash'
       : 'gpt-4o-mini';
 
-  // Higieniza modelos descontinuados ou incompatíveis com Function Calling
-  if (p === 'groq') {
-    if (
-      model.includes('8b-instant') ||
-      model.includes('gemma') ||
-      model.includes('mixtral') ||
-      model.includes('deepseek-r1') ||
-      model.includes('gpt-oss') ||
-      model.includes('gemini')
-    ) {
-      model = 'llama-3.3-70b-versatile';
-    }
-  } else if (p === 'gemini') {
+  // Higieniza apenas modelos experimentais inválidos do Gemini
+  if (p === 'gemini') {
     if (
       !model.startsWith('gemini') ||
       model.includes('argon') ||
-      model.includes('3.8') ||
-      model.includes('2.0-flash')
+      model.includes('3.8')
     ) {
       model = 'gemini-2.5-flash';
     }
   }
 
-  return { provider: p, apiKey: apiKey || 'ollama', baseURL, model };
+  return { provider: p, apiKey: apiKey || (p === 'ollama' ? 'ollama' : ''), baseURL, model };
 }
 
 export async function getCentralBrainConfig() {
@@ -338,7 +326,14 @@ export async function getCentralBrainConfig() {
 
         const vaultKey = savedKeys[activeProv] || '';
         const mainKey = cleanKey(parsed.api_key);
-        const effectiveKey = vaultKey || mainKey || cleanKey(process.env.LLM_API_KEY);
+        const envKey =
+          activeProv === 'groq'
+            ? cleanKey(process.env.GROQ_API_KEY || process.env.LLM_API_KEY)
+            : activeProv === 'gemini'
+            ? cleanKey(process.env.GEMINI_API_KEY || process.env.LLM_API_KEY)
+            : cleanKey(process.env.LLM_API_KEY);
+
+        const effectiveKey = vaultKey || mainKey || envKey;
 
         const creds = resolveProviderCredentials(
           activeProv,
@@ -360,7 +355,7 @@ export async function getCentralBrainConfig() {
           temperature: Number(parsed.temperature ?? 0.2),
           system_prompt:
             parsed.system_prompt ||
-            'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema.',
+            'Você é o JARVIS, o Cérebro Central e Agente Líder permanente do sistema.',
           saved_keys: savedKeys
         };
       }
@@ -369,10 +364,17 @@ export async function getCentralBrainConfig() {
     console.warn('⚠️ [Central Brain Config] Fallback para variáveis de ambiente:', error?.message);
   }
 
-  const defaultProv = process.env.LLM_PROVIDER || 'groq';
+  const defaultProv = (process.env.LLM_PROVIDER || 'groq').toLowerCase().trim();
+  const defaultEnvKey =
+    defaultProv === 'groq'
+      ? cleanKey(process.env.GROQ_API_KEY || process.env.LLM_API_KEY)
+      : defaultProv === 'gemini'
+      ? cleanKey(process.env.GEMINI_API_KEY || process.env.LLM_API_KEY)
+      : cleanKey(process.env.LLM_API_KEY);
+
   const creds = resolveProviderCredentials(
     defaultProv,
-    process.env.LLM_API_KEY || process.env.GROQ_API_KEY || '',
+    defaultEnvKey,
     process.env.LLM_BASE_URL,
     process.env.LLM_MODEL
   );
@@ -385,7 +387,7 @@ export async function getCentralBrainConfig() {
     base_url: creds.baseURL,
     server_base_url: process.env.SERVER_BASE_URL || `http://localhost:${activePort}`,
     temperature: 0.2,
-    system_prompt: 'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema.',
+    system_prompt: 'Você é o JARVIS, o Cérebro Central e Agente Líder permanente do sistema.',
     saved_keys: {}
   };
 }
@@ -400,16 +402,12 @@ export function createLLMClient(config?: any): OpenAI {
     config?.model
   );
   return new OpenAI({
-    apiKey: creds.apiKey || 'ollama',
+    apiKey: creds.apiKey || (creds.provider === 'ollama' ? 'ollama' : 'missing_key'),
     baseURL: creds.baseURL,
     timeout: 30000
   });
 }
 
-/**
- * Ferramenta Meta-Cognitiva: Grava regras de estilo, preferências do usuário
- * e aprendizados permanentes diretamente no PostgreSQL.
- */
 export async function salvarMemoriaPermanente(params: {
   tipo: 'estilo_de_conversa' | 'fato_do_usuario' | 'regra_de_negocio';
   conteudo: string;
