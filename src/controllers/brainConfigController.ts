@@ -457,6 +457,8 @@ export async function getBrainConfig(_req: Request, res: Response) {
   }
 }
 
+// Em src/controllers/brainConfigController.ts
+
 export async function updateBrainConfig(req: Request, res: Response) {
   const activePort = getEnvRegisteredPort();
   try {
@@ -475,126 +477,88 @@ export async function updateBrainConfig(req: Request, res: Response) {
     } = req.body || {};
 
     const cleanApiKey = cleanAndNormalizeApiKey(api_key);
-    const normalizedProvider = detectProviderFromKeyAndInput(provider || 'groq', cleanApiKey, base_url);
+    const normalizedProvider = (provider || 'groq').toLowerCase().trim();
 
+    // Recupera dados existentes para não perder chaves de outros provedores
     const existingRes = await pool.query(`
-      SELECT value FROM system_configs
-      WHERE key IN ('brain_llm_config', 'brain_llm', 'brain_config')
+      SELECT value FROM system_configs 
+      WHERE key IN ('brain_llm_config', 'brain_llm', 'brain_config') 
       ORDER BY updated_at DESC LIMIT 1;
     `);
+    
     let existingData: any = {};
     if (existingRes.rows.length > 0) {
       const raw = existingRes.rows[0].value;
       existingData = typeof raw === 'string' ? JSON.parse(raw) : raw;
     }
 
+    // Mescla o cofre de chaves
     const mergedKeys: Record<string, string> = {};
     for (const [k, v] of Object.entries({ ...(existingData.saved_keys || {}), ...(saved_keys || {}) })) {
       const cleaned = cleanAndNormalizeApiKey(String(v || ''));
       if (cleaned) mergedKeys[k.toLowerCase()] = cleaned;
     }
 
-    const prevMainKey = cleanAndNormalizeApiKey(existingData.api_key);
-    if (prevMainKey && existingData.provider) {
-      const prevProv = String(existingData.provider).toLowerCase();
-      if (!mergedKeys[prevProv]) mergedKeys[prevProv] = prevMainKey;
-    }
-
-    // Se uma chave nova limpa foi enviada, ela ganha prioridade
     if (cleanApiKey) {
       mergedKeys[normalizedProvider] = cleanApiKey;
     }
 
-    const finalApiKey =
-      cleanApiKey ||
-      mergedKeys[normalizedProvider] ||
-      getEnvKeyForProvider(normalizedProvider) ||
-      '';
-
+    const finalApiKey = cleanApiKey || mergedKeys[normalizedProvider] || getEnvKeyForProvider(normalizedProvider) || '';
     if (finalApiKey) {
       mergedKeys[normalizedProvider] = finalApiKey;
     }
 
-    const isKnownOtherEndpoint = Object.entries(KNOWN_ENDPOINTS).some(
-      ([k, url]) => k !== normalizedProvider && base_url?.trim().replace(/\/+$/, '') === url.replace(/\/+$/, '')
-    );
-    const resolvedBaseUrl =
-      !base_url?.trim() || isKnownOtherEndpoint
-        ? KNOWN_ENDPOINTS[normalizedProvider] || KNOWN_ENDPOINTS.groq
-        : base_url.trim();
+    // Modelo totalmente livre: respeita o que foi enviado
+    const finalModel = (model && String(model).trim() !== 'CUSTOM_INPUT') 
+      ? String(model).trim() 
+      : (existingData.model || DEFAULT_MODELS[normalizedProvider] || 'llama-3.3-70b-versatile');
 
-    // Preserva o modelo escolhido (inclusive GPT-OSS 120B)
-    const cleanModel = sanitizeModelForProvider(normalizedProvider, model);
+    const resolvedBaseUrl = (base_url && String(base_url).trim()) 
+      ? String(base_url).trim().replace(/\/+$/, '') 
+      : (KNOWN_ENDPOINTS[normalizedProvider] || KNOWN_ENDPOINTS.groq);
 
     const newConfig = {
       agent_name: (agent_name || existingData.agent_name || 'JARVIS').trim(),
       provider: normalizedProvider,
-      model: cleanModel,
+      model: finalModel,
       api_key: finalApiKey,
       base_url: resolvedBaseUrl,
       temperature: Number(temperature ?? existingData.temperature ?? 0.2),
       server_base_url: (server_base_url || existingData.server_base_url || `http://localhost:${activePort}`).replace(/\/+$/, ''),
-      system_prompt:
-        system_prompt ||
-        existingData.system_prompt ||
-        'Você é o JARVIS, o Cérebro Central e Agente Líder permanente do sistema.',
+      system_prompt: system_prompt || existingData.system_prompt || 'Você é o JARVIS, o Cérebro Central e Agente Líder permanente do sistema.',
       saved_keys: mergedKeys
     };
 
-    const serializedConfig = JSON.stringify(newConfig);
-
-    // Remove entradas duplicadas para manter unicidade na chave principal
-    await pool.query("DELETE FROM system_configs WHERE key IN ('brain_config', 'brain_llm');");
-
+    // Operação ATÔMICA (UPSERT sem DELETE prévio para eliminar deadlocks)
     await pool.query(
-      `INSERT INTO system_configs (key, value, updated_at)
-       VALUES ('brain_llm_config', $1::jsonb, NOW())
-       ON CONFLICT (key) DO UPDATE
+      `INSERT INTO system_configs (key, value, updated_at) 
+       VALUES ('brain_llm_config', $1::jsonb, NOW()) 
+       ON CONFLICT (key) DO UPDATE 
        SET value = EXCLUDED.value, updated_at = NOW();`,
-      [serializedConfig]
+      [JSON.stringify(newConfig)]
     );
 
-    // PROPAGAÇÃO PARA OS AGENTES: Propaga a chave nova para os Agentes Especialistas daquele provedor
-    if (finalApiKey) {
-      await pool.query(
-        `UPDATE ai_agents
-         SET api_key = $1,
-             base_url = $2,
-             updated_at = NOW()
-         WHERE LOWER(provider) = $3;`,
-        [finalApiKey, resolvedBaseUrl, normalizedProvider]
-      );
+    // Limpeza assíncrona de chaves antigas sem travar a requisição
+    pool.query("DELETE FROM system_configs WHERE key IN ('brain_config', 'brain_llm');").catch(() => {});
 
-      // Sincroniza também no .env
-      syncKeyToEnvFile(normalizedProvider, finalApiKey, cleanModel, resolvedBaseUrl);
-    }
+    // ATENÇÃO: NÃO sobrescrever os subagentes em lote! 
+    // Cada subagente mantém seu próprio modelo e chave definidos no seu cadastro.
 
+    // Sincronização segura com .env (com try/catch isolado para nunca derrubar a resposta HTTP)
     try {
-      const historyRes = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_prompt_versions';");
-      const versions: any[] = historyRes.rows.length > 0 ? historyRes.rows[0].value : [];
-      versions.unshift({
-        versionId: `v_${Date.now()}`,
-        provider: newConfig.provider,
-        model: newConfig.model,
-        system_prompt: newConfig.system_prompt,
-        savedAt: new Date().toISOString()
-      });
-      await pool.query(
-        `INSERT INTO system_configs (key, value, updated_at)
-         VALUES ('brain_prompt_versions', $1::jsonb, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
-        [JSON.stringify(versions.slice(0, 20))]
-      );
-    } catch {}
+      syncKeyToEnvFile(normalizedProvider, finalApiKey, finalModel, resolvedBaseUrl);
+    } catch (err: any) {
+      console.warn('⚠️ [Aviso não-bloqueante] Falha ao sincronizar arquivo .env:', err.message);
+    }
 
     return res.status(200).json({
       success: true,
-      message: `Configurações do Núcleo JARVIS (${normalizedProvider.toUpperCase()} - ${cleanModel}) salvas e propagadas com sucesso!`,
+      message: `Configurações do Núcleo JARVIS (${normalizedProvider.toUpperCase()} - ${finalModel}) salvas com sucesso!`,
       data: newConfig
     });
   } catch (error: any) {
     console.error('❌ Erro no updateBrainConfig:', error.message);
-    return res.status(200).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, error: error.message });
   }
 }
 
