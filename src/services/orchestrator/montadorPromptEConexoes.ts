@@ -12,7 +12,7 @@ export async function montarContextoEConexoes(
   speakerRole: string,
   instrucaoVisual: string
 ) {
-  // Carregamento paralelo de configurações, memória, RAG, agentes e catálogo
+  // Carregamento paralelo de configurações, histórico, RAG, agentes e catálogo
   const [
     configuracaoCerebro,
     historicoRes,
@@ -22,9 +22,9 @@ export async function montarContextoEConexoes(
   ] = await Promise.all([
     getCentralBrainConfig(),
     pool
-      .query(`SELECT role, content FROM jarvis_chat_memory WHERE session_id = $1 ORDER BY id DESC LIMIT 10;`, [sessionId])
+      .query(`SELECT role, content FROM jarvis_chat_memory WHERE session_id = $1 ORDER BY id DESC LIMIT 12;`, [sessionId])
       .catch(() => ({ rows: [] as any[] })),
-    searchVectorDocuments(userPrompt, 3).catch(() => []),
+    searchVectorDocuments(userPrompt, 4).catch(() => []),
     pool.query(`SELECT * FROM ai_agents ORDER BY is_active DESC, id ASC;`).catch(() => ({ rows: [] as any[] })),
     getDynamicToolsCatalog()
   ]);
@@ -45,7 +45,7 @@ export async function montarContextoEConexoes(
   const listaRag = Array.isArray(linhasRag) ? linhasRag : (linhasRag as any)?.matches || [];
   if (listaRag.length > 0) {
     contextoRagTexto = listaRag
-      .filter((m: any) => (m.similarity ?? 1) > 0.15)
+      .filter((m: any) => (m.similarity ?? 1) > 0.12)
       .map((m: any) => `- ${m.content}`)
       .join('\n');
   }
@@ -57,69 +57,78 @@ export async function montarContextoEConexoes(
   const { catalog: catalogoAoVivo, connectorsMap } = dadosCatalogoTools;
   const validToolSlugs = catalogoAoVivo.map((t) => t.slug);
 
-  const resumoToolsAoVivo =
-    catalogoAoVivo.length > 0
-      ? catalogoAoVivo
-          .map(
-            (t) =>
-              `- slug: "${t.slug}" | Nome: "${t.name}" | Método: ${t.method}${
-                t.endpoint ? ` | Endpoint: ${t.endpoint}` : ''
-              } | Uso: ${t.description}`
-          )
-          .join('\n')
-      : 'Nenhuma tool externa cadastrada no momento.';
-
+  // Mapeamento enriquecido dos Especialistas Ativos com as tools que cada um possui
   const resumoAgentesAtivos =
     agentesAtivos.length > 0
       ? agentesAtivos
-          .map(
-            (a: any) =>
-              `- [ATIVO] Nome: "${a.name}" | Slug: "${sanitizeToolName(a.slug)}" | Modo: ${(
-                a.agent_type || 'llm'
-              ).toUpperCase()} | Tools: ${JSON.stringify(a.tools || [])} | Gatilho: ${a.description || 'Geral'}`
-          )
-          .join('\n')
-      : 'Nenhum especialista ativo.';
+          .map((a: any) => {
+            let toolsList: string[] = [];
+            if (Array.isArray(a.tools)) toolsList = a.tools;
+            else if (typeof a.tools === 'string') {
+              try { toolsList = JSON.parse(a.tools || '[]'); } catch { toolsList = []; }
+            }
+            return `- [ESPECIALISTA ATIVO] Nome: "${a.name}" | Slug de Chamada: "${sanitizeToolName(a.slug)}"
+  Domínio: ${a.description || 'Geral'}
+  Ferramentas sob seu comando: ${toolsList.length > 0 ? `[${toolsList.join(', ')}]` : '[Nenhuma tool externa]'}
+  Diretriz: Para demandas deste assunto, acione a ferramenta de função "${sanitizeToolName(a.slug)}".`;
+          })
+          .join('\n\n')
+      : 'Nenhum especialista ativo no momento.';
 
   const resumoAgentesInativos =
     agentesInativos.length > 0
       ? agentesInativos
-          .map(
-            (a: any) =>
-              `- [PAUSADO] Nome: "${a.name}" | Slug: "${sanitizeToolName(a.slug)}" | Modo: ${(
-                a.agent_type || 'llm'
-              ).toUpperCase()}`
-          )
+          .map((a: any) => `- [PAUSADO] "${a.name}" (slug: "${sanitizeToolName(a.slug)}")`)
           .join('\n')
       : 'Nenhum especialista pausado.';
 
-  // Cada subagente ativo torna-se uma Tool invocável pelo JARVIS
-  const tools: any[] = agentesAtivos.map((ag: any) => ({
-    type: 'function',
-    function: {
-      name: sanitizeToolName(ag.slug),
-      description: ag.description?.trim() || `Aciona o especialista ${ag.name}.`,
-      parameters: {
-        type: 'object',
-        properties: {
-          task_details: { type: 'string', description: 'Pergunta ou dados técnicos para o especialista.' },
-          symbol: { type: 'string', description: 'Ticker/código quando aplicável (ex: PETR4).' },
-          query: { type: 'string', description: 'Parâmetro textual de pesquisa ou cálculo.' }
-        },
-        required: ['task_details']
-      }
+  // Cada subagente ativo é registrado como ferramenta nativa com suas competências explícitas
+  const tools: any[] = agentesAtivos.map((ag: any) => {
+    let toolsDoAgente: string[] = [];
+    if (Array.isArray(ag.tools)) toolsDoAgente = ag.tools;
+    else if (typeof ag.tools === 'string') {
+      try { toolsDoAgente = JSON.parse(ag.tools || '[]'); } catch { toolsDoAgente = []; }
     }
-  }));
+
+    const descEnriquecida = `${ag.description?.trim() || `Especialista ${ag.name}.`} ${
+      toolsDoAgente.length > 0 ? `Controla as seguintes ferramentas técnicas: [${toolsDoAgente.join(', ')}].` : ''
+    } Acione este agente para tarefas do seu domínio.`;
+
+    return {
+      type: 'function',
+      function: {
+        name: sanitizeToolName(ag.slug),
+        description: descEnriquecida,
+        parameters: {
+          type: 'object',
+          properties: {
+            task_details: {
+              type: 'string',
+              description: 'Pergunta, dados técnicos ou instrução completa para o especialista.'
+            },
+            symbol: {
+              type: 'string',
+              description: 'Ticker/código quando aplicável (ex: SUZB3, PETR4, VALE3).'
+            },
+            query: {
+              type: 'string',
+              description: 'Termo de pesquisa, data ou parâmetro específico da tarefa.'
+            }
+          },
+          required: ['task_details']
+        }
+      }
+    };
+  });
 
   // Tools Administrativas Centrais
   tools.push(
-    // Substitui a criação solta pela ferramenta delegada com travas de rate-limit
     toolDelegarCriacaoSubagente,
     {
       type: 'function',
       function: {
         name: 'create_or_update_tool_connector',
-        description: 'Cria ou atualiza uma Tool/Conexão (HTTP, MCP, Code, SSH) no catálogo.',
+        description: 'Cria ou atualiza uma Conexão (HTTP, MCP, Code, SSH) no catálogo.',
         parameters: {
           type: 'object',
           properties: {
@@ -140,7 +149,7 @@ export async function montarContextoEConexoes(
       type: 'function',
       function: {
         name: 'delete_tool_connector',
-        description: 'Exclui permanentemente uma conexão do catálogo dinâmico.',
+        description: 'Exclui permanentemente uma conexão do catálogo.',
         parameters: {
           type: 'object',
           properties: {
@@ -154,7 +163,7 @@ export async function montarContextoEConexoes(
       type: 'function',
       function: {
         name: 'update_persona_and_behavior',
-        description: 'Atualiza o comportamento e regras no system_prompt do JARVIS ou de um Agente.',
+        description: 'Atualiza regras permanentes no system_prompt do JARVIS ou de um Agente.',
         parameters: {
           type: 'object',
           properties: {
@@ -170,7 +179,7 @@ export async function montarContextoEConexoes(
       type: 'function',
       function: {
         name: 'hacker_sec_agent',
-        description: 'Audita vulnerabilidades, logs ou rotas HTTP.',
+        description: 'Audita vulnerabilidades, rotas ou integridade do sistema.',
         parameters: {
           type: 'object',
           properties: {
@@ -185,7 +194,7 @@ export async function montarContextoEConexoes(
       type: 'function',
       function: {
         name: 'save_to_database',
-        description: 'Salva dados em formato estruturado no PostgreSQL (Dynamic Collections).',
+        description: 'Salva dados em formato estruturado no PostgreSQL.',
         parameters: {
           type: 'object',
           properties: {
@@ -201,7 +210,7 @@ export async function montarContextoEConexoes(
       type: 'function',
       function: {
         name: 'execute_external_integration',
-        description: 'Dispara ações em WhatsApp, Google Workspace, Google Calendar, Gmail, Home Assistant, etc.',
+        description: 'Dispara comandos diretos em Google Calendar, Gmail, WhatsApp ou Home Assistant.',
         parameters: {
           type: 'object',
           properties: {
@@ -218,7 +227,7 @@ export async function montarContextoEConexoes(
       type: 'function',
       function: {
         name: 'execute_ssh_command',
-        description: 'Executa comandos shell via SSH ou indexa logs remotos no RAG.',
+        description: 'Executa comandos shell via SSH no servidor.',
         parameters: {
           type: 'object',
           properties: {
@@ -236,27 +245,22 @@ ${contextoTemporal}
 Identidade Autenticada / Locutor: ${activeSpeakerName} (${speakerRole})
 URL Base do Servidor: ${configuracaoCerebro.server_base_url}${instrucaoVisual}
 
---- CATÁLOGO DE TOOLS / CONEXÕES EXTERNAS ---
-${resumoToolsAoVivo}
-
---- AGENTES ESPECIALISTAS ATIVOS NO SISTEMA ---
+--- AGENTES ESPECIALISTAS INTEGRADOS AO ECOSSISTEMA ---
 ${resumoAgentesAtivos}
 
---- AGENTES EXISTENTES PAUSADOS / INATIVOS ---
+--- AGENTES INATIVOS / PAUSADOS ---
 ${resumoAgentesInativos}
 
 [DIRETRIZES FUNDAMENTAIS DO ORQUESTRADOR CENTRAL]:
 1. DELEGAÇÃO OBRIGATÓRIA A SUBAGENTES:
-   - Se houver um especialista ativo para o domínio da pergunta, acione OBRIGATORIAMENTE a Tool Call dele. Não execute APIs de negócio diretamente como JARVIS.
-2. CRIAÇÃO DE SUBAGENTES SEM SOBRECARGA:
-   - Quando o usuário solicitar a criação de um especialista novo ou evolução de agente existente, acione SEMPRE a ferramenta "delegar_criacao_ou_ajuste_de_subagente".
-   - O Subagente Arquiteto cuidará de toda a montagem, conectores e travas de segurança.
-   
-[DIRETRIZ IMPERATIVA DE EXECUÇÃO - PROIBIDO MENSAGENS INTERMEDIÁRIAS]:
-1. NUNCA responda dizendo "Vou verificar...", "Aguarde um instante...", "Estou consultando..." ou qualquer frase no tempo futuro prometendo ação.
-2. Se o usuário solicitou qualquer dado externo (ações, finanças, agenda, e-mails, luzes, arquivos ou status), DISPARE A TOOL CALL NATIVA IMEDIATAMENTE.
-3. Você só deve responder em texto ao usuário APÓS a ferramenta ter sido executada e ter retornado os dados reais.
-4. Se nenhuma ferramenta atender a demanda, informe diretamente em uma única resposta o motivo.
+ - Se o usuário solicitar cotação, dados da B3, agenda, automação residencial, segurança ou qualquer domínio atendido pelos Especialistas listados acima, você está ESTRITAMENTE PROIBIDO de responder em texto como JARVIS.
+ - Você DEVE acionar a TOOL CALL NATIVA do respectivo especialista.
+2. PROIBIÇÃO DE COMANDOS CRUS EM TEXTO:
+ - NUNCA escreva comandos como "consultar_mercado_de_valores query=...", "google_calendar ..." ou "home_detector_de_sensores...".
+ - As ferramentas técnicas pertencem aos especialistas. Acione o Especialista correto via function call.
+3. FLUIDEZ E NATURALIDADE:
+ - Você só responde em texto após o especialista concluir a execução e trazer os dados reais.
+ - Cumprimentos e conversação comum devem ser respondidos de forma amigável, inteligente e em português.
 
 ${contextoRagTexto ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${contextoRagTexto}` : ''}`;
 
