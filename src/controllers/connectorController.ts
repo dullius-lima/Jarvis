@@ -21,7 +21,7 @@ export const DEFAULT_CONNECTORS = [
     category: 'Mensageria',
     icon: '💬',
     description: 'Envio e recebimento de mensagens via API.',
-    endpoint_url: 'http://localhost:8080/message/sendText',
+    endpoint_url: 'http://localhost:8080',
     http_method: 'POST',
     api_key: '',
     is_enabled: false
@@ -529,6 +529,66 @@ export async function testExternalConnector(req: Request, res: Response) {
         latencyMs: Date.now() - startTime,
         message: `🟢 Home Assistant conectado com sucesso! (${haData.message || 'API running'})`,
         data: haData
+      });
+    }
+
+    // 3.2-C Teste específico do WhatsApp (Evolution API / Baileys)
+    if (providerKey === 'whatsapp' || providerKey.includes('whats')) {
+      const targetNumber = String(
+        body.params?.number ||
+        body.params?.to ||
+        body.number ||
+        cfg.default_recipient ||
+        '5567991289607'
+      ).replace(/\D/g, '');
+
+      const targetText = String(
+        body.params?.text ||
+        body.params?.message ||
+        body.text ||
+        body.message ||
+        '🟢 Teste operacional JARVIS: WhatsApp validado com sucesso!'
+      ).trim();
+
+      const cleanEndpoint = rawUrl
+        ? rawUrl.replace(/\/message\/sendText.*$/i, '').replace(/\/+$/, '')
+        : undefined;
+
+      const result = await executeExternalConnector({
+        providerKey: 'whatsapp',
+        action: body.action || 'send_message',
+        payload: {
+          ...(body.params || {}),
+          endpoint_url: cleanEndpoint,
+          api_key: apiKey || undefined,
+          number: targetNumber,
+          text: targetText
+        }
+      });
+
+      if (result && (result as any).success === false) {
+        return res.status(200).json({
+          success: false,
+          latencyMs: Date.now() - startTime,
+          error: (result as any).error || 'Falha ao enviar mensagem de teste via WhatsApp.'
+        });
+      }
+
+      if (providerKey) {
+        await pool
+          .query(
+            `UPDATE external_connectors SET last_tested_at = NOW() WHERE LOWER(provider_key) = $1;`,
+            [providerKey]
+          )
+          .catch(() => {});
+      }
+
+      return res.status(200).json({
+        success: true,
+        status: 200,
+        latencyMs: Date.now() - startTime,
+        message: '🟢 WhatsApp testado com sucesso via Evolution API!',
+        data: result
       });
     }
 
