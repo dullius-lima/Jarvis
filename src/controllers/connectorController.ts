@@ -153,6 +153,9 @@ async function getDeletedDefaultKeys(): Promise<string[]> {
   return [];
 }
 
+// ============================================================================
+// 1. LISTAR CONECTORES
+// ============================================================================
 export async function listConnectors(_req: Request, res: Response) {
   try {
     await ensureConnectorsTable();
@@ -224,6 +227,9 @@ export async function listConnectors(_req: Request, res: Response) {
   }
 }
 
+// ============================================================================
+// 2. CRIAR OU ATUALIZAR UMA CONEXÃO / TOOL
+// ============================================================================
 export async function saveConnectorConfig(req: Request, res: Response) {
   try {
     await ensureConnectorsTable();
@@ -346,6 +352,9 @@ export async function saveConnectorConfig(req: Request, res: Response) {
 
 export const saveConnector = saveConnectorConfig;
 
+// ============================================================================
+// 3. TESTAR CONEXÃO / TOOL EM TEMPO REAL (UNIFICADO)
+// ============================================================================
 export async function testExternalConnector(req: Request, res: Response) {
   const startTime = Date.now();
   try {
@@ -361,7 +370,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       cfg.auth_token || cfg.api_key || body.api_key || body.auth_token || ''
     ).trim();
 
-    // 3.0 Google Workspace (Gmail, Calendar, Drive) via OAuth2 Permanente
+    // 3.0 Ecossistema Google (Gmail, Calendar, Drive) via OAuth2 Permanente
     const isGoogle =
       providerKey.includes('gmail') ||
       providerKey.includes('calendar') ||
@@ -404,7 +413,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.1 Telegram Bot
+    // 3.1 Teste específico do Telegram Bot
     if (providerKey === 'telegram' || rawUrl.includes('api.telegram.org')) {
       if (!apiKey) {
         return res.status(200).json({
@@ -433,7 +442,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.2 Brapi B3
+    // 3.2 Teste específico da Brapi B3
     if (
       providerKey === 'brapi' ||
       providerKey === 'brapi_b3' ||
@@ -470,7 +479,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       });
     }
 
-    // 3.2-B Home Assistant
+    // 3.2-B Teste específico do Home Assistant
     if (
       providerKey === 'home_assistant' ||
       providerKey.includes('hass') ||
@@ -521,13 +530,18 @@ export async function testExternalConnector(req: Request, res: Response) {
 
     // 3.2-C Teste Direto do WhatsApp (Evolution API / Baileys)
     if (providerKey === 'whatsapp' || providerKey.includes('whats')) {
-      const targetNumber = String(
+      let rawNumber = String(
         body.params?.number ||
         body.params?.to ||
         body.number ||
         cfg.default_recipient ||
         '5567991289607'
       ).replace(/\D/g, '');
+
+      // Normaliza o DDI 55 para números de 10 ou 11 dígitos
+      if (rawNumber.length >= 10 && rawNumber.length <= 11 && !rawNumber.startsWith('55')) {
+        rawNumber = `55${rawNumber}`;
+      }
 
       const targetText = String(
         body.params?.text ||
@@ -537,13 +551,23 @@ export async function testExternalConnector(req: Request, res: Response) {
         '🟢 Teste operacional JARVIS: WhatsApp validado com sucesso!'
       ).trim();
 
-      const evoUrl = (rawUrl || process.env.EVOLUTION_URL || 'http://127.0.0.1:8080')
-        .replace(/\/message\/sendText.*$/i, '')
-        .replace(/\/+$/, '');
-      const instance = cfg.instance_name || body.params?.instance || 'jarvis-whats';
-      const evoApiKey = apiKey || process.env.EVOLUTION_API_KEY || 'jarvis-evolution-secret-2026';
+      const evoUrl = (
+        rawUrl ||
+        cfg.endpoint_url ||
+        process.env.EVOLUTION_URL ||
+        'http://127.0.0.1:8080'
+      ).replace(/\/message\/sendText.*$/i, '').replace(/\/+$/, '');
 
-      // Executa o POST real no endpoint /message/sendText/{instancia}
+      const instance = cfg.instance_name || body.params?.instance || 'jarvis-whats';
+      const evoApiKey = (
+        apiKey ||
+        cfg.api_key ||
+        cfg.auth_token ||
+        process.env.EVOLUTION_API_KEY ||
+        'jarvis-evolution-secret-2026'
+      ).trim();
+
+      // Disparo direto para a Evolution API
       const evoRes = await fetch(`${evoUrl}/message/sendText/${instance}`, {
         method: 'POST',
         headers: {
@@ -551,7 +575,7 @@ export async function testExternalConnector(req: Request, res: Response) {
           'apikey': evoApiKey
         },
         body: JSON.stringify({
-          number: targetNumber,
+          number: rawNumber,
           text: targetText
         }),
         signal: AbortSignal.timeout(15000)
@@ -663,6 +687,9 @@ export async function testExternalConnector(req: Request, res: Response) {
 
 export const testConnector = testExternalConnector;
 
+// ============================================================================
+// 4. EXCLUIR CONEXÃO PERMANENTEMENTE E LIMPAR VÍNCULOS DOS SUBAGENTES
+// ============================================================================
 export async function deleteExternalConnector(req: Request, res: Response) {
   try {
     await ensureConnectorsTable();
