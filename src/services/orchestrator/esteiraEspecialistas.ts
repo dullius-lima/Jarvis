@@ -113,11 +113,7 @@ export async function executarEsteiraEspecialistas(
       let enabledTools: string[] = [];
       if (Array.isArray(currentAgent.tools)) enabledTools = currentAgent.tools;
       else if (typeof currentAgent.tools === 'string') {
-        try {
-          enabledTools = JSON.parse(currentAgent.tools || '[]');
-        } catch {
-          enabledTools = [];
-        }
+        try { enabledTools = JSON.parse(currentAgent.tools || '[]'); } catch { enabledTools = []; }
       }
 
       const specialistTools: OpenAI.Chat.Completions.ChatCompletionTool[] = enabledTools.map((tId: string) => {
@@ -149,16 +145,25 @@ export async function executarEsteiraEspecialistas(
         { role: 'user', content: `Pedido do Usuário: "${userPrompt}"\nContexto: ${JSON.stringify(currentPayload)}` }
       ];
 
-      const specProvider = (currentAgent.provider || brainConfig?.provider || 'groq').toLowerCase().trim();
+      // Provedor, Modelo e Chave PRÓPRIOS do subagente
+      const specProvider = (currentAgent.provider || 'groq').toLowerCase().trim();
       const specAgentKey = limparMascaraChave(currentAgent.api_key);
       const specVaultKey = brainConfig?.saved_keys?.[specProvider] ? limparMascaraChave(brainConfig.saved_keys[specProvider]) : '';
-      const effectiveKey = specAgentKey || specVaultKey || limparMascaraChave(brainConfig?.api_key) || obterChaveContingenciaEnv(specProvider);
+      const effectiveKey = specAgentKey || specVaultKey || obterChaveContingenciaEnv(specProvider);
+
+      // Endpoint correto do provedor do subagente (não herda URL de outro provedor do cérebro)
+      const credsSubagente = resolveProviderCredentials(
+        specProvider,
+        effectiveKey,
+        currentAgent.base_url,
+        currentAgent.model
+      );
 
       const llmRes: any = await chamarLLMCompativelOpenAI({
-        provider: specProvider,
-        model: currentAgent.model || brainConfig?.model || 'llama-3.3-70b-versatile',
-        apiKey: effectiveKey,
-        baseUrl: currentAgent.base_url || brainConfig?.base_url || '',
+        provider: credsSubagente.provider,
+        model: credsSubagente.model,
+        apiKey: credsSubagente.apiKey,
+        baseUrl: credsSubagente.baseURL,
         messages: specialistMessages,
         tools: specialistTools.length > 0 ? specialistTools : undefined,
         temperature: Number(currentAgent.temperature ?? 0.2)
@@ -181,10 +186,10 @@ export async function executarEsteiraEspecialistas(
         }
 
         const followUpRes: any = await chamarLLMCompativelOpenAI({
-          provider: specProvider,
-          model: currentAgent.model || brainConfig?.model || 'llama-3.3-70b-versatile',
-          apiKey: effectiveKey,
-          baseUrl: currentAgent.base_url || brainConfig?.base_url || '',
+          provider: credsSubagente.provider,
+          model: credsSubagente.model,
+          apiKey: credsSubagente.apiKey,
+          baseUrl: credsSubagente.baseURL,
           messages: [
             ...specialistMessages,
             { role: 'user', content: `Resultados obtidos:\n${JSON.stringify(subToolResults)}\n\nFormule a resposta final ao usuário.` }
