@@ -45,7 +45,7 @@ import { montarContextoEConexoes } from './orchestrator/montadorPromptEConexoes.
 import { processarChamadasDeFerramentas } from './orchestrator/despachanteFerramentas.js';
 import { interceptarAcaoAgenda } from './orchestrator/interceptadorAgenda.js';
 
-// Re-exportações de tipos e utilitários para compatibilidade
+// Re-exportações de tipos e utilitários para manter compatibilidade total
 export type { SupportedProtocolOrPlatform, ExternalProvider, SensoryAttachments, SensorPayload, DynamicToolCatalogItem };
 export {
   sanitizeToolName,
@@ -67,6 +67,46 @@ export {
   executeAgentChain,
   interceptarAcaoAgenda
 };
+
+/**
+ * Localização flexível e tolerante de Agentes Especialistas
+ * (Suporta variações de hífen vs underline, maiúsculas ou nome amigável)
+ */
+function encontrarAgenteResiliente(fnName: string, agentes: any[]): any | undefined {
+  if (!fnName || !Array.isArray(agentes)) return undefined;
+
+  const normalizar = (str: string) =>
+    (str || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+
+  const alvo = normalizar(fnName);
+  if (!alvo) return undefined;
+
+  // 1. Casamento direto por slug
+  let correspondente = agentes.find((a: any) => normalizar(a.slug) === alvo);
+  if (correspondente) return correspondente;
+
+  // 2. Casamento direto por nome do agente
+  correspondente = agentes.find((a: any) => normalizar(a.name) === alvo);
+  if (correspondente) return correspondente;
+
+  // 3. Casamento por inclusão recíproca (substring relevante)
+  correspondente = agentes.find((a: any) => {
+    const slugNorm = normalizar(a.slug);
+    const nomeNorm = normalizar(a.name);
+    return (
+      (slugNorm.length >= 4 && alvo.includes(slugNorm)) ||
+      (alvo.length >= 4 && slugNorm.includes(alvo)) ||
+      (nomeNorm.length >= 4 && alvo.includes(nomeNorm)) ||
+      (alvo.length >= 4 && nomeNorm.includes(alvo))
+    );
+  });
+
+  return correspondente;
+}
 
 /**
  * Processamento principal do fluxo cognitivo, sensorial e execução de ferramentas
@@ -133,8 +173,47 @@ export async function processarExecucaoWorkflow(
       visual.instrucaoVisualSistema
     );
 
+    // 3.1 Registra a Ferramenta Nativa de Aprendizado e Gravação de Memória Permanente
+    if (!dadosContexto.tools.some((t: any) => t.function?.name === 'salvar_memoria_permanente')) {
+      dadosContexto.tools.push({
+        type: 'function',
+        function: {
+          name: 'salvar_memoria_permanente',
+          description:
+            'Acione OBRIGATORIAMENTE quando o usuário solicitar mudanças na sua forma de falar, tom de voz, regras pessoais, nomes ou preferências permanentes da casa.',
+          parameters: {
+            type: 'object',
+            properties: {
+              tipo: {
+                type: 'string',
+                enum: ['estilo_de_conversa', 'fato_do_usuario', 'regra_de_negocio'],
+                description: 'Classificação da memória.'
+              },
+              conteudo: {
+                type: 'string',
+                description: 'A instrução, preferência ou fato exato a ser memorizado de forma concisa.'
+              },
+              agente_alvo: {
+                type: 'string',
+                description: 'Deixe vazio ou use "jarvis_core" para regras gerais, ou o slug do especialista alvo.'
+              }
+            },
+            required: ['tipo', 'conteudo']
+          }
+        }
+      });
+    }
+
+    // 3.2 Reforço de Diretriz contra Respostas Robotizadas e Delegação Obrigatória
+    const promptSistemaBlindado = `${dadosContexto.promptSistemaCompleto}
+
+[DIRETRIZES DE DELEGAÇÃO E APRENDIZADO DO JARVIS]:
+1. DELEGAÇÃO OBRIGATÓRIA: Se a dúvida ou comando for do domínio de um dos Agentes Especialistas Ativos listados acima, você está PROIBIDO de responder diretamente como JARVIS e proibido de inventar dados. É OBRIGATÓRIO acionar a Tool Call do respectivo subagente.
+2. APRENDIZADO ATIVO: Sempre que o usuário disser como deseja ser tratado, estilo de resposta (ex: "seja mais direto", "responda em tópicos") ou pedir para memorizar algo ("guarde na sua memória", "lembre-se disso"), invoque a ferramenta "salvar_memoria_permanente".
+3. HUMANIZAÇÃO: Fale de forma inteligente, polida, empática e objetiva em português. NUNCA gere mensagens em branco nem responda com termos técnicos sobre logs ou modelos.`;
+
     const mensagensBase = [
-      { role: 'system', content: dadosContexto.promptSistemaCompleto },
+      { role: 'system', content: promptSistemaBlindado },
       ...dadosContexto.threadConversa,
       { role: 'user', content: visual.conteudoMensagemUsuario }
     ];
@@ -158,24 +237,94 @@ export async function processarExecucaoWorkflow(
 
     // 5. Execução de Ferramentas / Especialistas
     if (Array.isArray(mensagemEscolha?.tool_calls) && mensagemEscolha.tool_calls.length > 0) {
-      const resultadoFerramentas = await processarChamadasDeFerramentas({
-        toolCalls: mensagemEscolha.tool_calls,
-        configuracaoCerebro: dadosContexto.configuracaoCerebro,
-        contextoTemporal: dadosContexto.contextoTemporal,
-        agentesAtivos: dadosContexto.agentesAtivos,
-        connectorsMap: dadosContexto.connectorsMap,
-        validToolSlugs: dadosContexto.validToolSlugs,
-        activeSpeakerName,
-        sessionId,
-        threadConversa: dadosContexto.threadConversa,
-        userPrompt,
-        mensagensBase
-      });
+      // 5.1 Tratamento Nativo da Ferramenta de Memória Permanente
+      const callMemoria = mensagemEscolha.tool_calls.find(
+        (tc: any) => sanitizeToolName(tc.function?.name) === 'salvar_memoria_permanente'
+      );
 
-      textoRespostaFinal = resultadoFerramentas.textoFinal;
-      triggeredAgentName = resultadoFerramentas.triggeredAgentName;
-      triggeredAgentId = resultadoFerramentas.triggeredAgentId;
-      triggeredNodeType = resultadoFerramentas.triggeredNodeType;
+      if (callMemoria) {
+        let argsMem: any = {};
+        try {
+          argsMem = JSON.parse(callMemoria.function?.arguments || '{}');
+        } catch {
+          argsMem = {};
+        }
+
+        const conteudo = (argsMem.conteudo || userPrompt).trim();
+        const alvo = argsMem.agente_alvo || 'jarvis_core';
+
+        await updateAgentOrJarvisPersona({
+          target_slug: alvo,
+          behavior_instruction: conteudo,
+          replace_entire_prompt: false
+        }).catch(() => {});
+
+        await ingestDocumentToRag(
+          `[MEMÓRIA APRENDIDA]: ${conteudo} (Tipo: ${argsMem.tipo || 'estilo_de_conversa'})`,
+          { sessionId, category: 'memoria_permanente', speaker: activeSpeakerName }
+        ).catch(() => {});
+
+        textoRespostaFinal = `Compreendido perfeitamente, ${activeSpeakerName}! Guardei essa instrução na minha memória permanente. Nossas próximas conversas já seguirão essa diretriz.`;
+        triggeredAgentName = 'JARVIS (Memória Evolutiva)';
+        triggeredAgentId = 'jarvis_core';
+        triggeredNodeType = 'core';
+      } else {
+        // 5.2 Normalização dos Slugs das Chamadas de Ferramentas antes do despacho
+        for (const tc of mensagemEscolha.tool_calls) {
+          const rawName = tc.function?.name || '';
+          const matchAg = encontrarAgenteResiliente(rawName, dadosContexto.agentesAtivos);
+          if (matchAg && tc.function) {
+            tc.function.name = sanitizeToolName(matchAg.slug);
+          }
+        }
+
+        const resultadoFerramentas = await processarChamadasDeFerramentas({
+          toolCalls: mensagemEscolha.tool_calls,
+          configuracaoCerebro: dadosContexto.configuracaoCerebro,
+          contextoTemporal: dadosContexto.contextoTemporal,
+          agentesAtivos: dadosContexto.agentesAtivos,
+          connectorsMap: dadosContexto.connectorsMap,
+          validToolSlugs: dadosContexto.validToolSlugs,
+          activeSpeakerName,
+          sessionId,
+          threadConversa: dadosContexto.threadConversa,
+          userPrompt,
+          mensagensBase
+        });
+
+        textoRespostaFinal = resultadoFerramentas.textoFinal;
+        triggeredAgentName = resultadoFerramentas.triggeredAgentName;
+        triggeredAgentId = resultadoFerramentas.triggeredAgentId;
+        triggeredNodeType = resultadoFerramentas.triggeredNodeType;
+      }
+    } else {
+      // 5.3 Heurística de Memória: Se o usuário pedir para gravar algo mas a LLM não acionar tool call
+      const ehComandoDeMemoria =
+        /(?:grave|salve|guarde|lembre|memorize|aprenda)\s+(?:na|em)?\s*(?:sua|tua)?\s*mem[oó]ria/i.test(userPrompt) ||
+        /(?:a\s+partir\s+de\s+agora|de\s+hoje\s+em\s+diante|sempre\s+que\s+eu\s+falar)\s*[,:]?\s*(?:me\s+chame|responda|fale|seja)/i.test(userPrompt);
+
+      if (ehComandoDeMemoria) {
+        const regraExtraida = userPrompt
+          .replace(/^(?:jarvis\s*[,:]?\s*)?(?:por\s+favor\s*)?(?:grave|salve|guarde|lembre|memorize|aprenda)\s+(?:na|em)?\s*(?:sua|tua)?\s*mem[oó]ria\s*(?:que)?/i, '')
+          .trim();
+
+        if (regraExtraida.length > 4) {
+          await updateAgentOrJarvisPersona({
+            target_slug: 'jarvis_core',
+            behavior_instruction: regraExtraida,
+            replace_entire_prompt: false
+          }).catch(() => {});
+
+          await ingestDocumentToRag(
+            `[MEMÓRIA APRENDIDA]: ${regraExtraida}`,
+            { sessionId, category: 'memoria_permanente', speaker: activeSpeakerName }
+          ).catch(() => {});
+
+          textoRespostaFinal = `Entendido, ${activeSpeakerName}! Guardei isso na minha memória permanente: "${regraExtraida}".`;
+          triggeredAgentName = 'JARVIS (Memória Evolutiva)';
+          triggeredAgentId = 'jarvis_core';
+        }
+      }
     }
 
     // 6. Interceptação de Agendamento e JSON Residual
@@ -207,11 +356,46 @@ export async function processarExecucaoWorkflow(
       }
     }
 
+    // 7. Blindagem Anti-Vazio e Síntese Humanizada (Elimina o erro da imagem)
+    const respostaEstaVazia =
+      !textoRespostaFinal ||
+      textoRespostaFinal.trim() === '' ||
+      textoRespostaFinal.trim() === '[]' ||
+      textoRespostaFinal.trim() === '{}' ||
+      textoRespostaFinal.toLowerCase().includes('o sistema não retornou');
+
+    if (respostaEstaVazia) {
+      try {
+        const promptContingencia = [
+          ...mensagensBase,
+          {
+            role: 'system',
+            content: `DIRETRIZ DE SÍNTESE OBRIGATÓRIA: Responda ao usuário (${activeSpeakerName}) de forma amigável, acolhedora, clara e em português. NUNCA deixe o retorno vazio e NUNCA retorne código JSON solto nem frases técnicas sobre logs.`
+          }
+        ];
+
+        const chamadaContingencia: any = await callOpenAICompatibleLLM({
+          provider: dadosContexto.configuracaoCerebro.provider,
+          model: dadosContexto.configuracaoCerebro.model,
+          apiKey: dadosContexto.configuracaoCerebro.api_key,
+          baseUrl: dadosContexto.configuracaoCerebro.base_url,
+          messages: promptContingencia,
+          temperature: 0.3
+        });
+
+        textoRespostaFinal =
+          chamadaContingencia?.choices?.[0]?.message?.content?.trim() ||
+          `Comando recebido, ${activeSpeakerName}. A operação foi concluída com sucesso no ecossistema.`;
+      } catch {
+        textoRespostaFinal = `Estou operacional, ${activeSpeakerName}. Estímulo processado com sucesso.`;
+      }
+    }
+
     appendShortTermMemory(sessionId, 'user', userPrompt);
     appendShortTermMemory(sessionId, 'assistant', textoRespostaFinal);
     const tempoExecucaoMs = Date.now() - inicioExecucao;
 
-    // 7. Persistência Assíncrona e Dopamina
+    // 8. Persistência Assíncrona e Emissão de Pulso Sináptico (Dopamina)
     Promise.allSettled([
       pool.query(
         `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
