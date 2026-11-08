@@ -149,7 +149,7 @@ export async function processarExecucaoWorkflow(
     // 2. Visão Multimodal (Webcam / Tela)
     const visual = processarEntradaVisual(sensoryInput, userPrompt, activeSpeakerName);
     if (visual.ehPerguntaVisual && !visual.frameAtivo) {
-      return {
+      const respVisual = {
         success: true,
         triggeredSuccess: true,
         agent: 'JARVIS (Córtex Visual)',
@@ -160,8 +160,11 @@ export async function processarExecucaoWorkflow(
         identity: activeSpeakerName,
         sessionId,
         response: 'Ainda não estou recebendo o sinal da sua câmera ou tela, senhor. Ative o botão correspondente para que eu possa enxergar.',
-        executionTimeMs: Date.now() - inicioExecucao
+        executionTimeMs: Date.now() - inicioExecucao,
+        data: null as any
       };
+      respVisual.data = { ...respVisual };
+      return respVisual;
     }
 
     // 3. Montagem do Contexto, Memória e Ferramentas
@@ -323,6 +326,7 @@ export async function processarExecucaoWorkflow(
           textoRespostaFinal = `Entendido, ${activeSpeakerName}! Guardei isso na minha memória permanente: "${regraExtraida}".`;
           triggeredAgentName = 'JARVIS (Memória Evolutiva)';
           triggeredAgentId = 'jarvis_core';
+          triggeredNodeType = 'core';
         }
       }
     }
@@ -356,7 +360,7 @@ export async function processarExecucaoWorkflow(
       }
     }
 
-    // 7. Blindagem Anti-Vazio e Síntese Humanizada (Elimina o erro da imagem)
+    // 7. Blindagem Anti-Vazio e Síntese Humanizada
     const respostaEstaVazia =
       !textoRespostaFinal ||
       textoRespostaFinal.trim() === '' ||
@@ -428,7 +432,8 @@ export async function processarExecucaoWorkflow(
       metadata: { agent: triggeredAgentName, agentId: triggeredAgentId, speaker: activeSpeakerName }
     } as any);
 
-    return {
+    // Retorno unificado com espelhamento duplo (raiz e data)
+    const retornoExecucao: any = {
       success: true,
       triggeredSuccess: true,
       agent: triggeredAgentName,
@@ -442,6 +447,10 @@ export async function processarExecucaoWorkflow(
       response: textoRespostaFinal,
       executionTimeMs: tempoExecucaoMs
     };
+
+    retornoExecucao.data = { ...retornoExecucao };
+    return retornoExecucao;
+
   } catch (error: any) {
     console.error('❌ [Orquestrador Central] Erro na execução:', error?.message);
 
@@ -454,7 +463,7 @@ export async function processarExecucaoWorkflow(
       severity: 'high'
     }).catch(() => {});
 
-    return {
+    const retornoFalha: any = {
       success: false,
       triggeredSuccess: false,
       agent: 'Sistema Nervoso Central (Fallback Local)',
@@ -467,15 +476,19 @@ export async function processarExecucaoWorkflow(
       response: `Falha no processamento: ${error?.message || 'Verifique as credenciais no painel.'}`,
       executionTimeMs: Date.now() - inicioExecucao
     };
+
+    retornoFalha.data = { ...retornoFalha };
+    return retornoFalha;
   }
 }
 
 /**
- * Adaptador flexível de entrada
+ * Adaptador flexível de entrada para compatibilidade universal com controllers
+ * Suporta tanto chamada por objeto quanto posicional
  */
 export async function processarFluxoOrquestrador(arg1?: any, arg2?: any, arg3?: string, arg4?: any) {
   if (typeof arg1 === 'string') {
-    const token = arg1 || 'Admin-Node';
+    const token = arg1 || 'Matheus-Admin';
     const prompt = typeof arg2 === 'string' ? arg2 : arg2?.textPrompt || arg2?.prompt || 'Verificar status';
     const sid = arg3 || arg2?.sessionId || `sess_${Date.now()}`;
     const sensory = arg4 || (typeof arg2 === 'object' ? arg2 : undefined);
@@ -483,7 +496,7 @@ export async function processarFluxoOrquestrador(arg1?: any, arg2?: any, arg3?: 
   }
 
   const params = arg1 || {};
-  const token = params?.identityToken || params?.sensorData?.faceBadge || 'Admin-Node';
+  const token = params?.identityToken || params?.sensorData?.faceBadge || 'Matheus-Admin';
   const prompt =
     params?.prompt ||
     params?.textPrompt ||
