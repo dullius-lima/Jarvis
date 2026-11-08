@@ -76,8 +76,7 @@ export {
 
 /**
  * Interceptador especializado: captura blocos JSON de agendamento gerados no texto pela LLM,
- * extrai qualquer parâmetro dinâmico solicitado pelo usuário (título livre, data, horário, local e detalhes)
- * e aciona o conector do Google Calendar sem travar valores engessados.
+ * extrai parâmetros dinâmicos e aciona o conector do Google Calendar sem engessamento.
  */
 export async function interceptarAcaoAgenda(
   textoResposta: string
@@ -86,7 +85,6 @@ export async function interceptarAcaoAgenda(
     return { interceptado: false };
   }
 
-  // 1. Extração segura de JSON formatado em bloco Markdown (```json ... ```) ou texto puro
   let candidatoJson = textoResposta.trim();
   const blocoMarkdown = candidatoJson.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (blocoMarkdown && blocoMarkdown[1]) {
@@ -101,11 +99,9 @@ export async function interceptarAcaoAgenda(
   if (candidatoJson.startsWith('{') && candidatoJson.endsWith('}')) {
     try {
       const acaoParseada = JSON.parse(candidatoJson);
-
       const nomeTool = String(acaoParseada.tool || acaoParseada.toolName || acaoParseada.slug || '').toLowerCase();
       const nomeAcao = String(acaoParseada.action || '').toLowerCase();
 
-      // Identifica intenções voltadas ao Google Calendar / Agenda
       const ehAcaoCalendario =
         nomeTool === 'google_calendar' ||
         nomeTool === 'calendar' ||
@@ -116,10 +112,7 @@ export async function interceptarAcaoAgenda(
         nomeAcao === 'criar_evento';
 
       if (ehAcaoCalendario) {
-        // Coleta todos os parâmetros flexíveis enviados pela IA sem engessamento
         const parametros = acaoParseada.parameters || acaoParseada.params || acaoParseada.payload || acaoParseada;
-
-        // Importação dinâmica do serviço de integração com suporte à função em português
         const moduloIntegracao = await import('./integrationService.js');
         const executorAgenda = moduloIntegracao.agendarCalendarioGoogle || moduloIntegracao.scheduleCalendarHandler;
 
@@ -315,12 +308,12 @@ export async function processarExecucaoWorkflow(
       };
     }
 
-    // 3. CARREGAMENTO PARALELO DE CONFIGURAÇÃO, MEMÓRIA, RAG, AGENTES E TOOLS
+    // 3. CARREGAMENTO UNIVERSAL DE CONFIGURAÇÃO, MEMÓRIA, RAG, TODOS OS AGENTES E TOOLS
     const [
       resolvedBrainConfig,
       historyRes,
       ragRows,
-      agentsRes,
+      allAgentsRes,
       toolsCatalogData
     ] = await Promise.all([
       getCentralBrainConfig(),
@@ -331,8 +324,9 @@ export async function processarExecucaoWorkflow(
         )
         .catch(() => ({ rows: [] as any[] })),
       searchVectorDocuments(userPrompt, 3).catch(() => []),
+      // BUSCA TODOS OS AGENTES (ATIVOS E INATIVOS) PARA AUDITORIA TOTAL DO ECOSSISTEMA
       pool
-        .query(`SELECT * FROM ai_agents WHERE is_active = true ORDER BY id ASC;`)
+        .query(`SELECT * FROM ai_agents ORDER BY is_active DESC, id ASC;`)
         .catch(() => ({ rows: [] as any[] })),
       getDynamicToolsCatalog()
     ]);
@@ -356,7 +350,10 @@ export async function processarExecucaoWorkflow(
         .join('\n');
     }
 
-    const activeAgents = agentsRes.rows;
+    const allAgentsList = allAgentsRes.rows;
+    const activeAgents = allAgentsList.filter((a: any) => a.is_active !== false);
+    const inactiveAgents = allAgentsList.filter((a: any) => a.is_active === false);
+
     const { catalog: liveToolsCatalog, connectorsMap } = toolsCatalogData;
     const validToolSlugs = liveToolsCatalog.map((t) => t.slug);
 
@@ -370,22 +367,36 @@ export async function processarExecucaoWorkflow(
                 } | Uso: ${t.description}`
             )
             .join('\n')
-        : 'Nenhuma tool cadastrada no momento.';
+        : 'Nenhuma tool externa cadastrada no momento.';
 
-    const existingAgentsSummary =
+    // Sumário detalhado dos Agentes Ativos e Inativos
+    const activeAgentsSummary =
       activeAgents.length > 0
         ? activeAgents
             .map(
               (a: any) =>
-                `- Nome: "${a.name}" | Slug: "${sanitizeToolName(a.slug)}" | Modo: ${(
+                `- [ATIVO] Nome: "${a.name}" | Slug: "${sanitizeToolName(a.slug)}" | Modo: ${(
                   a.agent_type || 'llm'
                 ).toUpperCase()} | Tools: ${JSON.stringify(a.tools || [])} | Gatilho: ${
-                  a.description || ''
+                  a.description || 'Geral'
                 }`
             )
             .join('\n')
-        : 'Nenhum especialista cadastrado.';
+        : 'Nenhum especialista ativo.';
 
+    const inactiveAgentsSummary =
+      inactiveAgents.length > 0
+        ? inactiveAgents
+            .map(
+              (a: any) =>
+                `- [INATIVO / PAUSADO] Nome: "${a.name}" | Slug: "${sanitizeToolName(a.slug)}" | Modo: ${(
+                  a.agent_type || 'llm'
+                ).toUpperCase()} | Pode ser reativado.`
+            )
+            .join('\n')
+        : 'Nenhum especialista pausado.';
+
+    // Transforma cada subagente ATIVO em uma Tool nativa invocável pelo Cérebro Central
     const tools: any[] = activeAgents.map((ag: any) => {
       const safeSlug = sanitizeToolName(ag.slug);
       return {
@@ -417,6 +428,7 @@ export async function processarExecucaoWorkflow(
       };
     });
 
+    // META-TOOLS ADMINISTRATIVAS E NATIVAS DO JARVIS
     tools.push(
       {
         type: 'function',
@@ -464,27 +476,31 @@ export async function processarExecucaoWorkflow(
         function: {
           name: 'create_or_update_ai_agent',
           description:
-            'Cria um novo Subagente Especialista ou EDITA um existente (mesmo slug). Prefira agent_type="code" ou "api" para economizar tokens.',
+            'Cria um novo Subagente Especialista ou EDITA um existente (mesmo slug). Utilize sempre que o usuário solicitar a criação de um especialista ou autorizar a criação sugerida.',
           parameters: {
             type: 'object',
             properties: {
-              name: { type: 'string' },
-              slug: { type: 'string' },
-              agent_type: { type: 'string', enum: ['code', 'api', 'mcp', 'llm'] },
-              description: { type: 'string' },
+              name: { type: 'string', description: 'Nome legível do agente (ex: Monitor de Criptoativos)' },
+              slug: { type: 'string', description: 'Identificador único em minúsculas (ex: crypto_binance_agent)' },
+              agent_type: {
+                type: 'string',
+                enum: ['code', 'api', 'mcp', 'llm'],
+                description: 'code (script puro/cálculos), api (requisições REST/Webhook), mcp (servidor MCP), llm (análise cognitiva)'
+              },
+              description: { type: 'string', description: 'Gatilho orientando quando o JARVIS deve acioná-lo' },
               code_snippet: { type: 'string' },
               http_method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'] },
               endpoint_url: { type: 'string' },
               auth_token: { type: 'string' },
               payload_template: { type: 'string' },
-              system_prompt: { type: 'string' },
+              system_prompt: { type: 'string', description: 'Instruções de execução e persona do especialista' },
               append_behavior_rule: { type: 'string' },
               icon: { type: 'string' },
-              tools: { type: 'array', items: { type: 'string' } },
+              tools: { type: 'array', items: { type: 'string' }, description: 'Lista de tools/conectores permitidos' },
               replace_tools: { type: 'boolean' },
               next_agent_slug: { type: 'string' },
               cron_expression: { type: 'string' },
-              execute_immediately: { type: 'boolean' }
+              execute_immediately: { type: 'boolean', description: 'Se true, executa a tarefa logo após criar o agente' }
             },
             required: ['name', 'slug', 'agent_type', 'description']
           }
@@ -627,7 +643,7 @@ export async function processarExecucaoWorkflow(
       ];
     }
 
-    // 5. PRIMEIRA PASSADA COGNITIVA (DISPATCHER DA LLM CENTRAL)
+    // 5. PRIMEIRA PASSADA COGNITIVA COM DIRETRIZES DE AUDITORIA, ROTEAMENTO E AUTO-SUGESTÃO
     const messages: any[] = [
       {
         role: 'system',
@@ -636,16 +652,37 @@ ${currentTimestampContext}
 Identidade Autenticada / Locutor: ${activeSpeakerName} (${speakerRole})
 URL Base do Servidor: ${dynamicServerBaseUrl}${visionSystemInstruction}
 
---- CATÁLOGO DINÂMICO DE TOOLS / CONEXÕES DISPONÍVEIS ---
+--- CATÁLOGO DE TOOLS / CONEXÕES DISPONÍVEIS ---
 ${liveToolsSummary}
 
-REGRAS OBRIGATÓRIAS DE EXECUÇÃO:
-1. NUNCA gere blocos de texto contendo estruturas JSON como {"tool": ...} ou {"action": ...} para conversação comum.
-2. Para cumprimentos e perguntas do dia a dia, responda sempre em linguagem natural, fluida e direta em português.
-3. Trate o usuário de forma respeitosa, inteligente e alinhada à sua identidade reconhecida (${activeSpeakerName}).
+--- AGENTES ESPECIALISTAS ATIVOS NO SISTEMA ---
+${activeAgentsSummary}
 
---- AGENTES ESPECIALISTAS ATIVOS ---
-${existingAgentsSummary}
+--- AGENTES EXISTENTES PAUSADOS / INATIVOS ---
+${inactiveAgentsSummary}
+
+[DIRETRIZES FUNDAMENTAIS DE ROTEAMENTO, AGENTES E AUTO-SUGESTÃO]:
+1. MAPEAMENTO DE INTENÇÃO E AGENTES EXISTENTES:
+   - Sempre avalie se o pedido do usuário já possui um Agente Especialista Ativo capaz de atendê-lo. Se sim, invoque-o imediatamente via Tool Call nativa.
+   - Se o agente correspondente estiver na lista de [INATIVOS], avise o usuário que o agente já foi criado e pergunte se ele deseja reativá-lo.
+   - Se um agente ativo do mesmo domínio já existir (ex: Finanças, Automação, E-mail) mas faltar uma ferramenta ou detalhe técnico no prompt, EDITE o agente existente chamando 'create_or_update_ai_agent' com o MESMO slug. NUNCA crie agentes duplicados para o mesmo domínio.
+
+2. PROTOCOLO OBRIGATÓRIO QUANDO NÃO HOUVER AGENTE DISPONÍVEL:
+   - Se o usuário solicitar uma tarefa, consulta externa ou automação para a qual NÃO EXISTE nenhum agente nem ferramenta disponível no sistema (ex: monitorar criptomoedas na Binance, buscar voos, integrar com Notion, auditar contratos):
+     a) NUNCA invente nem simule dados técnicos ou cotações em tempo real.
+     b) NUNCA gere blocos JSON na conversa direta com o usuário.
+     c) Reconheça que o ecossistema ainda não possui um especialista configurado para essa finalidade.
+     d) SUGIRA DETALHADAMENTE A CRIAÇÃO DO AGENTE ESPECÍFICO apresentando uma proposta estruturada:
+        - 🤖 **Agente Sugerido:** [Nome claro do Especialista]
+        - 🏷️ **Identificador (Slug):** [slug_tecnico_sem_espacos]
+        - ⚙️ **Tipo de Execução:** 'code' (se cálculo puro/script, 0 tokens), 'api' (se requisição REST/Webhook com JSON, 0 tokens) ou 'llm' (se análise cognitiva subjetiva)
+        - 🔌 **Conectores / Ferramentas:** [Ferramentas nativas necessárias ou endpoint da API]
+        - 🎯 **Gatilho de Acionamento:** [Descrição sucinta de quando acioná-lo]
+        - 📝 **Instrução Proposta (System Prompt):** [Regra de atuação do agente]
+     e) Finalize perguntando de forma clara: "Deseja que eu crie e configure este especialista no sistema agora para você?"
+
+3. CRIAÇÃO DIRETA AUTORIZADA:
+   - Se o usuário disser explicitamente "Crie um agente...", "Configure um especialista para..." ou se ele responder "Sim, crie o agente sugerido", invoque IMEDIATAMENTE a ferramenta 'create_or_update_ai_agent' com execute_immediately: true para salvar no PostgreSQL e já entregar o resultado!
 ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
       },
       ...conversationThread,
@@ -791,6 +828,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
+        // Verifica se é um dos Agentes Especialistas Ativos
         const matchedAgent = activeAgents.find(
           (a: any) => sanitizeToolName(a.slug) === fnName
         );
@@ -832,6 +870,7 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
           continue;
         }
 
+        // Conector direto
         if (connectorsMap.has(fnName) || validToolSlugs.includes(fnName)) {
           triggeredAgentId = fnName;
           triggeredNodeType = 'api';
@@ -884,7 +923,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
     }
 
     // 7. INTERCEPTAÇÃO DE AÇÕES DE AGENDAMENTO E JSON RESIDUAL
-    // 7.1 Interceptador de Agendamento Dinâmico do Google Calendar em Texto / JSON
     const agendamentoInterceptado = await interceptarAcaoAgenda(finalResponseText);
     if (agendamentoInterceptado.interceptado && agendamentoInterceptado.respostaTexto) {
       finalResponseText = agendamentoInterceptado.respostaTexto;
@@ -892,7 +930,6 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
       triggeredAgentId = 'calendar_agent';
       triggeredNodeType = 'api';
     } else {
-      // 7.2 Interceptador Universal para outras Tools e Especialistas
       const hasResidualJson =
         extractJsonActionBlocks(finalResponseText).length > 0 ||
         finalResponseText.includes('"toolName"') ||
