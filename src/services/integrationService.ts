@@ -390,7 +390,7 @@ export async function executarConectorExterno({
       return { success: true, provider: 'gmail', action: 'read_inbox', total: details.length, messages: details };
     }
 
-    // --------------------------------------------------------------------------
+// --------------------------------------------------------------------------
   // GOOGLE CALENDAR: TOTALMENTE CORRIGIDO PARA DATA, HORA E FUSO
   // --------------------------------------------------------------------------
   case 'google_calendar': {
@@ -398,6 +398,7 @@ export async function executarConectorExterno({
     const acaoAtual = String(action || payload.action || 'list_events').toLowerCase();
     const calendarBase = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 
+    // 1. Criar novo compromisso / agendamento
     if (
       acaoAtual === 'create_event' ||
       acaoAtual === 'schedule' ||
@@ -425,7 +426,7 @@ export async function executarConectorExterno({
 
       const fuso = parametros.timezone || 'America/Campo_Grande';
 
-      // Parser inteligente que combina data e horário caso venham em propriedades separadas
+      // Parser inteligente que combina data e horário caso venham separados
       const dataStr = String(parametros.data || parametros.date || '').trim();
       const horaStr = String(parametros.horario || parametros.time || parametros.hora || '').trim();
       const inicioCombinado = parametros.startTime || parametros.start || parametros.start_time || parametros.data_hora;
@@ -433,7 +434,7 @@ export async function executarConectorExterno({
       let dataInicio: Date = new Date();
 
       if (dataStr && horaStr) {
-        // Unifica ex: "2026-11-09" + "15:00"
+        // Ex: "2026-11-09" + "15:00"
         const isoMontado = `${dataStr.replace(/\//g, '-')}T${horaStr.length === 5 ? `${horaStr}:00` : horaStr}`;
         const d = new Date(isoMontado);
         if (!isNaN(d.getTime())) dataInicio = d;
@@ -535,13 +536,18 @@ export async function executarConectorExterno({
       };
     }
 
-    // Listagem existente mantida
+    // 2. Listar compromissos existentes (ÚNICA OCORRÊNCIA)
     const maxResults = Number(payload.maxResults || payload.pageSize || payload.limite || 10);
     const timeMin = payload.timeMin ? new Date(payload.timeMin).toISOString() : new Date().toISOString();
+
     const urlListagem = `${calendarBase}?maxResults=${maxResults}&orderBy=startTime&singleEvents=true&timeMin=${encodeURIComponent(timeMin)}`;
-    const res = await fetch(urlListagem, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const res = await fetch(urlListagem, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
     const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error?.message || `Erro HTTP ${res.status} ao listar agenda.`);
+    if (!res.ok) {
+      throw new Error(data.error?.message || `Erro HTTP ${res.status} ao listar agenda.`);
+    }
 
     const eventos = (data.items || []).map((item: any) => ({
       id: item.id,
@@ -552,39 +558,14 @@ export async function executarConectorExterno({
       link: item.htmlLink
     }));
 
-    return { success: true, provider: 'google_calendar', action: 'list_events', total: eventos.length, events: eventos };
+    return {
+      success: true,
+      provider: 'google_calendar',
+      action: 'list_events',
+      total: eventos.length,
+      events: eventos
+    };
   }
-
-      // 2. Listar compromissos existentes
-      const maxResults = Number(payload.maxResults || payload.pageSize || payload.limite || 10);
-      const timeMin = payload.timeMin ? new Date(payload.timeMin).toISOString() : new Date().toISOString();
-
-      const urlListagem = `${calendarBase}?maxResults=${maxResults}&orderBy=startTime&singleEvents=true&timeMin=${encodeURIComponent(timeMin)}`;
-      const res = await fetch(urlListagem, {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-      const data: any = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.error?.message || `Erro HTTP ${res.status} ao listar agenda.`);
-      }
-
-      const eventos = (data.items || []).map((item: any) => ({
-        id: item.id,
-        summary: item.summary || '(Sem Título)',
-        description: item.description || '',
-        start: item.start?.dateTime || item.start?.date,
-        end: item.end?.dateTime || item.end?.date,
-        link: item.htmlLink
-      }));
-
-      return {
-        success: true,
-        provider: 'google_calendar',
-        action: 'list_events',
-        total: eventos.length,
-        events: eventos
-      };
-    }
 
     // --------------------------------------------------------------------------
     // GOOGLE DRIVE: CRIAR PASTAS, UPLOAD, LIXEIRA E LISTAGEM
