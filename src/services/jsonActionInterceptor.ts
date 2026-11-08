@@ -134,15 +134,43 @@ export async function interceptAndExecuteTextActions(params: {
   }
 
   // CASO 1: Criar ou Atualizar um Agente via JSON no texto (create_or_update_ai_agent)
-  if (actionName === 'create_or_update_ai_agent') {
+  const isAgentCreation =
+    actionName === 'create_or_update_ai_agent' ||
+    actionName === 'create_agent' ||
+    actionName === 'delegar_criacao_ou_ajuste_de_subagente' ||
+    firstBlock.tool === 'delegar_criacao_ou_ajuste_de_subagente';
+
+  if (isAgentCreation) {
     const slug = sanitizeToolName(actionParams.slug || actionParams.name || 'custom_agent');
-    const name = String(actionParams.name || slug);
-    const agentType = String(actionParams.mode || actionParams.agent_type || 'llm').toLowerCase();
+    const name = String(actionParams.nome || actionParams.name || slug);
+    const agentType = String(actionParams.modo || actionParams.agent_type || 'llm').toLowerCase();
     const endpointUrl = String(actionParams.endpoint_url || '');
     const httpMethod = String(actionParams.http_method || 'GET').toUpperCase();
     const systemPrompt = String(actionParams.system_prompt || '');
     const tools = Array.isArray(actionParams.tools) ? actionParams.tools : [];
+    const triggerDesc = actionParams.gatilho || actionParams.description || `Agente ${name}`;
 
+    // 1.1 FILTRO DE DISCERNIMENTO: Valida se a ferramenta já existe no ecossistema
+    const requestedTools = tools.map((t: string) => t.toLowerCase());
+    const existingToolsCheck = await pool.query(
+      `SELECT slug, name FROM external_connectors WHERE LOWER(slug) = ANY($1::text[]);`,
+      [requestedTools]
+    ).catch(() => ({ rows: [] as any[] }));
+
+    // Se o usuário pediu apenas ações de e-mail e a ferramenta 'gmail' já existe, não cria agente redundante
+    if (requestedTools.includes('gmail') && existingToolsCheck.rows.length > 0 && tools.length === 1) {
+      return {
+        interceptado: true,
+        finalText: `ℹ️ O conector nativo do **Gmail** já está integrado e disponível no seu ecossistema. Não é necessário criar um subagente redundante para isso. Você já pode solicitar a leitura, envio ou organização de e-mails diretamente ao JARVIS.`,
+        agentName: 'JARVIS (Orquestrador)',
+        agentSlug: 'jarvis_core',
+        nodeType: 'core',
+        triggeredSuccess: true,
+        executionData: { bypassedDueToExistingTool: 'gmail' }
+      };
+    }
+
+    // 1.2 EXECUÇÃO OU PERSISTÊNCIA: Cria ou atualiza o agente se for realmente inédito
     await pool.query(
       `INSERT INTO ai_agents (name, slug, agent_type, description, system_prompt, endpoint_url, http_method, tools, is_active)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, TRUE)
@@ -153,12 +181,13 @@ export async function interceptAndExecuteTextActions(params: {
          endpoint_url = EXCLUDED.endpoint_url,
          http_method = EXCLUDED.http_method,
          tools = EXCLUDED.tools,
+         description = EXCLUDED.description,
          updated_at = NOW();`,
       [
         name,
         slug,
         agentType,
-        actionParams.description || `Agente ${name}`,
+        triggerDesc,
         systemPrompt,
         endpointUrl,
         httpMethod,
@@ -167,8 +196,8 @@ export async function interceptAndExecuteTextActions(params: {
     );
 
     return {
-      intercepted: true,
-      finalText: `✅ **[Auto-Executor]** O agente **${name}** (\`${slug}\`) foi gravado e ativado com sucesso.`,
+      interceptado: true,
+      finalText: `✅ **Subagente Configurado com Sucesso!**\n- **Nome:** ${name}\n- **Identificador (slug):** \`${slug}\`\n- **Tipo:** ${agentType.toUpperCase()}\n- **Ferramentas Vinculadas:** ${tools.join(', ') || 'Nenhuma'}\n- **Gatilho:** ${triggerDesc}`,
       agentName: name,
       agentSlug: slug,
       nodeType: agentType,
@@ -176,13 +205,7 @@ export async function interceptAndExecuteTextActions(params: {
       executionData: { createdOrUpdated: slug }
     };
   }
-
-  const [brainConfig, { connectorsMap }] = await Promise.all([
-    getCentralBrainConfig(),
-    getDynamicToolsCatalog()
-  ]);
-  const serverBase = params.serverBaseUrl || brainConfig.server_base_url || 'http://localhost:3333';
-
+  
   // CASO 2: Se o toolName é diretamente uma Tool do catálogo ou integração nativa (ex: consultar_mercado_de_valores, google_calendar, gmail, home_assistant)
   const isKnownToolOrIntegration =
     connectorsMap.has(actionName) ||
