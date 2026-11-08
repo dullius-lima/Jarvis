@@ -348,7 +348,8 @@ async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
     speakJarvisResponse(msg);
   } finally {
     isProcessing.value = false;
-  }
+  } // <-- Fecha o bloco finally
+}
 
 let refreshIntervalId: any = null;
 
