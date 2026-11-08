@@ -108,12 +108,12 @@ export async function ensureOrchestratorSchema(): Promise<void> {
     // 3. Registro persistente do Subagente Arquiteto (Fábrica de Agentes)
     await pool.query(`
       INSERT INTO ai_agents (
-        name, 
-        slug, 
-        description, 
-        system_prompt, 
-        agent_type, 
-        icon, 
+        name,
+        slug,
+        description,
+        system_prompt,
+        agent_type,
+        icon,
         is_active
       )
       VALUES (
@@ -233,8 +233,6 @@ function cleanKey(rawKey?: any): string {
   return k;
 }
 
-// Em src/services/orchestrator/brainConfigAndUtils.ts
-
 export function resolveProviderCredentials(
   provider?: string,
   customKey?: string,
@@ -254,26 +252,54 @@ export function resolveProviderCredentials(
     else apiKey = cleanKey(process.env.LLM_API_KEY || process.env.GROQ_API_KEY);
   }
 
-  // Identificação automática por prefixo de chave, sem prender provedor se o usuário definiu outro
-  if (!provider && apiKey) {
-    if (apiKey.startsWith('gsk_')) p = 'groq';
-    else if (apiKey.startsWith('AIza')) p = 'gemini';
-    else if (apiKey.startsWith('sk-or-')) p = 'openrouter';
+  // Identificação automática por prefixo de chave caso o provedor esteja inconsistente
+  if (apiKey) {
+    if (apiKey.startsWith('gsk_') && p !== 'groq') p = 'groq';
+    else if (apiKey.startsWith('AIza') && p !== 'gemini') p = 'gemini';
+    else if (apiKey.startsWith('sk-or-') && p !== 'openrouter') p = 'openrouter';
   }
 
   const endpoints = { ...DEFAULT_KNOWN_ENDPOINTS, ...(KNOWN_ENDPOINTS || {}) };
-  // A Base URL deve ser do provedor específico do nó, nunca herdada de outro provedor incompatível
   let baseURL = (customUrl && customUrl.trim()) || endpoints[p] || endpoints.groq;
+  // Evita que base_url do Gemini seja usada na Groq ou vice-versa
+  if (p === 'groq' && !baseURL.includes('groq.com')) {
+    baseURL = DEFAULT_KNOWN_ENDPOINTS.groq;
+  } else if (p === 'gemini' && !baseURL.includes('googleapis.com')) {
+    baseURL = DEFAULT_KNOWN_ENDPOINTS.gemini;
+  }
   baseURL = baseURL.replace(/\/+$/, '');
 
-  // Modelo livre: preserva exatamente o modelo solicitado pelo usuário
-  let model = customModel && customModel.trim() && customModel !== 'CUSTOM_INPUT'
-    ? customModel.trim()
-    : p === 'groq'
-    ? 'llama-3.3-70b-versatile'
-    : p === 'gemini'
-    ? 'gemini-2.5-flash'
-    : 'gpt-4o-mini';
+  let model =
+    customModel && customModel.trim() && customModel !== 'CUSTOM_INPUT'
+      ? customModel.trim()
+      : p === 'groq'
+      ? 'llama-3.3-70b-versatile'
+      : p === 'gemini'
+      ? 'gemini-2.5-flash'
+      : 'gpt-4o-mini';
+
+  // Higieniza modelos descontinuados ou incompatíveis com Function Calling
+  if (p === 'groq') {
+    if (
+      model.includes('8b-instant') ||
+      model.includes('gemma') ||
+      model.includes('mixtral') ||
+      model.includes('deepseek-r1') ||
+      model.includes('gpt-oss') ||
+      model.includes('gemini')
+    ) {
+      model = 'llama-3.3-70b-versatile';
+    }
+  } else if (p === 'gemini') {
+    if (
+      !model.startsWith('gemini') ||
+      model.includes('argon') ||
+      model.includes('3.8') ||
+      model.includes('2.0-flash')
+    ) {
+      model = 'gemini-2.5-flash';
+    }
+  }
 
   return { provider: p, apiKey: apiKey || 'ollama', baseURL, model };
 }
@@ -281,7 +307,10 @@ export function resolveProviderCredentials(
 export async function getCentralBrainConfig() {
   let activePort = 3333;
   try {
-    activePort = typeof getEnvRegisteredPort === 'function' ? getEnvRegisteredPort() : Number(process.env.PORT || 3333);
+    activePort =
+      typeof getEnvRegisteredPort === 'function'
+        ? getEnvRegisteredPort()
+        : Number(process.env.PORT || 3333);
   } catch {
     activePort = Number(process.env.PORT || 3333);
   }
@@ -289,7 +318,7 @@ export async function getCentralBrainConfig() {
   try {
     const result = await pool.query(`
       SELECT value FROM system_configs 
-      WHERE key IN ('brain_llm_config', 'brain_llm') 
+      WHERE key IN ('brain_llm_config', 'brain_config', 'brain_llm') 
       ORDER BY updated_at DESC LIMIT 1;
     `);
 
@@ -299,7 +328,6 @@ export async function getCentralBrainConfig() {
       if (parsed && typeof parsed === 'object') {
         const activeProv = String(parsed.provider || 'groq').toLowerCase().trim();
 
-        // Preserva integralmente o cofre de chaves
         const savedKeys: Record<string, string> = {};
         if (parsed.saved_keys && typeof parsed.saved_keys === 'object') {
           for (const [prov, val] of Object.entries(parsed.saved_keys)) {
@@ -325,10 +353,15 @@ export async function getCentralBrainConfig() {
           model: creds.model,
           api_key: creds.apiKey,
           base_url: creds.baseURL,
-          server_base_url: parsed.server_base_url || process.env.SERVER_BASE_URL || `http://localhost:${activePort}`,
+          server_base_url:
+            parsed.server_base_url ||
+            process.env.SERVER_BASE_URL ||
+            `http://localhost:${activePort}`,
           temperature: Number(parsed.temperature ?? 0.2),
-          system_prompt: parsed.system_prompt || 'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema.',
-          saved_keys: savedKeys // Retorna o cofre para consulta dos subagentes
+          system_prompt:
+            parsed.system_prompt ||
+            'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema.',
+          saved_keys: savedKeys
         };
       }
     }
@@ -382,53 +415,40 @@ export async function salvarMemoriaPermanente(params: {
   conteudo: string;
   agente_alvo?: string;
 }) {
-  const alvo = (params.agente_alvo || 'jarvis_core').toLowerCase().trim();
-  const novaInstrucao = (params.conteudo || '').trim();
+  const alvo = (params.agente_alvo || 'jarvis_core').trim();
+  const novaRegra = `\n- [${params.tipo.toUpperCase()}]: ${params.conteudo.trim()}`;
 
-  if (!novaInstrucao) {
-    return { sucesso: false, mensagem: 'Conteúdo de memória vazio.' };
-  }
+  if (alvo === 'jarvis_core' || alvo === 'jarvis') {
+    const res = await pool.query(
+      `SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;`
+    );
+    const configAtual = res.rows[0]?.value || {};
+    const promptAtual =
+      configAtual.system_prompt || 'Você é o JARVIS, Cérebro Central do sistema.';
 
-  try {
-    if (alvo === 'jarvis' || alvo === 'jarvis_core') {
-      const res = await pool.query(
-        "SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;"
-      );
-      let brainConfig = res.rows[0]?.value || {};
-      if (typeof brainConfig === 'string') {
-        try { brainConfig = JSON.parse(brainConfig); } catch { brainConfig = {}; }
-      }
-
-      const promptAtual = brainConfig.system_prompt || 'Você é o JARVIS, o Cérebro Central.';
-      const promptAtualizado = `${promptAtual}\n\n[DIRETRIZ APRENDIDA - ${params.tipo.toUpperCase()}]:\n- ${novaInstrucao}`;
-      brainConfig.system_prompt = promptAtualizado;
-
+    if (!promptAtual.includes(params.conteudo.trim())) {
+      configAtual.system_prompt = `${promptAtual}\n\n[MEMÓRIA PERMANENTE E ESTILO APRENDIDO]:${novaRegra}`;
       await pool.query(
         `INSERT INTO system_configs (key, value, updated_at)
          VALUES ('brain_llm_config', $1::jsonb, NOW())
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
-        [JSON.stringify(brainConfig)]
+        [JSON.stringify(configAtual)]
       );
-
-      return {
-        sucesso: true,
-        mensagem: `Aprendizado gravado no núcleo central do JARVIS: "${novaInstrucao}"`
-      };
-    } else {
-      await pool.query(
-        `UPDATE ai_agents 
-         SET system_prompt = CONCAT(COALESCE(system_prompt, ''), E'\n\n[DIRETRIZ APRENDIDA]:\n- ', $1::text),
-             updated_at = NOW()
-         WHERE LOWER(slug) = LOWER($2);`,
-        [novaInstrucao, alvo]
-      );
-
-      return {
-        sucesso: true,
-        mensagem: `Diretriz gravada com sucesso no especialista [${alvo}]: "${novaInstrucao}"`
-      };
     }
-  } catch (error: any) {
-    return { sucesso: false, mensagem: `Erro ao salvar memória permanente: ${error.message}` };
+    return {
+      success: true,
+      message: `Memória permanente gravada no núcleo JARVIS: "${params.conteudo}"`
+    };
+  } else {
+    await pool.query(
+      `UPDATE ai_agents 
+       SET system_prompt = COALESCE(system_prompt, '') || $1, updated_at = NOW()
+       WHERE slug = $2;`,
+      [`\n${novaRegra}`, alvo]
+    );
+    return {
+      success: true,
+      message: `Diretriz gravada permanentemente no especialista ${alvo}.`
+    };
   }
 }
