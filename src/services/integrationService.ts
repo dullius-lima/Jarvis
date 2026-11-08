@@ -294,6 +294,52 @@ export async function executarConectorExterno({
     }
 
     // --------------------------------------------------------------------------
+    // WHATSAPP (EVOLUTION API / BAILEYS)
+    // --------------------------------------------------------------------------
+    case 'whatsapp': {
+      const urlBase = (config.endpoint_url || process.env.EVOLUTION_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
+      const apiKey = token || config.api_key || process.env.EVOLUTION_API_KEY || 'jarvis-evolution-secret-2026';
+      const instancia = payload.instance || config.instance_name || 'jarvis-whats';
+
+      const numeroBruto = payload.number || payload.to || payload.recipientId || payload.destinatario || payload.chat_id || '';
+      const destinatario = String(numeroBruto).replace(/\D/g, '');
+      const textoMensagem = payload.text || payload.message || payload.mensagem || payload.body || '';
+
+      if (!destinatario) {
+        throw new Error('Número de telefone do destinatário é obrigatório para envio via WhatsApp.');
+      }
+      if (!textoMensagem) {
+        throw new Error('Texto da mensagem é obrigatório para envio via WhatsApp.');
+      }
+
+      const res = await fetch(`${urlBase}/message/sendText/${instancia}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': apiKey
+        },
+        body: JSON.stringify({
+          number: destinatario,
+          text: textoMensagem
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+
+      const data: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msgErro = data.response?.message?.[0] || data.message || `Erro HTTP ${res.status} na Evolution API`;
+        throw new Error(msgErro);
+      }
+
+      return {
+        success: true,
+        provider: 'whatsapp',
+        destinatario,
+        data
+      };
+    }
+
+    // --------------------------------------------------------------------------
     // GMAIL: LEITURA, ENVIO E EXCLUSÃO
     // --------------------------------------------------------------------------
     case 'gmail': {
