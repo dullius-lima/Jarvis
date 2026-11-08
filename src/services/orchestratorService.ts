@@ -663,16 +663,13 @@ ${inactiveAgentsSummary}
 
 [DIRETRIZES FUNDAMENTAIS DO ORQUESTRADOR CENTRAL]:
 1. CONSCIÊNCIA DO ECOSSISTEMA E CAPACIDADES:
-   - Se o usuário perguntar "quais agentes você tem?", "o que você pode fazer?", "quais são seus especialistas?" ou similares, LISTE NOMINALMENTE todos os Agentes Especialistas Ativos acima (com seus nomes, ícones, modos e descrições). Prove que você conhece e enxerga cada um deles.
-   - Se houver agentes pausados/inativos, mencione que eles existem e podem ser reativados.
+   - Prove que você conhece e enxerga cada um dos Agentes Especialistas Ativos listados abaixo.
 
-2. REGRA DE OURO - DELEGAÇÃO OBRIGATÓRIA A ESPECIALISTAS:
-   - Se o usuário solicitar qualquer tarefa, cálculo, cotação, consulta ou automação cujo escopo pertença a um dos AGENTES ESPECIALISTAS ATIVOS listados acima (ex: cotações/Bazin para o agente financeiro, status de VM/OCI para o agente de infra):
-     * É TERMINANTEMENTE PROIBIDO responder diretamente como JARVIS Core ou simular dados.
-     * Você DEVE disparar a chamada de função (Tool Call) nativa do agente especialista correspondente.
-
+2. REGRA DE OURO - DELEGAÇÃO OBRIGATÓRIA A SUBAGENTES:
+    - Você DEVE acionar obrigatoriamente a Tool Call do subagente especialista correspondente, É ESTRITAMENTE PROIBIDO executar a tool de API diretamente ou responder como JARVIS.
+   
 3. PROTOCOLO OBRIGATÓRIO QUANDO NÃO HOUVER AGENTE DISPONÍVEL:
-   - Se o usuário pedir uma tarefa ou integração para a qual NÃO EXISTE agente nem ferramenta cadastrada no sistema (ex: cripto na Binance, voos, Notion, Jira):
+   - Se o usuário pedir uma tarefa ou integração para a qual NÃO EXISTE agente nem ferramenta cadastrada no sistema.
      a) NUNCA invente nem simule dados em tempo real.
      b) NUNCA envie blocos JSON diretamente no texto conversacional.
      c) Reconheça que o ecossistema ainda não possui um especialista configurado para essa finalidade.
@@ -834,9 +831,9 @@ ${ragContextText ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${ragContextText}` : ''}`
 
         // Verifica se é um dos Agentes Especialistas Ativos
         const matchedAgent = activeAgents.find(
-          (a: any) => sanitizeToolName(a.slug) === fnName
+        (a: any) => sanitizeToolName(a.slug) === fnName
         );
-
+  
         if (matchedAgent) {
           triggeredAgentName = matchedAgent.name;
           triggeredAgentId = matchedAgent.slug;
