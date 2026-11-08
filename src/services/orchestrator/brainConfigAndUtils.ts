@@ -233,6 +233,8 @@ function cleanKey(rawKey?: any): string {
   return k;
 }
 
+// Em src/services/orchestrator/brainConfigAndUtils.ts
+
 export function resolveProviderCredentials(
   provider?: string,
   customKey?: string,
@@ -252,25 +254,26 @@ export function resolveProviderCredentials(
     else apiKey = cleanKey(process.env.LLM_API_KEY || process.env.GROQ_API_KEY);
   }
 
-  if (apiKey.startsWith('gsk_')) p = 'groq';
-  else if (apiKey.startsWith('AIza')) p = 'gemini';
-  else if (apiKey.startsWith('sk-or-')) p = 'openrouter';
+  // Identificação automática por prefixo de chave, sem prender provedor se o usuário definiu outro
+  if (!provider && apiKey) {
+    if (apiKey.startsWith('gsk_')) p = 'groq';
+    else if (apiKey.startsWith('AIza')) p = 'gemini';
+    else if (apiKey.startsWith('sk-or-')) p = 'openrouter';
+  }
 
   const endpoints = { ...DEFAULT_KNOWN_ENDPOINTS, ...(KNOWN_ENDPOINTS || {}) };
+  // A Base URL deve ser do provedor específico do nó, nunca herdada de outro provedor incompatível
   let baseURL = (customUrl && customUrl.trim()) || endpoints[p] || endpoints.groq;
   baseURL = baseURL.replace(/\/+$/, '');
 
+  // Modelo livre: preserva exatamente o modelo solicitado pelo usuário
   let model = customModel && customModel.trim() && customModel !== 'CUSTOM_INPUT'
     ? customModel.trim()
     : p === 'groq'
     ? 'llama-3.3-70b-versatile'
+    : p === 'gemini'
+    ? 'gemini-2.5-flash'
     : 'gpt-4o-mini';
-
-  if (p === 'groq') {
-    if (!model || model.includes('8b-instant') || model.includes('deepseek-r1')) {
-      model = 'llama-3.3-70b-versatile';
-    }
-  }
 
   return { provider: p, apiKey: apiKey || 'ollama', baseURL, model };
 }
@@ -296,13 +299,18 @@ export async function getCentralBrainConfig() {
       if (parsed && typeof parsed === 'object') {
         const activeProv = String(parsed.provider || 'groq').toLowerCase().trim();
 
-        const vaultKey = cleanKey(parsed.saved_keys?.[activeProv]);
-        const mainKey = cleanKey(parsed.api_key);
-        const anyVaultKey = parsed.saved_keys
-          ? (Object.values(parsed.saved_keys).map(cleanKey).find((v) => v.length > 5) || '')
-          : '';
+        // Preserva integralmente o cofre de chaves
+        const savedKeys: Record<string, string> = {};
+        if (parsed.saved_keys && typeof parsed.saved_keys === 'object') {
+          for (const [prov, val] of Object.entries(parsed.saved_keys)) {
+            const k = cleanKey(val);
+            if (k) savedKeys[prov.toLowerCase()] = k;
+          }
+        }
 
-        const effectiveKey = vaultKey || mainKey || anyVaultKey || '';
+        const vaultKey = savedKeys[activeProv] || '';
+        const mainKey = cleanKey(parsed.api_key);
+        const effectiveKey = vaultKey || mainKey || cleanKey(process.env.LLM_API_KEY);
 
         const creds = resolveProviderCredentials(
           activeProv,
@@ -319,9 +327,8 @@ export async function getCentralBrainConfig() {
           base_url: creds.baseURL,
           server_base_url: parsed.server_base_url || process.env.SERVER_BASE_URL || `http://localhost:${activePort}`,
           temperature: Number(parsed.temperature ?? 0.2),
-          system_prompt:
-            parsed.system_prompt ||
-            'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema.'
+          system_prompt: parsed.system_prompt || 'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema.',
+          saved_keys: savedKeys // Retorna o cofre para consulta dos subagentes
         };
       }
     }
@@ -329,8 +336,9 @@ export async function getCentralBrainConfig() {
     console.warn('⚠️ [Central Brain Config] Fallback para variáveis de ambiente:', error?.message);
   }
 
+  const defaultProv = process.env.LLM_PROVIDER || 'groq';
   const creds = resolveProviderCredentials(
-    process.env.LLM_PROVIDER || 'groq',
+    defaultProv,
     process.env.LLM_API_KEY || process.env.GROQ_API_KEY || '',
     process.env.LLM_BASE_URL,
     process.env.LLM_MODEL
@@ -344,7 +352,8 @@ export async function getCentralBrainConfig() {
     base_url: creds.baseURL,
     server_base_url: process.env.SERVER_BASE_URL || `http://localhost:${activePort}`,
     temperature: 0.2,
-    system_prompt: 'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema.'
+    system_prompt: 'Você é o JARVIS, o Cérebro Central e Agente Líder do ecossistema.',
+    saved_keys: {}
   };
 }
 
