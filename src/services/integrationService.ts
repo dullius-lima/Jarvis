@@ -299,7 +299,7 @@ export async function executarConectorExterno({
       return data;
     }
 
-   // --------------------------------------------------------------------------
+    // --------------------------------------------------------------------------
     // WHATSAPP (EVOLUTION API / BAILEYS)
     // --------------------------------------------------------------------------
     case 'whatsapp': {
@@ -386,7 +386,6 @@ export async function executarConectorExterno({
       };
     }
 
-    // --------------------------------------------------------------------------
     // --------------------------------------------------------------------------
     // GMAIL (GOOGLE REST API COM OAUTH2 PERMANENTE)
     // --------------------------------------------------------------------------
@@ -501,65 +500,195 @@ export async function executarConectorExterno({
         messages: detailedMessages
       };
     }
- 
-   // --------------------------------------------------------------------------
-    // GOOGLE CALENDAR: BLINDADO (CRIAR, EDITAR/REMARCAR, EXCLUIR E LISTAR)
+
+    // --------------------------------------------------------------------------
+    // GOOGLE CALENDAR: TOTALMENTE BLINDADO PARA DATA, HORÁRIO E FUSO (America/Campo_Grande)
     // --------------------------------------------------------------------------
     case 'google_calendar': {
       const accessToken = await obterTokenAcessoGoogle();
       const acaoAtual = String(action || payload.action || 'list_events').toLowerCase().trim();
       const calendarBase = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
-      const fuso = payload.timezone || payload.params?.timezone || 'America/Campo_Grande';
       const parametros = payload.parameters || payload.params || payload;
+      const fuso = parametros.timezone || payload.timezone || 'America/Campo_Grande';
 
-      // Funções auxiliares de fuso e formatação segura (America/Campo_Grande UTC-4)
-      const pad = (n: number) => String(n).padStart(2, '0');
-      const formatarOffsetFuso = (d: Date) => {
-        const ano = d.getFullYear();
-        const mes = pad(d.getMonth() + 1);
-        const hora = pad(d.getHours()); // No servidor em UTC, 20:00 (-04:00) vira 00:00 do dia seguinte!
-        const dia = pad(d.getDate());   // Vira dia 01 em vez de dia 30!;
-        const min = pad(d.getMinutes());
-        const seg = pad(d.getSeconds());
-        return `${ano}-${mes}-${dia}T${hora}:${min}:${seg}-04:00`;
+      const obterDataHojeCampoGrande = (): { ano: string; mes: string; dia: string } => {
+        const fmt = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Campo_Grande',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const partes: Record<string, string> = {};
+        for (const p of fmt.formatToParts(new Date())) partes[p.type] = p.value;
+        return { ano: partes.year, mes: partes.month, dia: partes.day };
       };
 
-      const calcularDataHora = (params: any) => {
-        const dataStr = String(params.nova_data || params.data || params.date || params.dia || '').trim();
-        const horaStr = String(params.novo_horario || params.horario || params.time || params.hora || '').trim();
-        const inicioBruto = params.startTime || params.start || params.start_time || params.data_hora;
+      const extrairData = (valores: (string | undefined)[]): { ano: string; mes: string; dia: string } => {
+        for (const v of valores) {
+          if (!v || typeof v !== 'string') continue;
+          const s = v.trim();
 
-        let dataInicio = new Date();
-
-        if (dataStr && horaStr) {
-          // Combina data e hora separadas: ex: "2026-11-09" + "15:00"
-          const iso = `${dataStr.replace(/\//g, '-')}T${horaStr.length === 5 ? `${horaStr}:00` : horaStr}`;
-          const d = new Date(iso);
-          if (!isNaN(d.getTime())) dataInicio = d;
-        } else if (inicioBruto) {
-          const d = new Date(inicioBruto);
-          if (!isNaN(d.getTime())) {
-            dataInicio = d;
-          } else if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(inicioBruto).trim())) {
-            const [h, m] = String(inicioBruto).trim().split(':').map(Number);
-            dataInicio.setHours(h, m, 0, 0);
-            if (dataInicio.getTime() < Date.now()) dataInicio.setDate(dataInicio.getDate() + 1);
+          // Se for string ISO com timestamp UTC ("...Z" ou "...+00:00")
+          if (s.endsWith('Z') || s.includes('+00:00')) {
+            const d = new Date(s);
+            if (!isNaN(d.getTime())) {
+              const fmt = new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'America/Campo_Grande',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+              });
+              const partes: Record<string, string> = {};
+              for (const p of fmt.formatToParts(d)) partes[p.type] = p.value;
+              return { ano: partes.year, mes: partes.month, dia: partes.day };
+            }
           }
-        } else if (horaStr && /^\d{1,2}:\d{2}(:\d{2})?$/.test(horaStr)) {
-          const [h, m] = horaStr.split(':').map(Number);
-          dataInicio.setHours(h, m, 0, 0);
-          if (dataInicio.getTime() < Date.now()) dataInicio.setDate(dataInicio.getDate() + 1);
-        } else if (dataStr) {
-          const d = new Date(`${dataStr.replace(/\//g, '-')}T09:00:00`);
-          if (!isNaN(d.getTime())) dataInicio = d;
+
+          // Formato ISO: YYYY-MM-DD ou YYYY/MM/DD
+          const mIso = s.match(/\b(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})\b/);
+          if (mIso) {
+            return {
+              ano: mIso[1],
+              mes: mIso[2].padStart(2, '0'),
+              dia: mIso[3].padStart(2, '0')
+            };
+          }
+
+          // Formato Brasileiro: DD/MM/YYYY ou DD-MM-YYYY
+          const mBr = s.match(/\b(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})\b/);
+          if (mBr) {
+            return {
+              ano: mBr[3],
+              mes: mBr[2].padStart(2, '0'),
+              dia: mBr[1].padStart(2, '0')
+            };
+          }
+        }
+        return obterDataHojeCampoGrande();
+      };
+
+      const extrairHora = (valores: (string | undefined)[]): { hora: string; minuto: string } => {
+        for (const v of valores) {
+          if (!v || typeof v !== 'string') continue;
+          const s = v.trim();
+
+          // Se for string ISO com timestamp UTC ("...Z")
+          if (s.endsWith('Z') || s.includes('+00:00')) {
+            const d = new Date(s);
+            if (!isNaN(d.getTime())) {
+              const fmt = new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'America/Campo_Grande',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+              });
+              const partes: Record<string, string> = {};
+              for (const p of fmt.formatToParts(d)) partes[p.type] = p.value;
+              const h = partes.hour === '24' ? '00' : partes.hour;
+              return { hora: h, minuto: partes.minute };
+            }
+          }
+
+          // Formato ISO no meio de data: T(\d{2}):(\d{2})
+          const mIsoTime = s.match(/T(\d{1,2}):(\d{2})/);
+          if (mIsoTime) {
+            return {
+              hora: mIsoTime[1].padStart(2, '0'),
+              minuto: mIsoTime[2].padStart(2, '0')
+            };
+          }
+
+          // Formato HH:MM
+          const mHora = s.match(/\b(\d{1,2}):(\d{2})\b/);
+          if (mHora) {
+            return {
+              hora: mHora[1].padStart(2, '0'),
+              minuto: mHora[2].padStart(2, '0')
+            };
+          }
+
+          // Formato 20h ou 14h30
+          const mH = s.match(/\b(\d{1,2})h(?:(\d{2}))?\b/i);
+          if (mH) {
+            return {
+              hora: mH[1].padStart(2, '0'),
+              minuto: (mH[2] || '00').padStart(2, '0')
+            };
+          }
+
+          // Formato apenas número (ex: "14" ou "20")
+          const mNum = s.match(/^(\d{1,2})$/);
+          if (mNum) {
+            const n = Number(mNum[1]);
+            if (n >= 0 && n <= 23) {
+              return {
+                hora: String(n).padStart(2, '0'),
+                minuto: '00'
+              };
+            }
+          }
+        }
+        return { hora: '09', minuto: '00' };
+      };
+
+      const montarDatasIso = (params: any) => {
+        const fontesData = [
+          params.nova_data,
+          params.data,
+          params.date,
+          params.dia,
+          params.startTime,
+          params.start,
+          params.start_time,
+          params.data_hora,
+          params.query,
+          params.task_details
+        ];
+
+        const fontesHora = [
+          params.novo_horario,
+          params.horario,
+          params.time,
+          params.hora,
+          params.startTime,
+          params.start,
+          params.start_time,
+          params.data_hora,
+          params.query,
+          params.task_details
+        ];
+
+        const { ano, mes, dia } = extrairData(fontesData);
+        const { hora, minuto } = extrairHora(fontesHora);
+
+        const startIso = `${ano}-${mes}-${dia}T${hora}:${minuto}:00-04:00`;
+
+        let endIso = '';
+        if (params.endTime || params.end || params.end_time || params.termino) {
+          const fontesHoraFim = [params.endTime, params.end, params.end_time, params.termino];
+          const horaFim = extrairHora(fontesHoraFim);
+          const dataFim = extrairData([params.data_termino, params.endDate, ...fontesHoraFim, params.data, params.date]);
+          endIso = `${dataFim.ano}-${dataFim.mes}-${dataFim.dia}T${horaFim.hora}:${horaFim.minuto}:00-04:00`;
+        } else {
+          const dtInicio = new Date(startIso);
+          const dtFim = new Date(dtInicio.getTime() + 60 * 60 * 1000);
+          const fmtFim = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'America/Campo_Grande',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+          });
+          const partesFim: Record<string, string> = {};
+          for (const p of fmtFim.formatToParts(dtFim)) partesFim[p.type] = p.value;
+          const hFim = partesFim.hour === '24' ? '00' : partesFim.hour;
+          endIso = `${partesFim.year}-${partesFim.month}-${partesFim.day}T${hFim}:${partesFim.minute}:00-04:00`;
         }
 
-        const fimBruto = params.endTime || params.end || params.end_time || params.termino;
-        const dataFim = fimBruto && !isNaN(new Date(fimBruto).getTime())
-          ? new Date(fimBruto)
-          : new Date(dataInicio.getTime() + 60 * 60 * 1000); // 1 hora padrão
-
-        return { dataInicio, dataFim };
+        return { startIso, endIso, ano, mes, dia, hora, minuto };
       };
 
       // ========================================================================
@@ -576,11 +705,10 @@ export async function executarConectorExterno({
         let eventId = String(parametros.eventId || parametros.id || parametros.event_id || '').trim();
         let tituloEvento = String(parametros.summary || parametros.title || parametros.assunto || parametros.nome || '').trim();
 
-        // Se a LLM não tem o eventId, faz busca inteligente pelo título ou termo
         if (!eventId) {
           const termo = tituloEvento || String(parametros.query || parametros.busca || parametros.task_details || '').trim();
           if (termo) {
-            const buscaUrl = `${calendarBase}?q=${encodeURIComponent(termo)}&maxResults=5&singleEvents=true`;
+            const buscaUrl = `${calendarBase}?q=${encodeURIComponent(termo)}&maxResults=10&singleEvents=true`;
             const buscaRes = await fetch(buscaUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
             const buscaData: any = await buscaRes.json().catch(() => ({}));
             if (buscaData.items && buscaData.items.length > 0) {
@@ -591,7 +719,7 @@ export async function executarConectorExterno({
         }
 
         if (!eventId) {
-          throw new Error('Compromisso não localizado para cancelamento. Informe o ID ou o título exato.');
+          throw new Error('Compromisso não localizado para cancelamento. Informe o título ou ID exato.');
         }
 
         const delRes = await fetch(`${calendarBase}/${eventId}`, {
@@ -609,7 +737,7 @@ export async function executarConectorExterno({
           provider: 'google_calendar',
           action: 'delete_event',
           eventId,
-          message: `🗑️ Compromisso ${tituloEvento ? `**"${tituloEvento}"** ` : ''}cancelado e removido com sucesso da sua agenda!`
+          message: `🗑️ Compromisso ${tituloEvento ? `**"${tituloEvento}"** ` : ''}removido com sucesso da agenda!`
         };
       }
 
@@ -656,7 +784,6 @@ export async function executarConectorExterno({
           corpoPatch.location = parametros.location || parametros.local || parametros.endereco;
         }
 
-        // Se informou nova data ou horário para remarcar
         const temNovaDataOuHora =
           parametros.novo_horario ||
           parametros.nova_data ||
@@ -667,9 +794,9 @@ export async function executarConectorExterno({
           parametros.data;
 
         if (temNovaDataOuHora) {
-          const { dataInicio, dataFim } = calcularDataHora(parametros);
-          corpoPatch.start = { dateTime: formatarOffsetFuso(dataInicio), timeZone: fuso };
-          corpoPatch.end = { dateTime: formatarOffsetFuso(dataFim), timeZone: fuso };
+          const { startIso, endIso } = montarDatasIso(parametros);
+          corpoPatch.start = { dateTime: startIso, timeZone: fuso };
+          corpoPatch.end = { dateTime: endIso, timeZone: fuso };
         }
 
         const patchRes = await fetch(`${calendarBase}/${eventId}`, {
@@ -686,18 +813,6 @@ export async function executarConectorExterno({
           throw new Error(patchData.error?.message || `Erro HTTP ${patchRes.status} ao atualizar compromisso.`);
         }
 
-        const dataFormatada = patchData.start?.dateTime
-          ? new Date(patchData.start.dateTime).toLocaleString('pt-BR', {
-              timeZone: fuso,
-              weekday: 'long',
-              day: '2-digit',
-              month: '2-digit',
-              year: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit'
-            })
-          : '';
-
         return {
           success: true,
           provider: 'google_calendar',
@@ -707,7 +822,7 @@ export async function executarConectorExterno({
           start: patchData.start?.dateTime,
           end: patchData.end?.dateTime,
           htmlLink: patchData.htmlLink,
-          message: `✏️ Compromisso **"${patchData.summary}"** atualizado/remarcado com sucesso${dataFormatada ? ` para ${dataFormatada}` : ''}!`
+          message: `✏️ Compromisso **"${patchData.summary}"** atualizado com sucesso!`
         };
       }
 
@@ -739,17 +854,17 @@ export async function executarConectorExterno({
           parametros.detalhes ||
           'Agendado via JARVIS.';
 
-        const { dataInicio, dataFim } = calcularDataHora(parametros);
+        const { startIso, endIso, ano, mes, dia, hora, minuto } = montarDatasIso(parametros);
 
         const corpoEvento: any = {
           summary: titulo,
           description: descricao,
           start: {
-            dateTime: formatarOffsetFuso(dataInicio),
+            dateTime: startIso,
             timeZone: fuso
           },
           end: {
-            dateTime: formatarOffsetFuso(dataFim),
+            dateTime: endIso,
             timeZone: fuso
           },
           reminders: {
@@ -779,15 +894,7 @@ export async function executarConectorExterno({
           throw new Error(dadosRetorno.error?.message || `Erro HTTP ${respostaEvento.status} no Google Calendar.`);
         }
 
-        const dataFormatada = dataInicio.toLocaleString('pt-BR', {
-          timeZone: fuso,
-          weekday: 'long',
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
+        const dataFormatada = `${dia}/${mes}/${ano} às ${hora}:${minuto}`;
 
         return {
           success: true,
@@ -795,10 +902,10 @@ export async function executarConectorExterno({
           action: 'create_event',
           eventId: dadosRetorno.id,
           summary: dadosRetorno.summary,
-          start: dadosRetorno.start?.dateTime,
-          end: dadosRetorno.end?.dateTime,
+          start: dadosRetorno.start?.dateTime || startIso,
+          end: dadosRetorno.end?.dateTime || endIso,
           htmlLink: dadosRetorno.htmlLink,
-          message: `📅 Agendamento confirmado! O compromisso **"${titulo}"** foi adicionado à sua agenda para ${dataFormatada}.`
+          message: `📅 Compromisso **"${titulo}"** agendado para **${dataFormatada}** (horário de Campo Grande).`
         };
       }
 
@@ -1176,7 +1283,6 @@ export default {
   obterTokenAcessoGoogle,
   extrairTickerLimpo,
   agendarCalendarioGoogle,
-  // Nomes legados:
   executeExternalConnector,
   executeNodeIntegration,
   executeProtocolOrIntegration,
