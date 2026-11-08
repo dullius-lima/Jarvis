@@ -1,4 +1,4 @@
-//Catálogo Dinâmico de Tools e DynamicDatabaseTool
+// Catálogo Dinâmico de Tools e DynamicDatabaseTool
 // src/services/orchestrator/catalogAndDatabase.ts
 
 import { pool } from '../../config/database.js';
@@ -9,14 +9,17 @@ import {
   sanitizeToolName
 } from './brainConfigAndUtils.js';
 
-const CORE_BUILT_IN_TOOLS: DynamicToolCatalogItem[] = [
+// ============================================================================
+// FERRAMENTAS NATIVAS FIXAS DO ECOSSISTEMA
+// ============================================================================
+export const CORE_BUILT_IN_TOOLS: DynamicToolCatalogItem[] = [
   {
     slug: 'dynamicdatabasetool',
     name: 'DynamicDatabaseTool',
     category: 'SQL',
     method: 'SQL',
     endpoint: '',
-    description: 'Grava registros e documentos JSON estruturados no PostgreSQL.'
+    description: 'Grava registros, logs e documentos JSON estruturados no PostgreSQL.'
   },
   {
     slug: 'consultar_base_rag',
@@ -44,19 +47,12 @@ const CORE_BUILT_IN_TOOLS: DynamicToolCatalogItem[] = [
   }
 ];
 
-export async function saveToDatabase(params: {
-  collectionName: string;
-  eventId?: string;
-  documentData: Record<string, any>;
-  decisionReasoning?: string;
-  webhookSource?: string;
-}) {
-  const cleanCollection = sanitizeToolName(params.collectionName || 'general_events');
-  const eventId =
-    params.eventId || `evt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+let tabelaColecoesVerificada = false;
 
-  await pool
-    .query(`
+async function garantirTabelaDynamicCollections(): Promise<void> {
+  if (tabelaColecoesVerificada) return;
+  try {
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS dynamic_collections (
         id SERIAL PRIMARY KEY,
         collection_name VARCHAR(100) NOT NULL,
@@ -67,19 +63,54 @@ export async function saveToDatabase(params: {
         execution_status VARCHAR(50) DEFAULT 'persisted',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
-    `)
-    .catch(() => {});
+    `);
+    tabelaColecoesVerificada = true;
+  } catch (erro: any) {
+    console.warn('⚠️ [Dynamic Collections] Falha ao verificar tabela:', erro?.message);
+  }
+}
+
+// ============================================================================
+// PERSISTÊNCIA DINÂMICA NO POSTGRESQL (DYNAMIC DATABASE TOOL)
+// ============================================================================
+export async function salvarNoBancoDeDados(params: {
+  collectionName: string;
+  eventId?: string;
+  documentData: any;
+  decisionReasoning?: string;
+  webhookSource?: string;
+}) {
+  await garantirTabelaDynamicCollections();
+
+  const cleanCollection = sanitizeToolName(params.collectionName || 'general_events');
+  const eventId =
+    params.eventId || `evt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+  // Normalização do payload para evitar dupla serialização em JSONB
+  let payloadNormalizado = params.documentData;
+  if (typeof payloadNormalizado === 'string') {
+    try {
+      payloadNormalizado = JSON.parse(payloadNormalizado);
+    } catch {
+      payloadNormalizado = { raw_content: payloadNormalizado };
+    }
+  } else if (!payloadNormalizado || typeof payloadNormalizado !== 'object') {
+    payloadNormalizado = { valor: payloadNormalizado };
+  }
 
   const result = await pool.query(
     `INSERT INTO dynamic_collections 
       (collection_name, event_id, document_data, decision_reasoning, webhook_source, execution_status)
      VALUES ($1, $2, $3, $4, $5, 'persisted')
-     ON CONFLICT (event_id) DO UPDATE SET document_data = EXCLUDED.document_data
+     ON CONFLICT (event_id) DO UPDATE SET 
+       document_data = EXCLUDED.document_data,
+       decision_reasoning = COALESCE(EXCLUDED.decision_reasoning, dynamic_collections.decision_reasoning),
+       execution_status = EXCLUDED.execution_status
      RETURNING *;`,
     [
       cleanCollection,
       eventId,
-      JSON.stringify(params.documentData || {}),
+      JSON.stringify(payloadNormalizado),
       params.decisionReasoning || 'Persistência autônoma acionada pelo Orquestrador JARVIS',
       params.webhookSource || 'orchestrator'
     ]
@@ -105,7 +136,10 @@ export async function saveToDatabase(params: {
   };
 }
 
-export async function getDynamicToolsCatalog(): Promise<{
+// ============================================================================
+// CARREGAMENTO DINÂMICO DO CATÁLOGO DE TOOLS & CONEXÕES
+// ============================================================================
+export async function obterCatalogoFerramentasDinamicas(): Promise<{
   catalog: DynamicToolCatalogItem[];
   connectorsMap: Map<string, any>;
 }> {
@@ -113,6 +147,7 @@ export async function getDynamicToolsCatalog(): Promise<{
   const catalogMap = new Map<string, DynamicToolCatalogItem>();
   const connectorsMap = new Map<string, any>();
 
+  // 1. Carrega lista de ferramentas excluídas permanentemente pelo usuário
   let deletedKeys: string[] = [];
   try {
     const delRes = await pool.query(
@@ -127,12 +162,21 @@ export async function getDynamicToolsCatalog(): Promise<{
     }
   } catch {}
 
+  // 2. Registra as ferramentas nativas (alimentando catalogMap e connectorsMap)
   for (const coreTool of CORE_BUILT_IN_TOOLS) {
     if (!deletedKeys.includes(coreTool.slug)) {
       catalogMap.set(coreTool.slug, coreTool);
+      connectorsMap.set(coreTool.slug, {
+        provider_key: coreTool.slug,
+        name: coreTool.name,
+        category: coreTool.category,
+        description: coreTool.description,
+        config: { tool_type: coreTool.method.toLowerCase(), description: coreTool.description }
+      });
     }
   }
 
+  // 3. Carrega conectores externos cadastrados no PostgreSQL
   try {
     const connectorsRes = await pool.query(
       `SELECT * FROM external_connectors ORDER BY updated_at DESC;`
@@ -140,6 +184,7 @@ export async function getDynamicToolsCatalog(): Promise<{
     for (const row of connectorsRes.rows) {
       const slug = sanitizeToolName(row.provider_key || row.name);
       if (row.is_enabled === false) continue;
+      if (deletedKeys.includes(slug)) continue; // Blindagem: respeita a lista de exclusão
 
       const cfg =
         typeof row.config === 'string'
@@ -163,6 +208,7 @@ export async function getDynamicToolsCatalog(): Promise<{
     console.warn('⚠️ [Catálogo Dinâmico] Aviso ao ler external_connectors:', err?.message);
   }
 
+  // 4. Mapeia ferramentas associadas diretamente a agentes
   try {
     const agRes = await pool.query(`SELECT tools FROM ai_agents WHERE tools IS NOT NULL;`);
     for (const row of agRes.rows) {
@@ -192,3 +238,9 @@ export async function getDynamicToolsCatalog(): Promise<{
     connectorsMap
   };
 }
+
+// ============================================================================
+// ALIASES DE RETROCOMPATIBILIDADE
+// ============================================================================
+export const saveToDatabase = salvarNoBancoDeDados;
+export const getDynamicToolsCatalog = obterCatalogoFerramentasDinamicas;
