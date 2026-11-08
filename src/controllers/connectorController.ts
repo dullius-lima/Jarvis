@@ -137,9 +137,6 @@ async function ensureConnectorsTable() {
   `).catch(() => {});
 }
 
-/**
- * Recupera do banco a lista de conectores padrão excluídos pelo usuário
- */
 async function getDeletedDefaultKeys(): Promise<string[]> {
   try {
     const res = await pool.query(
@@ -156,9 +153,6 @@ async function getDeletedDefaultKeys(): Promise<string[]> {
   return [];
 }
 
-// ============================================================================
-// 1. LISTAR CONECTORES
-// ============================================================================
 export async function listConnectors(_req: Request, res: Response) {
   try {
     await ensureConnectorsTable();
@@ -230,9 +224,6 @@ export async function listConnectors(_req: Request, res: Response) {
   }
 }
 
-// ============================================================================
-// 2. CRIAR OU ATUALIZAR UMA CONEXÃO / TOOL
-// ============================================================================
 export async function saveConnectorConfig(req: Request, res: Response) {
   try {
     await ensureConnectorsTable();
@@ -355,9 +346,6 @@ export async function saveConnectorConfig(req: Request, res: Response) {
 
 export const saveConnector = saveConnectorConfig;
 
-// ============================================================================
-// 3. TESTAR CONEXÃO / TOOL EM TEMPO REAL (UNIFICADO)
-// ============================================================================
 export async function testExternalConnector(req: Request, res: Response) {
   const startTime = Date.now();
   try {
@@ -365,7 +353,6 @@ export async function testExternalConnector(req: Request, res: Response) {
     const cfg = typeof body.config === 'object' && body.config !== null ? body.config : {};
     const testQuery = String(body.testQuery || body.query || 'PETR4').trim();
 
-    // Aceita tanto provider_key quanto provider (enviado por cURL ou frontend)
     const providerKey = sanitizeKey(body.provider_key || body.provider || cfg.provider_key || '');
     const rawUrl = String(
       cfg.endpoint_url || body.endpoint_url || cfg.base_url || ''
@@ -550,9 +537,9 @@ export async function testExternalConnector(req: Request, res: Response) {
         '🟢 Teste operacional JARVIS: WhatsApp validado com sucesso!'
       ).trim();
 
-      const cleanEndpoint = rawUrl
-        ? rawUrl.replace(/\/message\/sendText.*$/i, '').replace(/\/+$/, '')
-        : undefined;
+      const cleanEndpoint = (rawUrl || process.env.EVOLUTION_URL || 'http://127.0.0.1:8080')
+        .replace(/\/message\/sendText.*$/i, '')
+        .replace(/\/+$/, '');
 
       const result = await executeExternalConnector({
         providerKey: 'whatsapp',
@@ -560,7 +547,7 @@ export async function testExternalConnector(req: Request, res: Response) {
         payload: {
           ...(body.params || {}),
           endpoint_url: cleanEndpoint,
-          api_key: apiKey || undefined,
+          api_key: apiKey || process.env.EVOLUTION_API_KEY || 'jarvis-evolution-secret-2026',
           number: targetNumber,
           text: targetText
         }
@@ -667,12 +654,8 @@ export async function testExternalConnector(req: Request, res: Response) {
   }
 }
 
-// Garante compatibilidade tanto para quem importa testExternalConnector quanto testConnector
 export const testConnector = testExternalConnector;
 
-// ============================================================================
-// 4. EXCLUIR CONEXÃO PERMANENTEMENTE E LIMPAR VÍNCULOS DOS SUBAGENTES
-// ============================================================================
 export async function deleteExternalConnector(req: Request, res: Response) {
   try {
     await ensureConnectorsTable();
