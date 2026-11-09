@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import { emitBrainLinkEvent } from '../brainSocketService.js';
 import { getEnvRegisteredPort } from '../../controllers/brainConfigController.js';
 import { executeProtocolOrIntegration } from '../integrationAndProtocolService.js';
+import { extractJsonActionBlocks } from '../jsonActionInterceptor.js';
 import {
   SupportedProtocolOrPlatform,
   interpolateApiTemplate,
@@ -11,7 +12,11 @@ import {
   resolveProviderCredentials,
   sanitizeToolName
 } from './brainConfigAndUtils.js';
-import { chamarLLMCompativelOpenAI, limparMascaraChave, obterChaveContingenciaEnv } from './motorInferencaLLM.js';
+import {
+  chamarLLMCompativelOpenAI,
+  limparMascaraChave,
+  obterChaveContingenciaEnv
+} from './motorInferencaLLM.js';
 import { executarFerramentaVinculada } from './executorFerramentasFixas.js';
 
 /**
@@ -64,7 +69,8 @@ export async function executarEsteiraEspecialistas(
     try {
       emitBrainLinkEvent({
         axon_id: `axon_${currentAgent.slug}`,
-        source_dendrite: hopCount === 1 ? 'jarvis_core' : cadeiaExecucao[cadeiaExecucao.length - 1].agentSlug,
+        source_dendrite:
+          hopCount === 1 ? 'jarvis_core' : cadeiaExecucao[cadeiaExecucao.length - 1].agentSlug,
         target_dendrite: currentAgent.slug,
         direction: 'FORWARD',
         neurotransmitter_type: 'ADRENALINA',
@@ -109,7 +115,9 @@ export async function executarEsteiraEspecialistas(
       const bodyTemplate = currentAgent.payload_template || currentAgent.code_snippet;
       if (bodyTemplate && String(bodyTemplate).trim().startsWith('{')) {
         try {
-          customBodyParams = JSON.parse(interpolateApiTemplate(String(bodyTemplate), userPrompt, currentPayload));
+          customBodyParams = JSON.parse(
+            interpolateApiTemplate(String(bodyTemplate), userPrompt, currentPayload)
+          );
         } catch {
           customBodyParams = { raw_payload: bodyTemplate };
         }
@@ -119,16 +127,21 @@ export async function executarEsteiraEspecialistas(
         protocol: 'rest_api' as SupportedProtocolOrPlatform,
         endpoint: targetUrl,
         method: currentAgent.http_method || 'GET',
-        body: { ...(currentAgent.protocol_config || {}), ...currentPayload, ...customBodyParams },
+        body: {
+          ...(currentAgent.protocol_config || {}),
+          ...currentPayload,
+          ...customBodyParams
+        },
         prompt: userPrompt
       });
 
       stepOutput = {
-        extractionInstruction: currentAgent.system_prompt || 'Apresente os dados retornados de forma clara.',
+        extractionInstruction:
+          currentAgent.system_prompt || 'Apresente os dados retornados de forma clara.',
         apiResponse: rawApiResult
       };
     }
-    // Rota 3: Especialista Cognitivo LLM (Multi-turn Tool Calling)
+    // Rota 3: Especialista Cognitivo LLM (Multi-turn Tool Calling com Contrato Universal)
     else {
       let enabledTools: string[] = [];
       if (Array.isArray(currentAgent.tools)) {
@@ -141,210 +154,310 @@ export async function executarEsteiraEspecialistas(
         }
       }
 
-      // Parâmetros estruturados para permitir ações completas em Gmail, Calendar, Home Assistant e APIs
-      const specialistTools: OpenAI.Chat.Completions.ChatCompletionTool[] = enabledTools
-        .filter((tId: string) => Boolean(tId && String(tId).trim()))
-        .map((tId: string) => {
+      const specialistTools: OpenAI.Chat.Completions.ChatCompletionTool[] = enabledTools.map(
+        (tId: string) => {
           const cleanId = sanitizeToolName(tId);
           const conn = buscarConectorResiliente(tId, map);
           return {
             type: 'function',
             function: {
               name: cleanId,
-              description: conn?.description || `Executa a ferramenta ${conn?.name || cleanId}.`,
+              description:
+                conn?.description ||
+                `Executa a ferramenta ou integração ${conn?.name || cleanId}.`,
               parameters: {
                 type: 'object',
                 properties: {
+                  entity_id: {
+                    type: 'string',
+                    description:
+                      'ID da entidade ou múltiplos IDs separados por vírgula (ex: "switch.luz_1_switch_1, switch.luz_2_switch_1" ou "climate.casal_ar_condicionado_do_quarto").'
+                  },
+                  domain: {
+                    type: 'string',
+                    description:
+                      'Domínio Home Assistant quando aplicável (ex: "climate", "switch", "light", "homeassistant", "vacuum").'
+                  },
+                  service: {
+                    type: 'string',
+                    description:
+                      'Serviço ou ação a executar (ex: "turn_on", "turn_off", "toggle", "set_temperature", "set_hvac_mode", "set_fan_mode", "set_swing_mode").'
+                  },
+                  temperature: {
+                    type: 'number',
+                    description: 'Temperatura alvo em graus Celsius (ex: 22, 23).'
+                  },
+                  hvac_mode: {
+                    type: 'string',
+                    description:
+                      'Modo de climatização: "cool", "heat", "fan_only", "dry", "auto", "off".'
+                  },
+                  fan_mode: {
+                    type: 'string',
+                    description: 'Velocidade do ventilador: "low", "medium", "high", "auto", "quiet".'
+                  },
+                  swing_mode: {
+                    type: 'string',
+                    description:
+                      'Direção/oscilação do vento: "on", "off", "vertical", "horizontal", "both".'
+                  },
+                  preset_mode: {
+                    type: 'string',
+                    description: 'Perfil pré-definido: "eco", "comfort", "boost", "sleep", "away".'
+                  },
+                  service_data: {
+                    type: 'object',
+                    description:
+                      'Objeto JSON livre com parâmetros adicionais do serviço ou lista de entity_id.'
+                  },
                   action: {
                     type: 'string',
-                    description: 'Ação técnica (ex: read_inbox, trash_message, send_email, list_events, create_event, turn_on, turn_off).'
+                    description:
+                      'Ação para conectores (ex: "read_inbox", "send_email", "trash_message", "list_events", "create_event", "list_files", "upload_file").'
                   },
-                  id: {
+                  query: {
                     type: 'string',
-                    description: 'ID exato da mensagem de e-mail, compromisso ou dispositivo que deve ser manipulado/excluído.'
+                    description: 'Filtro de busca, comando ou parâmetro textual.'
                   },
-                  query: { type: 'string', description: 'Termo de busca, ticker ou filtro (ex: is:unread, PETR4).' },
-                  symbol: { type: 'string', description: 'Código do ativo financeiro (ex: PETR4, VALE3).' },
-                  to: { type: 'string', description: 'Destinatário de e-mail quando aplicável.' },
-                  subject: { type: 'string', description: 'Assunto de e-mail ou compromisso.' },
-                  body: { type: 'string', description: 'Corpo da mensagem ou detalhes da tarefa.' },
-                  task_details: { type: 'string', description: 'Parâmetros ou detalhes adicionais da instrução.' }
+                  symbol: {
+                    type: 'string',
+                    description: 'Ticker de ativo financeiro quando aplicável (ex: PETR4, VALE3).'
+                  },
+                  endpointPath: {
+                    type: 'string',
+                    description: 'Caminho de endpoint da API quando aplicável.'
+                  },
+                  method: {
+                    type: 'string',
+                    description: 'Método HTTP (GET, POST, PUT, DELETE).'
+                  },
+                  params: {
+                    type: 'object',
+                    description: 'Objeto com parâmetros extras para envio de e-mail, agenda, WhatsApp ou API.'
+                  }
                 }
               }
             }
           };
-        });
+        }
+      );
 
-      const mensagensTrabalho: any[] = [
+      // Resolução isolada de credenciais do Especialista com fallback para o Cérebro
+      const provAgente = (
+        currentAgent.provider ||
+        brainConfig?.provider ||
+        'groq'
+      ).toLowerCase();
+      const modeloAgente =
+        currentAgent.model || brainConfig?.model || 'llama-3.3-70b-versatile';
+      const chaveAgente =
+        limparMascaraChave(currentAgent.api_key) ||
+        limparMascaraChave(brainConfig?.saved_keys?.[provAgente]) ||
+        limparMascaraChave(brainConfig?.api_key) ||
+        obterChaveContingenciaEnv(provAgente);
+
+      const credenciaisResolvidas = resolveProviderCredentials(
+        provAgente,
+        chaveAgente,
+        currentAgent.base_url || brainConfig?.base_url || '',
+        modeloAgente
+      );
+
+      const mensagensEspecialista: any[] = [
         {
           role: 'system',
-          content: `${
-            currentAgent.system_prompt || `Você é o agente especialista ${currentAgent.name}.`
-          }\nTools autorizadas: ${
-            enabledTools.join(', ') || 'Nenhuma'
-          }.\nDIRETRIZ OBRIGATÓRIA: Dispare a tool call necessária para obter ou alterar dados. Ao concluir todas as ações com sucesso, responda em linguagem natural, clara e em português.`
+          content: `${currentAgent.system_prompt || `Você é o especialista ${currentAgent.name}.`}
+REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
+1. Você possui acesso direto às ferramentas: [${enabledTools.join(', ')}].
+2. Para acionar mais de uma lâmpada ou dispositivo no mesmo cômodo, você pode enviar ambos os IDs separados por vírgula em "entity_id" (ex: "switch.luz_1_switch_1, switch.luz_2_switch_1") ou realizar chamadas de ferramentas para cada dispositivo.
+3. Para alterar temperatura do ar-condicionado, passe "entity_id" e "temperature" (número). Para modo, passe "hvac_mode". Para vento, passe "fan_mode" ou "swing_mode".
+4. NUNCA exiba código JSON cru na resposta final ao usuário. Responda sempre em português natural, claro e direto.`
         },
-        ...conversationThread.slice(-6),
+        ...conversationThread.slice(-4),
         {
           role: 'user',
-          content: `Pedido do Usuário: "${userPrompt}"\nContexto: ${JSON.stringify(currentPayload)}`
+          content: `Solicitação do usuário: "${userPrompt}"\nDetalhes da tarefa: ${
+            typeof promptText === 'string' ? promptText : JSON.stringify(promptText)
+          }`
         }
       ];
 
-      const specProvider = (currentAgent.provider || brainConfig?.provider || 'groq').toLowerCase().trim();
-      const specAgentKey = limparMascaraChave(currentAgent.api_key);
-      const specVaultKey = brainConfig?.saved_keys?.[specProvider]
-        ? limparMascaraChave(brainConfig.saved_keys[specProvider])
-        : '';
-      const fallbackBrainKey =
-        specProvider === (brainConfig?.provider || '').toLowerCase().trim()
-          ? limparMascaraChave(brainConfig?.api_key)
-          : '';
-      const effectiveKey =
-        specAgentKey || specVaultKey || fallbackBrainKey || obterChaveContingenciaEnv(specProvider);
+      // Loop Multi-Turno (até 3 turnos) para permitir: Consultar Sensor -> Executar Ação -> Auditar Estado
+      const MAX_TOOL_TURNS = 3;
+      let turnoAtual = 0;
+      let respostaTextualEspecialista = '';
+      const resultadosBrutosFerramentas: any[] = [];
 
-      const credsSubagente = resolveProviderCredentials(
-        specProvider,
-        effectiveKey,
-        currentAgent.base_url,
-        currentAgent.model
-      );
+      while (turnoAtual < MAX_TOOL_TURNS) {
+        turnoAtual++;
 
-      try {
-        let toolIteration = 0;
-        const MAX_TOOL_ITERATIONS = 3;
-        let respostaConcluida = false;
+        const specCompletion: any = await chamarLLMCompativelOpenAI({
+          provider: credenciaisResolvidas.provider,
+          model: credenciaisResolvidas.model,
+          apiKey: credenciaisResolvidas.apiKey,
+          baseUrl: credenciaisResolvidas.baseUrl,
+          messages: mensagensEspecialista,
+          tools: specialistTools.length > 0 ? specialistTools : undefined,
+          temperature: Number(currentAgent.temperature ?? 0.2)
+        });
 
-        while (toolIteration < MAX_TOOL_ITERATIONS && !respostaConcluida) {
-          toolIteration++;
+        const specChoice = specCompletion?.choices?.[0]?.message;
+        if (!specChoice) break;
 
-          const llmRes: any = await chamarLLMCompativelOpenAI({
-            provider: credsSubagente.provider,
-            model: credsSubagente.model,
-            apiKey: credsSubagente.apiKey,
-            baseUrl: credsSubagente.baseURL,
-            messages: mensagensTrabalho,
-            tools: specialistTools.length > 0 ? specialistTools : undefined,
-            temperature: Number(currentAgent.temperature ?? 0.2)
+        const toolCallsRecebidas = Array.isArray(specChoice.tool_calls)
+          ? specChoice.tool_calls
+          : [];
+
+        // Se a IA gerou Tool Calls nativas
+        if (toolCallsRecebidas.length > 0) {
+          mensagensEspecialista.push({
+            role: 'assistant',
+            content: specChoice.content || '',
+            tool_calls: toolCallsRecebidas
           });
 
-          const escolha = llmRes?.choices?.[0]?.message;
+          for (const tc of toolCallsRecebidas) {
+            const fnName = sanitizeToolName(tc.function?.name || '');
+            let fnArgs: Record<string, any> = {};
+            try {
+              fnArgs = JSON.parse(tc.function?.arguments || '{}');
+            } catch {
+              fnArgs = { query: tc.function?.arguments || userPrompt };
+            }
 
-          // Se a IA gerou chamadas de ferramenta
-          if (Array.isArray(escolha?.tool_calls) && escolha.tool_calls.length > 0) {
-            // Anexa a decisão do assistente com os tool_calls
-            mensagensTrabalho.push({
-              role: 'assistant',
-              content: escolha.content || '',
-              tool_calls: escolha.tool_calls
+            const resultadoTool = await executarFerramentaVinculada(
+              fnName,
+              fnArgs,
+              userPrompt,
+              map,
+              serverBaseUrl
+            );
+
+            resultadosBrutosFerramentas.push({
+              tool: fnName,
+              args: fnArgs,
+              result: resultadoTool
             });
 
-            for (const subCall of escolha.tool_calls) {
-              const subFn = sanitizeToolName(subCall.function?.name);
-              let subArgs: any = {};
-              try {
-                subArgs = JSON.parse(subCall.function?.arguments || '{}');
-              } catch {
-                subArgs = { query: promptText };
-              }
-
-              const mergedArgs = {
-                ...taskArgs,
-                ...subArgs,
-                action: subArgs.action || taskArgs?.action,
-                id: subArgs.id || subArgs.messageId || taskArgs?.id || taskArgs?.messageId,
-                query: subArgs.query || subArgs.symbol || taskArgs?.query || taskArgs?.symbol || promptText,
-                symbol: subArgs.symbol || taskArgs?.symbol || subArgs.query,
-                to: subArgs.to || taskArgs?.to,
-                subject: subArgs.subject || taskArgs?.subject,
-                body: subArgs.body || taskArgs?.body
-              };
-
-              let saida: any;
-              try {
-                saida = await executarFerramentaVinculada(
-                  subFn,
-                  mergedArgs,
-                  userPrompt || promptText,
-                  map,
-                  serverBaseUrl
-                );
-              } catch (err: any) {
-                saida = { error: err.message, tool: subFn };
-              }
-
-              // Padrão universal OpenAI/Groq: cada tool_call deve ser respondida com role: 'tool'
-              mensagensTrabalho.push({
-                role: 'tool',
-                tool_call_id: subCall.id || `call_${Date.now()}`,
-                content: typeof saida === 'string' ? saida : JSON.stringify(saida)
-              });
-            }
-          } else {
-            // A IA respondeu em texto final
-            stepOutput = escolha?.content?.trim() || 'Ação concluída com sucesso pelo especialista.';
-            respostaConcluida = true;
+            mensagensEspecialista.push({
+              role: 'tool',
+              tool_call_id: tc.id,
+              name: fnName,
+              content: JSON.stringify(resultadoTool)
+            });
           }
+          // Continua para o próximo turno do loop para a IA analisar o retorno da ferramenta
+          continue;
         }
 
-        // Se o loop esgotou as iterações sem texto, realiza uma última síntese
-        if (!stepOutput) {
-          const finalSynth: any = await chamarLLMCompativelOpenAI({
-            provider: credsSubagente.provider,
-            model: credsSubagente.model,
-            apiKey: credsSubagente.apiKey,
-            baseUrl: credsSubagente.baseURL,
-            messages: [
-              ...mensagensTrabalho,
-              {
-                role: 'user',
-                content: 'Formule agora a resposta final ao usuário em português com base nas ações já executadas.'
-              }
-            ],
-            temperature: 0.2
+        // Fallback: se o modelo escreveu um bloco JSON em texto tentando invocar uma tool
+        const textoConteudo = String(specChoice.content || '').trim();
+        const blocosJson = extractJsonActionBlocks(textoConteudo);
+        if (blocosJson.length > 0 && enabledTools.length > 0 && turnoAtual === 1) {
+          for (const bloco of blocosJson) {
+            const toolAlvo = sanitizeToolName(
+              bloco.slug || bloco.tool || bloco.name || enabledTools[0]
+            );
+            const argsBloco = bloco.payload || bloco.params || bloco.arguments || bloco;
+            const resFallback = await executarFerramentaVinculada(
+              toolAlvo,
+              argsBloco,
+              userPrompt,
+              map,
+              serverBaseUrl
+            );
+            resultadosBrutosFerramentas.push({
+              tool: toolAlvo,
+              args: argsBloco,
+              result: resFallback
+            });
+          }
+
+          mensagensEspecialista.push({
+            role: 'assistant',
+            content: textoConteudo
           });
-          stepOutput = finalSynth?.choices?.[0]?.message?.content?.trim() || 'Operação concluída com sucesso pelo especialista.';
+          mensagensEspecialista.push({
+            role: 'user',
+            content: `[SISTEMA - RESULTADO REAL DAS FERRAMENTAS EXECUTADAS]:\n${JSON.stringify(
+              resultadosBrutosFerramentas
+            )}\n\nResponda agora ao usuário em linguagem natural e direta (sem JSON), confirmando o resultado.`
+          });
+          continue;
         }
-      } catch (llmErr: any) {
-        console.error(`❌ [Esteira Especialistas] Erro no subagente ${currentAgent.slug}:`, llmErr?.message);
-        stepOutput = {
-          error: `Falha na execução cognitiva do especialista ${currentAgent.name}: ${llmErr?.message}`
-        };
-      }
-    }
 
-    // Persistência assíncrona de memória do especialista
-    pool
-      .query(
-        `INSERT INTO specialist_context_memory (session_id, specialist_slug, context_data) VALUES ($1, $2, $3);`,
-        [sessionId, currentAgent.slug, JSON.stringify({ lastInput: currentPayload, lastOutput: stepOutput })]
-      )
-      .catch(() => {});
+        respostaTextualEspecialista = textoConteudo;
+        break;
+      }
+
+      // Caso o limite de turnos tenha encerrado logo após uma tool call sem síntese final
+      if (!respostaTextualEspecialista && resultadosBrutosFerramentas.length > 0) {
+        const sinteseFinal: any = await chamarLLMCompativelOpenAI({
+          provider: credenciaisResolvidas.provider,
+          model: credenciaisResolvidas.model,
+          apiKey: credenciaisResolvidas.apiKey,
+          baseUrl: credenciaisResolvidas.baseUrl,
+          messages: [
+            ...mensagensEspecialista,
+            {
+              role: 'user',
+              content:
+                'Com base nos resultados das ferramentas acima, dê a resposta final curta e natural ao usuário.'
+            }
+          ],
+          temperature: 0.2
+        }).catch(() => null);
+
+        respostaTextualEspecialista =
+          sinteseFinal?.choices?.[0]?.message?.content?.trim() ||
+          JSON.stringify(resultadosBrutosFerramentas);
+      }
+
+      stepOutput = respostaTextualEspecialista || resultadosBrutosFerramentas;
+    }
 
     cadeiaExecucao.push({
       agentSlug: currentAgent.slug,
       agentName: currentAgent.name,
-      agentType,
-      responseInstruction: currentAgent.system_prompt || undefined,
+      agentType: currentAgent.agent_type || 'llm',
+      responseInstruction: currentAgent.system_prompt,
       output: stepOutput
     });
 
-    currentPayload = {
-      previousAgent: currentAgent.slug,
-      previousOutput: stepOutput,
-      originalArgs: taskArgs
-    };
+    try {
+      emitBrainLinkEvent({
+        axon_id: `axon_${currentAgent.slug}_return`,
+        source_dendrite: currentAgent.slug,
+        target_dendrite: 'jarvis_core',
+        direction: 'BACKWARD',
+        neurotransmitter_type: 'DOPAMINA',
+        intensity: 0.9,
+        metadata: { agentName: currentAgent.name, completed: true }
+      } as any);
+    } catch {}
 
-    if (currentAgent.next_agent_slug && currentAgent.next_agent_slug !== currentAgent.slug) {
+    // Verifica se há encadeamento sequencial (next_agent_slug)
+    const nextSlug = (currentAgent.next_agent_slug || '').trim();
+    if (nextSlug && nextSlug.toLowerCase() !== currentAgent.slug.toLowerCase()) {
       const nextRes = await pool
-        .query(`SELECT * FROM ai_agents WHERE slug = $1 AND is_active = true LIMIT 1;`, [
-          currentAgent.next_agent_slug
+        .query(`SELECT * FROM ai_agents WHERE LOWER(slug) = LOWER($1) AND is_active = true LIMIT 1;`, [
+          nextSlug
         ])
         .catch(() => ({ rows: [] as any[] }));
-      currentAgent = nextRes.rows[0] || null;
-    } else {
-      currentAgent = null;
+
+      if (nextRes.rows.length > 0) {
+        currentAgent = nextRes.rows[0];
+        currentPayload = {
+          previousAgent: cadeiaExecucao[cadeiaExecucao.length - 1].agentSlug,
+          previousOutput: stepOutput,
+          task_details: typeof stepOutput === 'string' ? stepOutput : JSON.stringify(stepOutput),
+          userPrompt
+        };
+        continue;
+      }
     }
+
+    currentAgent = null;
   }
 
   return cadeiaExecucao;
@@ -353,3 +466,10 @@ export async function executarEsteiraEspecialistas(
 export const executeSpecialistPipeline = executarEsteiraEspecialistas;
 export const executeSpecialistNode = executarEsteiraEspecialistas;
 export const executeAgentChain = executarEsteiraEspecialistas;
+
+export default {
+  executarEsteiraEspecialistas,
+  executeSpecialistPipeline,
+  executeSpecialistNode,
+  executeAgentChain
+};
