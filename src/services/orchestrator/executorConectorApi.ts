@@ -1,6 +1,7 @@
 // src/services/orchestrator/executorConectorApi.ts
 import { pool } from '../../config/database.js';
 import { limparMascaraChave } from './motorInferencaLLM.js';
+import { obterTokenAcessoGoogle } from '../integrationService.js';
 
 export async function executarConectorApiUniversal(
   connectorSlugOrAgent: string | Record<string, any>,
@@ -18,26 +19,65 @@ export async function executarConectorApiUniversal(
   let connectorName = '';
 
   if (typeof connectorSlugOrAgent === 'object' && connectorSlugOrAgent !== null) {
-    connectorName = connectorSlugOrAgent.name || connectorSlugOrAgent.slug;
-    endpointUrl = connectorSlugOrAgent.endpoint_url || '';
-    httpMethod = (connectorSlugOrAgent.http_method || 'GET').toUpperCase();
-    authToken = (connectorSlugOrAgent.auth_token || connectorSlugOrAgent.api_key || '').trim();
-    payloadTemplate = connectorSlugOrAgent.payload_template || connectorSlugOrAgent.code_snippet || '';
+    connectorName = connectorSlugOrAgent.name || connectorSlugOrAgent.slug || 'custom_connector';
+    endpointUrl =
+      connectorSlugOrAgent.endpoint_url ||
+      connectorSlugOrAgent.config?.endpoint_url ||
+      taskArgs?.url ||
+      taskArgs?.endpoint ||
+      '';
+    httpMethod = (
+      taskArgs?.method ||
+      connectorSlugOrAgent.http_method ||
+      connectorSlugOrAgent.config?.http_method ||
+      'GET'
+    ).toUpperCase();
+    authToken = (
+      connectorSlugOrAgent.auth_token ||
+      connectorSlugOrAgent.api_key ||
+      connectorSlugOrAgent.config?.auth_token ||
+      connectorSlugOrAgent.config?.api_key ||
+      ''
+    ).trim();
+    payloadTemplate =
+      connectorSlugOrAgent.payload_template ||
+      connectorSlugOrAgent.code_snippet ||
+      connectorSlugOrAgent.config?.payload_template ||
+      '';
+    if (connectorSlugOrAgent.config?.headers) {
+      customHeaders = { ...connectorSlugOrAgent.config.headers };
+    }
   } else {
     const cleanSlug = String(connectorSlugOrAgent).toLowerCase().trim();
     connectorName = cleanSlug;
 
     const connRes = await pool
-      .query(`SELECT * FROM external_connectors WHERE LOWER(provider_key) = $1 LIMIT 1;`, [cleanSlug])
+      .query(`SELECT * FROM external_connectors WHERE LOWER(provider_key) = $1 LIMIT 1;`, [
+        cleanSlug
+      ])
       .catch(() => ({ rows: [] as any[] }));
 
     if (connRes.rows.length > 0) {
       const row = connRes.rows[0];
-      const cfg = typeof row.config === 'string' ? JSON.parse(row.config || '{}') : row.config || {};
+      const cfg =
+        typeof row.config === 'string' ? JSON.parse(row.config || '{}') : row.config || {};
       connectorName = row.name || cleanSlug;
-      endpointUrl = cfg.endpoint_url || cfg.base_url || cfg.url || cfg.api_url || '';
-      httpMethod = (cfg.http_method || cfg.method || 'GET').toUpperCase();
-      authToken = (cfg.auth_token || cfg.api_key || cfg.token || '').trim();
+      endpointUrl =
+        taskArgs?.url ||
+        taskArgs?.endpoint ||
+        cfg.endpoint_url ||
+        cfg.base_url ||
+        cfg.url ||
+        row.endpoint_url ||
+        '';
+      httpMethod = (
+        taskArgs?.method ||
+        cfg.http_method ||
+        cfg.method ||
+        row.http_method ||
+        'GET'
+      ).toUpperCase();
+      authToken = (cfg.auth_token || cfg.api_key || cfg.token || row.api_key || '').trim();
       authType = (cfg.auth_type || 'bearer').toLowerCase();
       queryParamKey = cfg.query_param_key || 'token';
       payloadTemplate = cfg.payload_template || '';
@@ -49,10 +89,15 @@ export async function executarConectorApiUniversal(
       if (agRes.rows.length > 0) {
         const ag = agRes.rows[0];
         connectorName = ag.name || cleanSlug;
-        endpointUrl = ag.endpoint_url || '';
-        httpMethod = (ag.http_method || 'GET').toUpperCase();
+        endpointUrl = taskArgs?.url || taskArgs?.endpoint || ag.endpoint_url || '';
+        httpMethod = (taskArgs?.method || ag.http_method || 'GET').toUpperCase();
         authToken = (ag.auth_token || ag.api_key || '').trim();
         payloadTemplate = ag.payload_template || ag.code_snippet || '';
+      } else if (taskArgs?.url || taskArgs?.endpoint) {
+        // Permite chamada HTTP Universal direta mesmo sem registro prévio
+        endpointUrl = String(taskArgs.url || taskArgs.endpoint).trim();
+        httpMethod = String(taskArgs.method || 'GET').toUpperCase();
+        authToken = String(taskArgs.auth_token || '').trim();
       }
     }
   }
@@ -63,20 +108,25 @@ export async function executarConectorApiUniversal(
 
   const baseLimpa = (serverBaseUrl || 'http://localhost:3333').replace(/\/+$/, '');
 
-  // Expande endpoints com caminhos relativos
   if (endpointUrl.startsWith('/')) {
     endpointUrl = `${baseLimpa}${endpointUrl}`;
   }
 
-  const tickerFonte = String(taskArgs?.symbol || taskArgs?.ticker || taskArgs?.query || userPrompt || '').toUpperCase();
+  const tickerFonte = String(
+    taskArgs?.symbol || taskArgs?.ticker || taskArgs?.query || userPrompt || ''
+  ).toUpperCase();
   const tickerMatch = tickerFonte.match(/\b([A-Z]{4}\d{1,2})\b/);
 
   const variaveisDinamicas: Record<string, string> = {
     BASE_URL: baseLimpa,
     SERVER_IP: baseLimpa,
     prompt: userPrompt,
-    query: String(taskArgs?.query || taskArgs?.symbol || taskArgs?.task_details || userPrompt || '').trim(),
-    symbol: String(taskArgs?.symbol || taskArgs?.ticker || (tickerMatch ? tickerMatch[1] : taskArgs?.query || '')).trim()
+    query: String(
+      taskArgs?.query || taskArgs?.symbol || taskArgs?.task_details || userPrompt || ''
+    ).trim(),
+    symbol: String(
+      taskArgs?.symbol || taskArgs?.ticker || (tickerMatch ? tickerMatch[1] : taskArgs?.query || '')
+    ).trim()
   };
 
   for (const [chave, val] of Object.entries(taskArgs || {})) {
@@ -97,50 +147,69 @@ export async function executarConectorApiUniversal(
     return k === 'BASE_URL' || k === 'SERVER_IP' ? subst : encodeURIComponent(subst);
   });
 
-  if (!tevePlaceholder && httpMethod === 'GET') {
+  if (!tevePlaceholder && httpMethod === 'GET' && urlFinal.includes('brapi.dev')) {
     const paramPrincipal = variaveisDinamicas.symbol || taskArgs?.id || taskArgs?.param || '';
     if (paramPrincipal && !urlFinal.endsWith(paramPrincipal) && !urlFinal.includes('?')) {
       urlFinal = `${urlFinal.replace(/\/+$/, '')}/${encodeURIComponent(paramPrincipal)}`;
     }
   }
 
-  const tokenLimpo = limparMascaraChave(authToken);
+  // Anexa queryParams explícitos se enviados pela LLM
+  if (taskArgs?.queryParams && typeof taskArgs.queryParams === 'object') {
+    const sp = new URLSearchParams();
+    for (const [k, v] of Object.entries(taskArgs.queryParams)) {
+      if (v !== undefined && v !== null) sp.append(k, String(v));
+    }
+    const qs = sp.toString();
+    if (qs) urlFinal += (urlFinal.includes('?') ? '&' : '?') + qs;
+  }
+
+  let tokenLimpo = limparMascaraChave(authToken);
+
+  // Se for chamada para APIs do Google sem token explícito, renova automaticamente via OAuth2
+  if (!tokenLimpo && urlFinal.includes('googleapis.com')) {
+    try {
+      tokenLimpo = await obterTokenAcessoGoogle();
+    } catch {}
+  }
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
-    ...customHeaders
+    ...customHeaders,
+    ...(taskArgs?.headers && typeof taskArgs.headers === 'object' ? taskArgs.headers : {})
   };
 
   if (tokenLimpo) {
-    headers['Authorization'] = `Bearer ${tokenLimpo}`;
+    headers['Authorization'] = tokenLimpo.startsWith('Bearer ')
+      ? tokenLimpo
+      : `Bearer ${tokenLimpo}`;
     if (authType === 'api_key') {
       headers['x-api-key'] = tokenLimpo;
     }
     const jaTemTokenNaUrl = /[?&](token|apikey|api_key|key)=/i.test(urlFinal);
     const deveAnexarTokenNaQuery = authType === 'query_token' || urlFinal.includes('brapi.dev');
     if (!jaTemTokenNaUrl && deveAnexarTokenNaQuery) {
-      urlFinal += `${urlFinal.includes('?') ? '&' : '?'}${encodeURIComponent(queryParamKey)}=${encodeURIComponent(tokenLimpo)}`;
+      const sep = urlFinal.includes('?') ? '&' : '?';
+      urlFinal = `${urlFinal}${sep}${encodeURIComponent(queryParamKey)}=${encodeURIComponent(
+        tokenLimpo
+      )}`;
     }
   }
 
-  let requestBody: string | undefined = undefined;
+  let corpoRequisicao: string | undefined = undefined;
   if (httpMethod !== 'GET' && httpMethod !== 'HEAD') {
-    if (payloadTemplate && payloadTemplate.trim().startsWith('{')) {
-      requestBody = payloadTemplate.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, varName) => {
-        const k = varName.trim();
-        return (
-          variaveisDinamicas[k] ??
-          variaveisDinamicas[k.toLowerCase()] ??
-          variaveisDinamicas.query ??
-          ''
-        );
-      });
+    if (taskArgs?.body || taskArgs?.bodyData || taskArgs?.service_data || taskArgs?.params) {
+      const objCorpo =
+        taskArgs.body || taskArgs.bodyData || taskArgs.service_data || taskArgs.params;
+      corpoRequisicao = typeof objCorpo === 'string' ? objCorpo : JSON.stringify(objCorpo);
+    } else if (payloadTemplate && payloadTemplate.trim().length > 0) {
+      corpoRequisicao = payloadTemplate.replace(
+        /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g,
+        (_m, varName) => variaveisDinamicas[varName.trim()] ?? ''
+      );
     } else {
-      requestBody = JSON.stringify({
-        ...taskArgs,
-        query: variaveisDinamicas.query,
-        prompt: userPrompt
-      });
+      corpoRequisicao = JSON.stringify(taskArgs);
     }
   }
 
@@ -148,11 +217,10 @@ export async function executarConectorApiUniversal(
     const resposta = await fetch(urlFinal, {
       method: httpMethod,
       headers,
-      body: requestBody,
+      body: corpoRequisicao,
       signal: AbortSignal.timeout(15000)
     });
 
-    // Leitura única e protegida do stream de resposta
     const rawText = await resposta.text();
     let dadosBrutos: any;
     try {
@@ -163,19 +231,19 @@ export async function executarConectorApiUniversal(
 
     return {
       connector: connectorName,
-      httpStatus: resposta.status,
-      success: resposta.ok,
-      authenticatedWithToken: Boolean(tokenLimpo),
+      status: resposta.status,
+      ok: resposta.ok,
+      url: urlFinal,
       data: dadosBrutos
     };
   } catch (err: any) {
     return {
-      error: `Falha na requisição ao conector "${connectorName}": ${err.message}`,
       connector: connectorName,
-      httpStatus: 500,
-      success: false
+      ok: false,
+      error: `Falha ao chamar endpoint (${urlFinal}): ${err.message}`
     };
   }
 }
 
 export const executeUniversalApiConnector = executarConectorApiUniversal;
+export default { executarConectorApiUniversal, executeUniversalApiConnector };
