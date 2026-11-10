@@ -146,6 +146,9 @@ export async function processarExecucaoWorkflow(
     }
 
     const { activeSpeakerName, speakerRole, isVoiceIdentified } = filtroSensorial;
+    if (filtroSensorial.promptTranscrito && filtroSensorial.promptTranscrito.trim().length > 0) {
+    userPrompt = filtroSensorial.promptTranscrito.trim();
+    }
 
     // 2. Visão Multimodal
     const visual = processarEntradaVisual(sensoryInput, userPrompt, activeSpeakerName);
