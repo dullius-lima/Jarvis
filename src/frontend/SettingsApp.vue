@@ -27,6 +27,14 @@
         </button>
 
         <button
+          @click="abaAtiva = 'voices'"
+          :class="{ active: abaAtiva === 'voices' }"
+          class="nav-item"
+        >
+          🎙️ Vozes &amp; Voice Match
+        </button>
+
+        <button
           @click="abaAtiva = 'agents'"
           :class="{ active: abaAtiva === 'agents' }"
           class="nav-item"
@@ -68,6 +76,7 @@
     <main class="content-area">
       <AbaCerebro v-if="abaAtiva === 'brain'" />
       <AbaSeguranca v-else-if="abaAtiva === 'security'" />
+      <AbaVozes v-else-if="abaAtiva === 'voices'" />
       <AbaAgentes v-else-if="abaAtiva === 'agents'" />
       <AbaConexoes v-else-if="abaAtiva === 'connectors'" />
       <AbaMemoria v-else-if="abaAtiva === 'memory'" />
@@ -79,9 +88,10 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 
-// IMPORTAÇÃO DOS 6 COMPONENTES MODULARES
+// IMPORTAÇÃO DOS COMPONENTES MODULARES
 import AbaCerebro from './components/settings/AbaCerebro.vue';
 import AbaSeguranca from './components/settings/AbaSeguranca.vue';
+import AbaVozes from './components/settings/AbaVozes.vue';
 import AbaAgentes from './components/settings/AbaAgentes.vue';
 import AbaConexoes from './components/settings/AbaConexoes.vue';
 import AbaMemoria from './components/settings/AbaMemoria.vue';
@@ -93,8 +103,8 @@ import AbaManual from './components/settings/AbaManual.vue';
 //   window.location.href = '/';
 // }
 
-type TipoAba = 'brain' | 'security' | 'agents' | 'connectors' | 'memory' | 'manual';
-const abasValidas: TipoAba[] = ['brain', 'security', 'agents', 'connectors', 'memory', 'manual'];
+type TipoAba = 'brain' | 'security' | 'voices' | 'agents' | 'connectors' | 'memory' | 'manual';
+const abasValidas: TipoAba[] = ['brain', 'security', 'voices', 'agents', 'connectors', 'memory', 'manual'];
 const abaSalva = localStorage.getItem('jarvis_settings_tab') as TipoAba;
 const abaInicial: TipoAba = abasValidas.includes(abaSalva) ? abaSalva : 'brain';
 
