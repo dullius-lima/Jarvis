@@ -153,8 +153,8 @@ app.get('/api/v1/dynamic-db/collections', async (_req: Request, res: Response) =
   }
 });
 
-// 1. Salvar gravação de áudio para clonar a voz do JARVIS
-app.post('/api/v1/audio/voice-sample', async (req, res) => {
+// Gravação de áudio de referência para voz
+app.post('/api/v1/audio/voice-sample', async (req: Request, res: Response) => {
   try {
     const { audioBase64 } = req.body || {};
     if (!audioBase64) return res.status(400).json({ success: false, error: 'Áudio vazio.' });
@@ -168,15 +168,15 @@ app.post('/api/v1/audio/voice-sample', async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Amostra de voz do JARVIS gravada com sucesso em assets/voices/jarvis_reference.wav!'
+      message: 'Amostra de voz gravada com sucesso em assets/voices/jarvis_reference.wav!'
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 2. Gerar fala neural/clonada do JARVIS sem gastar tokens
-app.post('/api/v1/audio/speak', async (req, res) => {
+// Síntese de fala offline / TTS
+app.post('/api/v1/audio/speak', async (req: Request, res: Response) => {
   try {
     const { text, mode = 'auto' } = req.body || {};
     if (!text) return res.status(400).json({ success: false, error: 'Texto obrigatório.' });
@@ -242,6 +242,7 @@ app.post('/api/v1/audio/transcribe', handleLocalAudioTranscribe);
 app.all('/api/v1/webhook/agents/:slug', handleAgentProductionWebhook);
 app.all('/api/v1/webhook-test/agents/:slug', handleAgentTestWebhook);
 app.all('/api/v1/webhook/global/:key', handleGlobalWebhookTrigger);
+app.all('/api/v1/webhook-test/global/:key', handleGlobalWebhookTrigger);
 
 // 7. Health Check
 app.get('/health', (_req: Request, res: Response) => {
@@ -254,8 +255,8 @@ app.get('/health', (_req: Request, res: Response) => {
 
 // 8. Roteamento de Telas
 const staticCandidates = [
-  path.resolve(__dirname, '../dist'),
-  path.resolve(__dirname, '../../dist'),
+  path.resolve(currentDir, '../dist'),
+  path.resolve(currentDir, '../../dist'),
   path.resolve(process.cwd(), 'dist'),
   path.resolve(process.cwd(), 'public')
 ];
