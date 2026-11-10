@@ -27,7 +27,8 @@ import {
 } from './controllers/orchestratorController.js';
 import {
   handleAgentProductionWebhook,
-  handleAgentTestWebhook
+  handleAgentTestWebhook,
+  handleGlobalWebhookTrigger
 } from './controllers/agentController.js';
 import {
   listMemorySessions,
@@ -54,11 +55,6 @@ import {
 } from './controllers/brainConfigController.js';
 import * as connectorController from './controllers/connectorController.js';
 import { spawn } from 'child_process';
-
-import { handleGlobalWebhookTrigger } from './controllers/agentController.js';
-
-// Rota de Ingress do Webhook Global 1:N
-app.all('/api/v1/webhook/global/:key', handleGlobalWebhookTrigger);
 
 const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 
@@ -240,11 +236,12 @@ app.delete('/api/v1/docs-ssh/rag/documents/:id', handleDeleteRagDocument);
 app.post('/api/v1/docs-ssh/ssh/execute', handleSshExecute);
 app.post('/api/v1/docs-ssh/ssh/read-to-rag', handleSshReadToRag);
 
-// 6. Webhooks de Entrada (Orquestrador Central, Áudio Whisper e Agentes Diretos)
+// 6. Webhooks de Entrada (Orquestrador Central, Áudio Whisper, Agentes Diretos e Webhook Global 1:N)
 app.post('/api/v1/webhook/ingress', handleWebhookIngress);
 app.post('/api/v1/audio/transcribe', handleLocalAudioTranscribe);
 app.all('/api/v1/webhook/agents/:slug', handleAgentProductionWebhook);
 app.all('/api/v1/webhook-test/agents/:slug', handleAgentTestWebhook);
+app.all('/api/v1/webhook/global/:key', handleGlobalWebhookTrigger);
 
 // 7. Health Check
 app.get('/health', (_req: Request, res: Response) => {
@@ -255,7 +252,7 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
-// 8. Roteamento de Telas (Garante que a raiz '/' abra o Cérebro 3D e não as Configurações)
+// 8. Roteamento de Telas
 const staticCandidates = [
   path.resolve(__dirname, '../dist'),
   path.resolve(__dirname, '../../dist'),
@@ -267,7 +264,6 @@ const clientDistPath = staticCandidates.find((dir) => fs.existsSync(dir)) || sta
 if (fs.existsSync(clientDistPath)) {
   app.use(express.static(clientDistPath));
 
-  // Rota explícita para configurações
   app.get(['/settings', '/settings.html'], (_req: Request, res: Response) => {
     const settingsFile = path.join(clientDistPath, 'settings.html');
     if (fs.existsSync(settingsFile)) {
@@ -276,7 +272,6 @@ if (fs.existsSync(clientDistPath)) {
     return res.sendFile(path.join(clientDistPath, 'index.html'));
   });
 
-  // Rota raiz e qualquer outra página carregam o index.html (Avatar/Cérebro 3D)
   app.get('*', (req: Request, res: Response, next: NextFunction) => {
     if (req.path.startsWith('/api/') || req.path.startsWith('/health')) {
       return next();
