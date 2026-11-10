@@ -320,10 +320,15 @@ async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
     });
 
     const json = await res.json().catch(() => ({}));
-    registerAgentExecution(json);
-
-    // Declaração do payload antes da extração (corrige o ReferenceError)
     const payload = json.data || json;
+
+    // Se o backend indicou que a fala sem a palavra "Jarvis" foi ignorada em silêncio:
+    if (payload?.silentIgnore || json?.silentIgnore) {
+      voiceStatusText.value = '🟢 Vigília Sempre Ativa: Diga "Jarvis"...';
+      return;
+    }
+
+    registerAgentExecution(json);
 
     const replyText =
       payload?.response ||
@@ -348,7 +353,7 @@ async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
     speakJarvisResponse(msg);
   } finally {
     isProcessing.value = false;
-  } // <-- Fecha o bloco finally
+  }
 }
 
 let refreshIntervalId: any = null;
