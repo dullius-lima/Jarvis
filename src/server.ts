@@ -55,6 +55,11 @@ import {
 import * as connectorController from './controllers/connectorController.js';
 import { spawn } from 'child_process';
 
+import { handleGlobalWebhookTrigger } from './controllers/agentController.js';
+
+// Rota de Ingress do Webhook Global 1:N
+app.all('/api/v1/webhook/global/:key', handleGlobalWebhookTrigger);
+
 const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 
 function resolveRouter(mod: any): express.Router {
