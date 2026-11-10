@@ -28,7 +28,12 @@
             <span v-else class="key-badge inherited" title="Herda a chave mestre do JARVIS">🔑 Chave do Cérebro</span>
           </span>
           <span v-if="ag.endpoint_url">🌐 {{ ag.endpoint_url }}</span>
-          <span v-if="ag.next_agent_slug" class="chain-badge">🔗 Próximo Nó: {{ ag.next_agent_slug }}</span>
+          <span v-if="Array.isArray(ag.next_agent_slugs) && ag.next_agent_slugs.length" class="chain-badge">
+            🔗 Próximos Nós ({{ ag.next_agent_slugs.length }}): {{ ag.next_agent_slugs.join(', ') }}
+          </span>
+          <span v-else-if="ag.next_agent_slug" class="chain-badge">
+            🔗 Próximo Nó: {{ ag.next_agent_slug }}
+          </span>
         </div>
 
         <div v-if="Array.isArray(ag.tools) && ag.tools.length" class="tools-chips">
@@ -187,9 +192,22 @@
             </div>
           </div>
 
-          <!-- ETAPA 2B: API DIRETA / MCP -->
+          <!-- ETAPA 2B: API DIRETA / MCP (COM BOTÃO DE CONVERSÃO GLOBAL) -->
           <div v-else-if="agenteEmEdicao.agent_type === 'api' || agenteEmEdicao.agent_type === 'mcp'" class="step-section">
-            <div class="step-badge">2. Configuração da Requisição Direta ({{ agenteEmEdicao.agent_type.toUpperCase() }})</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+              <div class="step-badge" style="margin-bottom: 0;">
+                2. Configuração da Requisição Direta ({{ agenteEmEdicao.agent_type.toUpperCase() }})
+              </div>
+
+              <button 
+                type="button"
+                @click="converterRequisicaoEmConexaoGlobal"
+                title="Transforma esta URL e Payload em um nó permanente na tabela external_connectors"
+                class="btn-convert-global"
+              >
+                🌐 Converter em Conexão Global
+              </button>
+            </div>
 
             <div class="form-row">
               <div v-if="agenteEmEdicao.agent_type === 'api'" class="form-group" style="max-width: 130px;">
@@ -387,24 +405,40 @@
             </div>
           </div>
 
-          <!-- ETAPA 4: ENCADEAMENTO (PIPELINE) & CRON -->
+          <!-- ETAPA 4: ENCADEAMENTO (PIPELINE 1:N) & CRON -->
           <div class="step-section">
-            <div class="step-badge">4. Encadeamento Pipeline (Node-to-Node) &amp; Agendamento</div>
-            <div class="form-row">
-              <div class="form-group">
-                <label>🔗 Encadear Saída para Próximo Agente (Opcional)</label>
-                <select v-model="agenteEmEdicao.next_agent_slug" class="input-field">
-                  <option :value="null">-- Nenhum (Retornar direto ao JARVIS) --</option>
-                  <option
-                    v-for="other in listaAgentes.filter((a) => a.slug !== agenteEmEdicao.slug)"
-                    :key="other.slug"
-                    :value="other.slug"
-                  >
-                    ➔ {{ other.name }} ({{ other.slug }})
-                  </option>
-                </select>
-              </div>
+            <div class="step-badge">4. Encadeamento Pipeline (Node-to-Node 1:N) &amp; Agendamento</div>
+            
+            <div class="form-group">
+              <label style="color: #38bdf8; font-weight: 700;">
+                🔗 Encadear Saída para Próximos Agentes (1:N Fan-Out - Marque quantos quiser)
+              </label>
+              <p style="font-size: 11px; color: #94a3b8; margin: -2px 0 8px 0;">
+                A resposta deste especialista será despachada simultaneamente para todos os agentes selecionados.
+              </p>
 
+              <div class="agents-next-checkbox-grid">
+                <label
+                  v-for="other in listaAgentes.filter((a) => a.slug !== agenteEmEdicao.slug)"
+                  :key="other.slug"
+                  class="next-agent-checkbox-card"
+                  :class="{ selected: Array.isArray(agenteEmEdicao.next_agent_slugs) && agenteEmEdicao.next_agent_slugs.includes(other.slug) }"
+                >
+                  <input
+                    type="checkbox"
+                    :value="other.slug"
+                    v-model="agenteEmEdicao.next_agent_slugs"
+                  />
+                  <span>{{ other.icon || '🤖' }}</span>
+                  <span class="agent-next-name">{{ other.name }} ({{ other.slug }})</span>
+                </label>
+                <div v-if="listaAgentes.filter((a) => a.slug !== agenteEmEdicao.slug).length === 0" style="padding: 10px; font-size: 12px; color: #64748b;">
+                  Nenhum outro agente cadastrado para encadeamento.
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row" style="margin-top: 10px;">
               <div class="form-group">
                 <label>⏰ Expressão Cron de Agendamento</label>
                 <input type="text" v-model="agenteEmEdicao.cron_expression" class="input-field" placeholder="Ex: */15 * * * *" />
@@ -520,6 +554,7 @@ const agenteEmEdicao = ref<any>({
   code_snippet: 'return { status: "ok", resultado: payload };',
   tools: [] as string[],
   next_agent_slug: null,
+  next_agent_slugs: [] as string[],
   cron_expression: '*/5 * * * *',
   is_active: true
 });
@@ -589,6 +624,91 @@ async function carregarCatalogoDeFerramentas() {
     }
   } catch (err) {
     console.warn('Falha ao carregar catálogo de ferramentas:', err);
+  }
+}
+
+async function converterRequisicaoEmConexaoGlobal() {
+  if (!agenteEmEdicao.value) return;
+
+  const endpoint = (agenteEmEdicao.value.endpoint_url || '').trim();
+  if (!endpoint) {
+    alert('Preencha a Endpoint URL da requisição antes de converter.');
+    return;
+  }
+
+  // 1. Sugestão de nome amigável
+  const nomeSugerido = agenteEmEdicao.value.name ? `${agenteEmEdicao.value.name} (API)` : 'Nova Conexão Webhook';
+  const nomeConexao = prompt('Nome desta Conexão Global (aparecerá nos checkboxes de todos os agentes):', nomeSugerido);
+  if (!nomeConexao || !nomeConexao.trim()) return;
+
+  // 2. Chave padronizada (provider_key)
+  const chaveProvedor = 'conn_' + nomeConexao
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  const httpMethod = (agenteEmEdicao.value.http_method || 'POST').toUpperCase();
+  const token = (agenteEmEdicao.value.auth_token || '').trim();
+  const payloadJson = agenteEmEdicao.value.payload_template || '';
+
+  const payloadConexao = {
+    provider_key: chaveProvedor,
+    name: nomeConexao.trim(),
+    category: 'Webhooks & APIs',
+    icon: '🪝',
+    description: `Conexão global originada do agente "${agenteEmEdicao.value.name}".`,
+    is_enabled: true,
+    endpoint_url: endpoint,
+    http_method: httpMethod,
+    api_key: token,
+    auth_token: token,
+    payload_template: payloadJson,
+    config: {
+      endpoint_url: endpoint,
+      http_method: httpMethod,
+      api_key: token,
+      auth_token: token,
+      payload_template: payloadJson
+    }
+  };
+
+  try {
+    let res = await fetch('/api/v1/connectors', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payloadConexao)
+    });
+
+    if (!res.ok && res.status === 404) {
+      res = await fetch('/api/v1/connectors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payloadConexao)
+      });
+    }
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || 'Falha ao salvar conexão.');
+    }
+
+    // 3. Atualiza o catálogo de ferramentas deste componente
+    await carregarCatalogoDeFerramentas();
+
+    // 4. Marca o checkbox na hora no agente em edição
+    if (!Array.isArray(agenteEmEdicao.value.tools)) {
+      agenteEmEdicao.value.tools = [];
+    }
+    if (!agenteEmEdicao.value.tools.includes(chaveProvedor)) {
+      agenteEmEdicao.value.tools.push(chaveProvedor);
+    }
+
+    alert(`✅ Conexão "${nomeConexao}" registrada no banco com sucesso!\n\nEla já está disponível no catálogo de checkboxes para todos os agentes.`);
+  } catch (err: any) {
+    alert(`❌ Erro ao converter conexão: ${err.message}`);
   }
 }
 
@@ -740,7 +860,18 @@ async function buscarAgentesEspecialistas() {
                 return [];
               }
             })()
-          : []
+          : [],
+        next_agent_slugs: Array.isArray(ag.next_agent_slugs)
+          ? ag.next_agent_slugs
+          : typeof ag.next_agent_slugs === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(ag.next_agent_slugs);
+              } catch {
+                return ag.next_agent_slug ? [ag.next_agent_slug] : [];
+              }
+            })()
+          : ag.next_agent_slug ? [ag.next_agent_slug] : []
       }));
     }
   } catch (err) {
@@ -775,6 +906,7 @@ function abrirModalNovoAgente() {
     code_snippet: 'return { status: "ok", resultado: payload };',
     tools: [] as string[],
     next_agent_slug: null,
+    next_agent_slugs: [] as string[],
     cron_expression: '*/5 * * * *',
     is_active: true
   };
@@ -791,6 +923,20 @@ function abrirModalEditarAgente(ag: any) {
   const lista = modelosDoProvedor(prov);
   const existe = lista.some((m) => m.value === ag.model && m.value !== 'CUSTOM_INPUT');
 
+  let slugsIniciais: string[] = [];
+  if (Array.isArray(ag.next_agent_slugs)) {
+    slugsIniciais = [...ag.next_agent_slugs];
+  } else if (typeof ag.next_agent_slugs === 'string') {
+    try {
+      slugsIniciais = JSON.parse(ag.next_agent_slugs);
+    } catch {
+      slugsIniciais = [];
+    }
+  }
+  if (slugsIniciais.length === 0 && ag.next_agent_slug) {
+    slugsIniciais = [ag.next_agent_slug];
+  }
+
   agenteEmEdicao.value = {
     ...ag,
     icon: ag.icon || '🤖',
@@ -803,6 +949,7 @@ function abrirModalEditarAgente(ag: any) {
     base_url: ag.base_url || ENDPOINTS_PADRAO[prov] || '',
     tools: Array.isArray(ag.tools) ? [...ag.tools] : [],
     next_agent_slug: ag.next_agent_slug || null,
+    next_agent_slugs: slugsIniciais,
     cron_expression: ag.cron_expression || '*/5 * * * *'
   };
   exibirModalAgente.value = true;
@@ -841,11 +988,18 @@ async function salvarAgenteEspecialista() {
         ? agenteEmEdicao.value.custom_model_id.trim()
         : agenteEmEdicao.value.model;
 
+    const nextSlugs = Array.isArray(agenteEmEdicao.value.next_agent_slugs)
+      ? agenteEmEdicao.value.next_agent_slugs
+      : [];
+    const primaryNextSlug = nextSlugs.length > 0 ? nextSlugs[0] : (agenteEmEdicao.value.next_agent_slug || null);
+
     const payload = {
       ...agenteEmEdicao.value,
       model: modeloFinal,
       api_key: agenteEmEdicao.value.api_key?.trim() || null,
       base_url: agenteEmEdicao.value.base_url?.trim() || null,
+      next_agent_slug: primaryNextSlug,
+      next_agent_slugs: nextSlugs,
       response_instruction: agenteEmEdicao.value.system_prompt
     };
 
@@ -1005,6 +1159,12 @@ onMounted(async () => {
   border: 1px solid rgba(148, 163, 184, 0.25);
 }
 
+.chain-badge {
+  font-size: 0.72rem;
+  color: #f59e0b;
+  font-weight: 600;
+}
+
 .tools-chips {
   display: flex;
   flex-wrap: wrap;
@@ -1086,6 +1246,25 @@ onMounted(async () => {
   padding: 4px 10px;
   border-radius: 6px;
   margin-bottom: 12px;
+}
+
+.btn-convert-global {
+  background: rgba(14, 165, 233, 0.15);
+  border: 1px solid #0ea5e9;
+  color: #38bdf8;
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.btn-convert-global:hover {
+  background: rgba(14, 165, 233, 0.28);
 }
 
 .key-input-container {
@@ -1177,6 +1356,44 @@ onMounted(async () => {
   border: none;
   cursor: pointer;
   font-size: 0.85rem;
+}
+
+/* Pipeline 1:N Checkboxes */
+.agents-next-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 6px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+}
+
+.next-agent-checkbox-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #020617;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: #e2e8f0;
+  transition: all 0.2s;
+}
+
+.next-agent-checkbox-card.selected {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.agent-next-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .form-group {
