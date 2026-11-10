@@ -1,403 +1,310 @@
-// src/frontend/composables/useVoiceAndAudio.ts
-import { ref } from 'vue';
+// src/services/orchestrator/cortexSensorial.ts
+import { pool } from '../../config/database.js';
+import { appendShortTermMemory } from '../shortTermMemoryService.js';
+import { identifySpeaker, enrollSpeakerVoice, extractAcousticFeatures } from '../voiceBiometricService.js';
+import { transcribeWithLocalWhisper } from '../whisperLocalService.js';
+import { SensoryAttachments, SensorPayload } from './brainConfigAndUtils.js';
 
-export function useVoiceAndAudio(
-  onCommandDetected: (text: string, audioSignaturePayload?: string) => void
-) {
-  const isVigilanceEnabled = ref<boolean>(true);
-  const isJarvisAwake = ref<boolean>(false);
-  const isJarvisSpeaking = ref<boolean>(false);
-  const isRecordingAudio = ref<boolean>(false);
-  const voiceStatusText = ref<string>('🟢 Vigília ativa: Diga "Jarvis" ou toque no Globo');
-  const isVoiceMuted = ref<boolean>(false);
+export interface RespostaFiltroSensorial {
+  interceptado: boolean;
+  promptTranscrito?: string;
+  respostaPronta?: any;
+  activeSpeakerName: string;
+  speakerRole: string;
+  isVoiceIdentified: boolean;
+}
 
-  let recognition: any = null;
-  let isRecognitionRunning = false;
-  let speechSilenceTimer: any = null;
-  let vadFallbackTimer: any = null;
-  let speechAccumulatedBuffer = '';
-  let lastChimeTimestamp = 0;
+/**
+ * Processa biometria de voz, treinamento Voice Match (Google style), saudações rápidas e limpeza de Wake Words
+ */
+export async function processarBiometriaESaudacao(
+  userPrompt: string,
+  identityToken: string,
+  sessionId: string,
+  sensoryInput?: SensorPayload | SensoryAttachments | any,
+  historicoLinhas = 0,
+  inicioExecucao = Date.now()
+): Promise<RespostaFiltroSensorial> {
+  let activeSpeakerName = identityToken || 'Matheus-Admin';
+  let speakerRole = 'admin';
+  let isVoiceIdentified = false;
+  let promptEfetivo = (userPrompt || '').trim();
 
-  let localAudioStream: MediaStream | null = null;
-  let audioContext: AudioContext | null = null;
-  let analyserNode: AnalyserNode | null = null;
-  let pitchMonitorInterval: any = null;
-  let measuredPitches: number[] = [];
-  let measuredEnergies: number[] = [];
-  let mediaRecorder: MediaRecorder | null = null;
-  let audioChunks: Blob[] = [];
+  const audioSample =
+    sensoryInput?.audioBase64 ||
+    sensoryInput?.sensorData?.audioBase64 ||
+    sensoryInput?.sensorData?.audio ||
+    sensoryInput?.audio;
 
-  function playJarvisChime(type: 'wake' | 'send' = 'wake') {
-    const now = Date.now();
-    if (now - lastChimeTimestamp < 800) return;
-    lastChimeTimestamp = now;
-
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
-      if (ctx.state === 'suspended') ctx.resume();
-
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.type = 'sine';
-      if (type === 'wake') {
-        osc.frequency.setValueAtTime(523.25, ctx.currentTime);
-        osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.08);
-      } else {
-        osc.frequency.setValueAtTime(659.25, ctx.currentTime);
-        osc.frequency.setValueAtTime(523.25, ctx.currentTime + 0.08);
-      }
-
-      gain.gain.setValueAtTime(0.12, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.22);
-      setTimeout(() => ctx.close().catch(() => {}), 250);
-    } catch {}
-  }
-
-  function detectPitch(buf: Float32Array, sampleRate: number): { pitch: number; rms: number } {
-    let sumSq = 0;
-    for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
-    const rms = Math.sqrt(sumSq / buf.length);
-    if (rms < 0.014) return { pitch: -1, rms };
-
-    const minPeriod = Math.floor(sampleRate / 380);
-    const maxPeriod = Math.floor(sampleRate / 75);
-    let bestOffset = -1;
-    let bestCorr = 0;
-
-    for (let offset = minPeriod; offset <= maxPeriod; offset++) {
-      let corr = 0;
-      for (let i = 0; i < buf.length - offset; i++) corr += buf[i] * buf[i + offset];
-      if (corr > bestCorr) {
-        bestCorr = corr;
-        bestOffset = offset;
-      }
-    }
-    const pitch = bestOffset > 0 ? sampleRate / bestOffset : -1;
-    return { pitch: pitch >= 75 && pitch <= 380 ? pitch : -1, rms };
-  }
-
-  async function startAudioCapture(): Promise<boolean> {
-    try {
-      if (!localAudioStream || !localAudioStream.active) {
-        localAudioStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-        });
-      }
-
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtx && !audioContext) {
-        audioContext = new AudioCtx();
-        const source = audioContext.createMediaStreamSource(localAudioStream);
-        analyserNode = audioContext.createAnalyser();
-        analyserNode.fftSize = 2048;
-        source.connect(analyserNode);
-      }
-
-      if (audioContext && audioContext.state === 'suspended') {
-        await audioContext.resume();
-      }
-
-      if (pitchMonitorInterval) clearInterval(pitchMonitorInterval);
-      pitchMonitorInterval = setInterval(() => {
-        if (!analyserNode || !audioContext || isJarvisSpeaking.value) return;
-        const buffer = new Float32Array(analyserNode.fftSize);
-        analyserNode.getFloatTimeDomainData(buffer);
-        const { pitch, rms } = detectPitch(buffer, audioContext.sampleRate);
-
-        if (pitch > 0 && rms >= 0.016) {
-          measuredPitches.push(pitch);
-          measuredEnergies.push(rms);
-          if (measuredPitches.length > 40) measuredPitches.shift();
-          if (measuredEnergies.length > 40) measuredEnergies.shift();
+  // 0. Fallback Whisper Local caso o frontend envie apenas o áudio sem texto
+  if ((!promptEfetivo || promptEfetivo === '__VAD_AUDIO_ONLY__') && audioSample) {
+    const { rawAudioBase64 } = extractAcousticFeatures(audioSample);
+    const b64ToTranscribe = rawAudioBase64 && rawAudioBase64.length > 200 ? rawAudioBase64 : audioSample;
+    if (b64ToTranscribe && b64ToTranscribe.length > 200) {
+      try {
+        const whisperRes = await transcribeWithLocalWhisper(b64ToTranscribe);
+        if (whisperRes && whisperRes.trim().length > 0) {
+          promptEfetivo = whisperRes.trim();
+        } else {
+          promptEfetivo = '';
         }
-      }, 60);
+      } catch (e: any) {
+        console.warn('⚠️ [Whisper Fallback] Erro na transcrição local:', e?.message);
+        promptEfetivo = '';
+      }
+    } else {
+      promptEfetivo = '';
+    }
+  }
 
-      if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-        audioChunks = [];
-        mediaRecorder = new MediaRecorder(localAudioStream);
-        mediaRecorder.ondataavailable = (e) => {
-          if (e.data.size > 0) {
-            audioChunks.push(e.data);
-            if (audioChunks.length > 25) audioChunks.shift();
+  // Se o prompt ainda for a chave técnica ou estiver totalmente vazio após o VAD, solicita repetição
+  if (promptEfetivo === '__VAD_AUDIO_ONLY__' || !promptEfetivo) {
+    const msgNaoOuvi = `Não consegui compreender o áudio com clareza, ${activeSpeakerName}. Pode repetir, por favor?`;
+    return {
+      interceptado: true,
+      promptTranscrito: '',
+      activeSpeakerName,
+      speakerRole,
+      isVoiceIdentified: false,
+      respostaPronta: {
+        success: true,
+        triggeredSuccess: true,
+        agent: 'JARVIS',
+        agentId: 'jarvis_core',
+        nodeType: 'core',
+        identity: activeSpeakerName,
+        sessionId,
+        response: msgNaoOuvi,
+        executionTimeMs: Date.now() - inicioExecucao
+      }
+    };
+  }
+
+  // 1. Biometria Vocal + Treinamento Voice Match
+  if (audioSample && typeof audioSample === 'string' && audioSample.length > 12) {
+    try {
+      // 1.1 Cadastro / Treinamento de voz por comando
+      const matchCadastro = promptEfetivo.match(
+        /(?:sou\s+(?:o|a)?|meu\s+nome\s+[eé]|aqui\s+[eé]\s+(?:o|a)?|aqui\s+quem\s+fala\s+[eé]\s+(?:o|a)?|treinar\s+(?:a\s+)?voz\s+(?:do|da)?|cadastre\s+a\s+voz\s+(?:do|da)?)\s+([A-Za-zÀ-ÖØ-öø-ÿ]+)/i
+      );
+
+      if (matchCadastro && matchCadastro[1]) {
+        const nomeDetectado =
+          matchCadastro[1].charAt(0).toUpperCase() + matchCadastro[1].slice(1).toLowerCase();
+        const papelAtribuido = nomeDetectado.toLowerCase().includes('matheus') ? 'admin' : 'family';
+
+        const enrolled = await enrollSpeakerVoice(nomeDetectado, audioSample, papelAtribuido);
+
+        let respostaCadastro = '';
+        if (enrolled.samplesCount === 1) {
+          respostaCadastro = `Perfeito, ${nomeDetectado}! Gravei a 1ª amostra da sua voz (${enrolled.pitchHz.toFixed(0)} Hz). Para calibrar com precisão, diga mais uma frase: "Jarvis, aqui quem fala é ${nomeDetectado}".`;
+        } else if (enrolled.samplesCount === 2) {
+          respostaCadastro = `Excelente, ${nomeDetectado}! 2ª amostra calibrada. Para finalizar seu Voice Match, diga: "Eu sou ${nomeDetectado} e minha voz está ativa".`;
+        } else {
+          respostaCadastro = `Treinamento Voice Match concluído para ${nomeDetectado} com ${enrolled.samplesCount} amostras calibradas (${enrolled.pitchHz.toFixed(0)} Hz)! Já reconheço sua voz automaticamente. Como posso ajudar?`;
+        }
+
+        appendShortTermMemory(sessionId, 'user', promptEfetivo);
+        appendShortTermMemory(sessionId, 'assistant', respostaCadastro);
+
+        pool.query(
+          `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
+          [sessionId, promptEfetivo, respostaCadastro]
+        ).catch(() => {});
+
+        return {
+          interceptado: true,
+          promptTranscrito: promptEfetivo,
+          activeSpeakerName: nomeDetectado,
+          speakerRole: papelAtribuido,
+          isVoiceIdentified: true,
+          respostaPronta: {
+            success: true,
+            triggeredSuccess: true,
+            agent: 'JARVIS (Voice Match)',
+            agentId: 'jarvis_core',
+            nodeType: 'core',
+            memoryStored: true,
+            memoryCount: historicoLinhas + 2,
+            identity: nomeDetectado,
+            speaker: {
+              name: nomeDetectado,
+              role: papelAtribuido,
+              identified: true,
+              samplesCount: enrolled.samplesCount
+            },
+            sessionId,
+            response: respostaCadastro,
+            executionTimeMs: Date.now() - inicioExecucao
           }
         };
-        mediaRecorder.start(200);
-        isRecordingAudio.value = true;
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function buildVoicePayload(): Promise<string> {
-    const avgPitch =
-      measuredPitches.length > 0
-        ? (measuredPitches.reduce((a, b) => a + b, 0) / measuredPitches.length).toFixed(2)
-        : '130.00';
-    const avgEnergy =
-      measuredEnergies.length > 0
-        ? (measuredEnergies.reduce((a, b) => a + b, 0) / measuredEnergies.length).toFixed(4)
-        : '0.0500';
-
-    let base64Data = '';
-    if (audioChunks.length > 0) {
-      try {
-        const blob = new Blob(audioChunks, { type: 'audio/webm' });
-        base64Data = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const res = (reader.result as string) || '';
-            resolve(res.split(',')[1] || '');
-          };
-          reader.onerror = () => resolve('');
-          reader.readAsDataURL(blob);
-        });
-      } catch {}
-    }
-
-    measuredPitches = [];
-    measuredEnergies = [];
-    audioChunks = [];
-
-    return `PITCH:${avgPitch}|ENERGY:${avgEnergy}|DATA:${base64Data || 'SPEECH_API'}`;
-  }
-
-  function initSTT(onTextChange?: (text: string) => void) {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) return null;
-
-    const rec = new SpeechRecognition();
-    rec.lang = 'pt-BR';
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.maxAlternatives = 1;
-
-    rec.onstart = () => {
-      isRecognitionRunning = true;
-      voiceStatusText.value = isJarvisAwake.value
-        ? '🎙️ Ouvindo você... Pode falar'
-        : '🟢 Vigília ativa: Diga "Jarvis" ou toque no Globo';
-    };
-
-    rec.onresult = (event: any) => {
-      if (isJarvisSpeaking.value) return;
-      if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
-
-      let currentInterim = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        const part = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          speechAccumulatedBuffer += ' ' + part;
-        } else {
-          currentInterim += part;
-        }
       }
 
-      const liveText = (speechAccumulatedBuffer + ' ' + currentInterim).trim();
-      if (!liveText) return;
-
-      const wakeWordPattern = /(?:oi|ol[aá]|ei|ok|fala)?\s*(?:jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves)/i;
-
-      // 1. Acorda o assistente ao ouvir Jarvis
-      if (!isJarvisAwake.value && wakeWordPattern.test(liveText)) {
-        isJarvisAwake.value = true;
-        playJarvisChime('wake');
-
-        const parts = liveText.split(wakeWordPattern);
-        const remainder = parts.pop()?.replace(/^[,.\s!?-]+/, '').trim() || '';
-
-        if (remainder.length > 2) {
-          speechAccumulatedBuffer = remainder;
-          if (onTextChange) onTextChange(remainder);
-          voiceStatusText.value = `🎙️ "${remainder}"`;
-        } else {
-          speechAccumulatedBuffer = '';
-          voiceStatusText.value = '🎙️ Sim? Estou ouvindo... Diga seu comando!';
-        }
-      }
-
-      // 2. Se já estiver acordado e você estiver falando, aguarda 1.6s após você parar de falar para enviar
-      if (isJarvisAwake.value && liveText.length > 1) {
-        const cleaned = liveText.replace(wakeWordPattern, '').replace(/^[,.\s!?-]+/, '').trim() || liveText;
-        if (onTextChange) onTextChange(cleaned);
-        voiceStatusText.value = `🎙️ "${cleaned}"`;
-
-        speechSilenceTimer = setTimeout(async () => {
-          if (cleaned.length > 0) {
-            playJarvisChime('send');
-            voiceStatusText.value = '⚡ Processando comando...';
-            const bioPayload = await buildVoicePayload();
-            isJarvisAwake.value = false;
-            speechAccumulatedBuffer = '';
-            onCommandDetected(cleaned, bioPayload);
+      // 1.2 Comparação com os perfis biométricos salvos
+      const checagemVoz = await identifySpeaker(audioSample);
+      if (checagemVoz.identified) {
+        activeSpeakerName = checagemVoz.name;
+        speakerRole = checagemVoz.role;
+        isVoiceIdentified = true;
+      } else if (checagemVoz.ambiguous && checagemVoz.candidates) {
+        const msgDuvida = `Notei semelhança na voz entre ${checagemVoz.candidates[0]} e ${checagemVoz.candidates[1]}. Com quem estou falando? Diga "Sou a ${checagemVoz.candidates[0]}" ou "Sou a ${checagemVoz.candidates[1]}" para eu calibrar.`;
+        return {
+          interceptado: true,
+          promptTranscrito: promptEfetivo,
+          activeSpeakerName: 'Desconhecido',
+          speakerRole: 'family',
+          isVoiceIdentified: false,
+          respostaPronta: {
+            success: true,
+            triggeredSuccess: true,
+            agent: 'JARVIS (Voice Match)',
+            agentId: 'jarvis_core',
+            nodeType: 'core',
+            identity: 'Desconhecido',
+            sessionId,
+            response: msgDuvida,
+            executionTimeMs: Date.now() - inicioExecucao
           }
-        }, 1600);
+        };
+      }
+    } catch (err: any) {
+      console.warn('⚠️ [Córtex Sensorial] Aviso na biometria vocal:', err?.message);
+    }
+  }
+
+  // 2. Limpeza da Wake Word e Detecção de Chamada Isolada
+  const padraoWakeWord = /^(?:oi|ol[aá]|ei|ok|fala)?\s*(?:jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves)[,.\s!?-]*/i;
+  const apenasChamouWakeWord = /^(?:oi|ol[aá]|ei|ok|fala)?\s*(?:jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves)[!.,?\s]*$/i.test(promptEfetivo);
+
+  if (apenasChamouWakeWord) {
+    const saudacaoVoz = `Sim, ${activeSpeakerName}? Estou ouvindo perfeitamente. O que você precisa?`;
+    appendShortTermMemory(sessionId, 'user', promptEfetivo);
+    appendShortTermMemory(sessionId, 'assistant', saudacaoVoz);
+
+    pool.query(
+      `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
+      [sessionId, promptEfetivo, saudacaoVoz]
+    ).catch(() => {});
+
+    return {
+      interceptado: true,
+      promptTranscrito: promptEfetivo,
+      activeSpeakerName,
+      speakerRole,
+      isVoiceIdentified,
+      respostaPronta: {
+        success: true,
+        triggeredSuccess: true,
+        agent: 'JARVIS',
+        agentId: 'jarvis_core',
+        nodeType: 'core',
+        identity: activeSpeakerName,
+        speaker: { name: activeSpeakerName, role: speakerRole, identified: isVoiceIdentified },
+        sessionId,
+        response: saudacaoVoz,
+        executionTimeMs: Date.now() - inicioExecucao
       }
     };
+  }
 
-    rec.onerror = (event: any) => {
-      if (event.error === 'not-allowed') {
-        isVigilanceEnabled.value = false;
-        voiceStatusText.value = '⚠️ Microfone bloqueado no navegador';
+  // Extrai o comando real removendo prefixos de wake word (ex.: "Jarvis, ligue as luzes" -> "ligue as luzes")
+  const comandoLimpo = promptEfetivo.replace(padraoWakeWord, '').trim();
+
+  // 3. Filtro de saudações básicas de texto sem comando posterior
+  const textoLimpo = (comandoLimpo || promptEfetivo).toLowerCase().replace(/[!.,?]/g, '');
+  const ehSaudacaoBasica = /^(oi|ol[aá]|bom dia|boa tarde|boa noite|e ai|ei|fala ai)$/i.test(textoLimpo);
+
+  if (ehSaudacaoBasica) {
+    const respostaSaudacao = `Olá, ${activeSpeakerName}! Todos os sistemas estão operacionais. Como posso ajudar você agora?`;
+    appendShortTermMemory(sessionId, 'user', promptEfetivo);
+    appendShortTermMemory(sessionId, 'assistant', respostaSaudacao);
+
+    pool.query(
+      `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
+      [sessionId, promptEfetivo, respostaSaudacao]
+    ).catch(() => {});
+
+    return {
+      interceptado: true,
+      promptTranscrito: promptEfetivo,
+      activeSpeakerName,
+      speakerRole,
+      isVoiceIdentified,
+      respostaPronta: {
+        success: true,
+        triggeredSuccess: true,
+        agent: 'JARVIS',
+        agentId: 'jarvis_core',
+        nodeType: 'core',
+        memoryStored: true,
+        memoryCount: historicoLinhas + 2,
+        identity: activeSpeakerName,
+        sessionId,
+        response: respostaSaudacao,
+        executionTimeMs: Date.now() - inicioExecucao
       }
     };
-
-    rec.onend = () => {
-      isRecognitionRunning = false;
-      if (isVigilanceEnabled.value && !isJarvisSpeaking.value) {
-        setTimeout(() => {
-          if (!isRecognitionRunning && !isJarvisSpeaking.value) {
-            try { rec.start(); } catch {}
-          }
-        }, 250);
-      }
-    };
-
-    return rec;
   }
 
-  async function onJarvisCoreClick(onTextChange?: (text: string) => void) {
-    if (isJarvisSpeaking.value) {
-      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-      isJarvisSpeaking.value = false;
-    }
+  // Permite que comandos reais sigam livremente para o orquestrador e agentes especialistas
+  return {
+    interceptado: false,
+    promptTranscrito: comandoLimpo || promptEfetivo,
+    activeSpeakerName,
+    speakerRole,
+    isVoiceIdentified
+  };
+}
 
-    if (isJarvisAwake.value) {
-      isJarvisAwake.value = false;
-      voiceStatusText.value = '🟢 Vigília ativa: Diga "Jarvis" ou toque no Globo';
-      return;
-    }
+/**
+ * Trata visão computacional de tela e webcam
+ */
+export function processarEntradaVisual(
+  sensoryInput: any,
+  userPrompt: string,
+  activeSpeakerName: string
+) {
+  const frameTela =
+    sensoryInput?.screenFrame ||
+    sensoryInput?.sensorData?.screenFrame ||
+    sensoryInput?.sensorData?.screenBase64 ||
+    sensoryInput?.sensorData?.imagePayload?.dataBase64;
 
-    isVigilanceEnabled.value = true;
-    playJarvisChime('wake');
-    await startAudioCapture();
+  const frameWebcam =
+    sensoryInput?.webcamFrame ||
+    sensoryInput?.sensorData?.webcamFrame ||
+    sensoryInput?.sensorData?.faceFrameBase64;
 
-    speechAccumulatedBuffer = '';
-    isJarvisAwake.value = true;
-    voiceStatusText.value = '🎙️ Ouvindo você... Pode falar!';
+  const frameAtivo = frameTela || frameWebcam;
+  const ehPerguntaVisual =
+    /est[aá]\s+me\s+vendo|t[aá]\s+me\s+vendo|consegue\s+me\s+ver|voc[eê]\s+me\s+v[eê]|ative\s+a\s+c[aâ]mera|olhe\s+para\s+mim|como\s+eu\s+estou|o\s+que\s+estou\s+segurando|olhe\s+minha\s+tela/i.test(
+      userPrompt
+    );
 
-    if (!recognition) recognition = initSTT(onTextChange);
-    if (!isRecognitionRunning) {
-      try { recognition?.start(); } catch {}
-    }
-  }
+  let conteudoMensagemUsuario: any = userPrompt;
+  let instrucaoVisualSistema = '';
 
-  function stopMicrophoneSession() {
-    if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
-    if (vadFallbackTimer) clearTimeout(vadFallbackTimer);
-    isJarvisAwake.value = false;
-    speechAccumulatedBuffer = '';
-  }
+  if (frameAtivo) {
+    const urlFormatada = frameAtivo.startsWith('data:')
+      ? frameAtivo
+      : `data:image/jpeg;base64,${frameAtivo.replace(/^data:image\/\w+;base64,/, '')}`;
 
-  async function speakJarvisResponse(rawText: string, onDone?: () => void) {
-    if (isVoiceMuted.value || !rawText) {
-      if (onDone) onDone();
-      return;
-    }
+    const rotuloOrigem = frameWebcam ? 'WEBCAM (Ambiente do Usuário)' : 'TELA DO COMPUTADOR';
+    instrucaoVisualSistema = `\n\n[SINAL VISUAL ATIVO - ${rotuloOrigem}]: Você está visualizando o usuário (${activeSpeakerName}) em tempo real pela imagem anexada. Descreva de forma objetiva e natural. Não use ferramentas para ler a imagem.`;
 
-    isJarvisSpeaking.value = true;
-    if (recognition && isRecognitionRunning) {
-      try { recognition.stop(); } catch {}
-    }
-
-    const cleanText = rawText
-      .replace(/```[\s\S]*?```/g, 'bloco de código.')
-      .replace(/[*#_`~>|]/g, '')
-      .trim();
-
-    const finish = () => {
-      isJarvisSpeaking.value = false;
-      voiceStatusText.value = '🟢 Vigília ativa: Diga "Jarvis" ou toque no Globo';
-
-      if (isVigilanceEnabled.value && recognition && !isRecognitionRunning) {
-        setTimeout(() => {
-          try { recognition.start(); } catch {}
-        }, 300);
-      }
-      if (onDone) onDone();
-    };
-
-    try {
-      const res = await fetch('/api/v1/audio/speak', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: cleanText, mode: 'auto' })
-      });
-      const data = await res.json();
-      if (data.success && data.audioBase64) {
-        const audio = new Audio(`data:${data.mimeType || 'audio/mpeg'};base64,${data.audioBase64}`);
-        audio.onended = finish;
-        audio.onerror = () => fallbackSpeech(cleanText, finish);
-        await audio.play();
-        return;
-      }
-    } catch {}
-
-    fallbackSpeech(cleanText, finish);
-  }
-
-  function fallbackSpeech(text: string, finish: () => void) {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      setTimeout(() => {
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'pt-BR';
-        utterance.rate = 1.05;
-        utterance.pitch = 0.95;
-        utterance.onend = finish;
-        utterance.onerror = finish;
-        window.speechSynthesis.speak(utterance);
-      }, 60);
-    } else {
-      finish();
-    }
-  }
-
-  function stopAllAudio() {
-    isVigilanceEnabled.value = false;
-    stopMicrophoneSession();
-    if (pitchMonitorInterval) clearInterval(pitchMonitorInterval);
-    if (localAudioStream) {
-      localAudioStream.getTracks().forEach((t) => t.stop());
-      localAudioStream = null;
-    }
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-  }
-
-  function setupAudioUnlockListener(onTextChange?: (text: string) => void) {
-    const unlock = async () => {
-      await startAudioCapture();
-      if (!recognition) recognition = initSTT(onTextChange);
-      if (!isRecognitionRunning) {
-        try { recognition?.start(); } catch {}
-      }
-      window.removeEventListener('click', unlock);
-      window.removeEventListener('touchstart', unlock);
-    };
-    window.addEventListener('click', unlock, { once: true });
-    window.addEventListener('touchstart', unlock, { once: true });
+    conteudoMensagemUsuario = [
+      {
+        type: 'text',
+        text: `${userPrompt}\n(Nota Técnica: Analise a captura da ${rotuloOrigem} transmitida em anexo.)`
+      },
+      { type: 'image_url', image_url: { url: urlFormatada } }
+    ];
   }
 
   return {
-    isJarvisAwake,
-    isJarvisSpeaking,
-    isRecordingAudio,
-    voiceStatusText,
-    isVoiceMuted,
-    onJarvisCoreClick,
-    stopMicrophoneSession,
-    speakJarvisResponse,
-    stopAllAudio,
-    setupAudioUnlockListener
+    frameAtivo,
+    ehPerguntaVisual,
+    conteudoMensagemUsuario,
+    instrucaoVisualSistema
   };
 }
