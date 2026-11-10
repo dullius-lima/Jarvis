@@ -1,5 +1,5 @@
 // src/frontend/composables/useVoiceAndAudio.ts
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
 
 export function useVoiceAndAudio(
   onCommandDetected: (text: string, audioSignaturePayload?: string) => void
@@ -8,13 +8,13 @@ export function useVoiceAndAudio(
   const isJarvisAwake = ref<boolean>(false);
   const isJarvisSpeaking = ref<boolean>(false);
   const isRecordingAudio = ref<boolean>(false);
-  const voiceStatusText = ref<string>('🟢 Toque no Microfone (ou no Globo) para ativar a escuta');
+  const voiceStatusText = ref<string>('🟢 Vigília Sempre Ativa: Diga "Jarvis"...');
   const isVoiceMuted = ref<boolean>(false);
 
   let speechSilenceTimer: any = null;
   let lastChimeTimestamp = 0;
 
-  // Motor Acústico e Gravador Contínuo para Whisper
+  // Analisador Acústico e Gravador para Whisper
   let localAudioStream: MediaStream | null = null;
   let audioContext: AudioContext | null = null;
   let analyserNode: AnalyserNode | null = null;
@@ -26,6 +26,7 @@ export function useVoiceAndAudio(
   let recordedChunks: Blob[] = [];
   let isCurrentlyCapturingSpeech = false;
   let speechFramesCount = 0;
+  let forceDirectCommand = false;
 
   function getSupportedMimeType(): string {
     const types = [
@@ -65,12 +66,12 @@ export function useVoiceAndAudio(
         osc.frequency.setValueAtTime(523.25, ctx.currentTime + 0.08);
       }
 
-      gain.gain.setValueAtTime(0.12, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
-      osc.stop(ctx.currentTime + 0.22);
+      osc.stop(ctx.currentTime + 0.2);
       setTimeout(() => ctx.close().catch(() => {}), 250);
     } catch {}
   }
@@ -79,7 +80,7 @@ export function useVoiceAndAudio(
     let sumSq = 0;
     for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
     const rms = Math.sqrt(sumSq / buf.length);
-    if (rms < 0.016) return { pitch: -1, rms };
+    if (rms < 0.018) return { pitch: -1, rms };
 
     const minPeriod = Math.floor(sampleRate / 380);
     const maxPeriod = Math.floor(sampleRate / 75);
@@ -110,16 +111,11 @@ export function useVoiceAndAudio(
     return bands;
   }
 
-  function startNewRecorderSegment() {
+  function startUtteranceRecorder() {
     if (!localAudioStream || !localAudioStream.active) return;
-    try {
-      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-        mediaRecorder.stop();
-      }
-    } catch {}
+    if (mediaRecorder && mediaRecorder.state === 'recording') return;
 
     recordedChunks = [];
-    speechFramesCount = 0;
     try {
       const mimeType = getSupportedMimeType();
       mediaRecorder = mimeType
@@ -131,24 +127,25 @@ export function useVoiceAndAudio(
           recordedChunks.push(e.data);
         }
       };
-      mediaRecorder.start(150);
+      mediaRecorder.start(100);
       isRecordingAudio.value = true;
     } catch (err) {
       console.warn('Erro ao iniciar MediaRecorder:', err);
     }
   }
 
-  async function finalizeAndExportAudioBase64(): Promise<string> {
+  async function stopAndExportAudioBase64(): Promise<string> {
     if (!mediaRecorder) return '';
 
     return new Promise<string>((resolve) => {
-      const exportFromChunks = () => {
+      const exportChunks = () => {
         isRecordingAudio.value = false;
         if (recordedChunks.length === 0) return resolve('');
         try {
           const mimeType = mediaRecorder?.mimeType || 'audio/webm';
           const blob = new Blob(recordedChunks, { type: mimeType });
-          if (blob.size < 600) return resolve('');
+          recordedChunks = [];
+          if (blob.size < 800) return resolve('');
           const reader = new FileReader();
           reader.onloadend = () => {
             const res = (reader.result as string) || '';
@@ -162,15 +159,15 @@ export function useVoiceAndAudio(
       };
 
       if (mediaRecorder.state === 'inactive') {
-        exportFromChunks();
+        exportChunks();
         return;
       }
 
-      mediaRecorder.onstop = exportFromChunks;
+      mediaRecorder.onstop = exportChunks;
       try {
         mediaRecorder.stop();
       } catch {
-        exportFromChunks();
+        exportChunks();
       }
     });
   }
@@ -202,34 +199,28 @@ export function useVoiceAndAudio(
     return `PITCH:${avgPitch}|ENERGY:${avgEnergy}|SPEC:${avgSpectrum.join(',')}|DATA:${base64Data}`;
   }
 
-  async function dispatchRecordedVoiceToWhisper() {
+  async function processFinishedSpeech() {
     if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
     isCurrentlyCapturingSpeech = false;
+    speechFramesCount = 0;
 
-    const audioB64 = await finalizeAndExportAudioBase64();
-    if (!audioB64 || audioB64.length < 200) {
-      if (isVigilanceEnabled.value && !isJarvisSpeaking.value) {
-        startNewRecorderSegment();
-        voiceStatusText.value = '🟢 Vigília ativa: Fale "Jarvis..." ou seu comando';
-      }
+    const audioB64 = await stopAndExportAudioBase64();
+    if (!audioB64 || audioB64.length < 300) {
+      isJarvisAwake.value = false;
+      voiceStatusText.value = '🟢 Vigília Sempre Ativa: Diga "Jarvis"...';
       return;
     }
 
-    playJarvisChime('send');
-    voiceStatusText.value = '⚡ Transcrevendo e processando sua voz...';
+    voiceStatusText.value = '⚡ Verificando chamada "Jarvis"...';
     const bioPayload = buildBiometricString(audioB64);
+    const modeTag = forceDirectCommand ? '__VAD_AUDIO_ONLY__' : '__WAKE_WORD_CHECK__';
+    forceDirectCommand = false;
     isJarvisAwake.value = false;
 
-    onCommandDetected('__VAD_AUDIO_ONLY__', bioPayload);
-
-    setTimeout(() => {
-      if (isVigilanceEnabled.value && !isJarvisSpeaking.value) {
-        startNewRecorderSegment();
-      }
-    }, 800);
+    onCommandDetected(modeTag, bioPayload);
   }
 
-  async function startAcousticBiometricCapture(): Promise<boolean> {
+  async function startAlwaysOnSentinel(): Promise<boolean> {
     try {
       const nav = navigator as any;
       if (!localAudioStream || !localAudioStream.active) {
@@ -255,7 +246,7 @@ export function useVoiceAndAudio(
         await audioContext.resume();
       }
 
-      startNewRecorderSegment();
+      voiceStatusText.value = '🟢 Vigília Sempre Ativa: Diga "Jarvis"...';
 
       if (pitchMonitorInterval) clearInterval(pitchMonitorInterval);
       pitchMonitorInterval = setInterval(() => {
@@ -271,32 +262,33 @@ export function useVoiceAndAudio(
           measuredEnergies.push(rms);
           measuredSpectra.push(extract16Bands(analyserNode));
 
-          if (measuredPitches.length > 50) measuredPitches.shift();
-          if (measuredEnergies.length > 50) measuredEnergies.shift();
-          if (measuredSpectra.length > 50) measuredSpectra.shift();
+          if (!isCurrentlyCapturingSpeech) {
+            isCurrentlyCapturingSpeech = true;
+            startUtteranceRecorder();
+          }
 
           if (speechFramesCount >= 3) {
-            if (!isCurrentlyCapturingSpeech) {
-              isCurrentlyCapturingSpeech = true;
-              isJarvisAwake.value = true;
-            }
-            voiceStatusText.value = `🎙️ Captando sua voz (${Math.round(pitch)} Hz)... Pode falar!`;
-
-            if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
-            speechSilenceTimer = setTimeout(() => {
-              if (isCurrentlyCapturingSpeech && speechFramesCount >= 4) {
-                dispatchRecordedVoiceToWhisper();
-              }
-            }, 1500);
+            isJarvisAwake.value = true;
+            voiceStatusText.value = '🎙️ Detectando voz... (Diga "Jarvis" + seu comando)';
           }
-        } else if (!isCurrentlyCapturingSpeech && recordedChunks.length > 35) {
-          startNewRecorderSegment();
+
+          if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
+          speechSilenceTimer = setTimeout(() => {
+            if (isCurrentlyCapturingSpeech && speechFramesCount >= 4) {
+              processFinishedSpeech();
+            } else {
+              isCurrentlyCapturingSpeech = false;
+              speechFramesCount = 0;
+              isJarvisAwake.value = false;
+              stopAndExportAudioBase64();
+              voiceStatusText.value = '🟢 Vigília Sempre Ativa: Diga "Jarvis"...';
+            }
+          }, 1400);
         }
       }, 60);
 
       return true;
-    } catch (err) {
-      console.warn('Falha ao acessar microfone:', err);
+    } catch {
       return false;
     }
   }
@@ -307,22 +299,20 @@ export function useVoiceAndAudio(
       isJarvisSpeaking.value = false;
     }
 
-    if (isJarvisAwake.value && recordedChunks.length > 2) {
-      await dispatchRecordedVoiceToWhisper();
+    if (isCurrentlyCapturingSpeech && recordedChunks.length > 2) {
+      await processFinishedSpeech();
       return;
     }
 
     isVigilanceEnabled.value = true;
+    forceDirectCommand = true;
     playJarvisChime('wake');
-    const hasMic = await startAcousticBiometricCapture();
-
-    if (hasMic) {
-      isJarvisAwake.value = true;
+    const ok = await startAlwaysOnSentinel();
+    if (ok) {
+      startUtteranceRecorder();
       isCurrentlyCapturingSpeech = true;
-      speechFramesCount = 4;
-      voiceStatusText.value = '🎙️ Ouvindo você! Fale agora (envia sozinho ao pausar)...';
-    } else {
-      voiceStatusText.value = '⚠️ Microfone bloqueado (Autorize o microfone no cadeado/Chrome)';
+      isJarvisAwake.value = true;
+      voiceStatusText.value = '🎙️ Estou ouvindo! Pode falar...';
     }
   }
 
@@ -334,6 +324,7 @@ export function useVoiceAndAudio(
 
   async function speakJarvisResponse(rawText: string, onDone?: () => void) {
     if (isVoiceMuted.value || !rawText) {
+      voiceStatusText.value = '🟢 Vigília Sempre Ativa: Diga "Jarvis"...';
       if (onDone) onDone();
       return;
     }
@@ -348,10 +339,7 @@ export function useVoiceAndAudio(
 
     const finish = () => {
       isJarvisSpeaking.value = false;
-      voiceStatusText.value = '🟢 Vigília ativa: Fale "Jarvis..." ou toque no Microfone';
-      if (isVigilanceEnabled.value) {
-        startNewRecorderSegment();
-      }
+      voiceStatusText.value = '🟢 Vigília Sempre Ativa: Diga "Jarvis"...';
       if (onDone) onDone();
     };
 
@@ -403,17 +391,23 @@ export function useVoiceAndAudio(
   }
 
   function setupAudioUnlockListener(_onTextChange?: (text: string) => void) {
+    startAlwaysOnSentinel();
+
     const unlock = async () => {
-      const ok = await startAcousticBiometricCapture();
-      if (ok) {
-        voiceStatusText.value = '🟢 Vigília ativa: Fale "Jarvis..." ou toque no Microfone';
+      if (audioContext && audioContext.state === 'suspended') {
+        await audioContext.resume();
       }
+      await startAlwaysOnSentinel();
       window.removeEventListener('click', unlock);
       window.removeEventListener('touchstart', unlock);
     };
     window.addEventListener('click', unlock, { once: true });
     window.addEventListener('touchstart', unlock, { once: true });
   }
+
+  onMounted(() => {
+    startAlwaysOnSentinel();
+  });
 
   return {
     isJarvisAwake,
