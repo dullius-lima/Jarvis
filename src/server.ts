@@ -15,6 +15,13 @@ import { startScheduleTriggerEngine } from './services/scheduleTriggerService.js
 import { startMemoryAndBackupScheduler } from './services/securityGovernanceService.js';
 import { startAgentWatchdog } from './services/agentWatchdogService.js';
 
+// Módulos de Biometria Vocal & Voice Match
+import {
+  listVoiceProfiles,
+  enrollSpeakerVoice,
+  deleteVoiceProfile
+} from './services/voiceBiometricService.js';
+
 import * as triggerRoutesMod from './routes/triggerRoutes.js';
 import * as authRoutesMod from './routes/authRoutes.js';
 import * as agentRoutesMod from './routes/agentRoutes.js';
@@ -153,6 +160,46 @@ app.get('/api/v1/dynamic-db/collections', async (_req: Request, res: Response) =
   }
 });
 
+// 5. Biometria Vocal & Treinamento Voice Match (CRUD de Vozes)
+// 5.1 Listar todas as pessoas com voz gravada
+app.get('/api/v1/voice-profiles', async (_req: Request, res: Response) => {
+  try {
+    const profiles = await listVoiceProfiles();
+    return res.status(200).json({ success: true, data: profiles });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5.2 Cadastrar ou calibrar mais uma amostra de voz
+app.post('/api/v1/voice-profiles/enroll', async (req: Request, res: Response) => {
+  try {
+    const { name, role = 'family', audioPayload } = req.body || {};
+    if (!name || !audioPayload) {
+      return res.status(400).json({
+        success: false,
+        error: 'Nome e amostra de áudio são obrigatórios.'
+      });
+    }
+    const enrolled = await enrollSpeakerVoice(String(name), String(audioPayload), role);
+    return res.status(200).json({ success: true, data: enrolled });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5.3 Excluir perfil de voz cadastrado
+app.delete('/api/v1/voice-profiles/:id', async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const removed = await deleteVoiceProfile(id);
+    return res.status(200).json({ success: removed });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6. Áudio & Voz do JARVIS
 // Gravação de áudio de referência para voz
 app.post('/api/v1/audio/voice-sample', async (req: Request, res: Response) => {
   try {
@@ -229,14 +276,14 @@ app.get('/api/v1/prompts/versions/:slug', async (req: Request, res: Response) =>
   }
 });
 
-// 5. Document Loader (RAG) & Terminal SSH
+// 7. Document Loader (RAG) & Terminal SSH
 app.post('/api/v1/docs-ssh/rag/upload', handleDocumentUploadToRag);
 app.get('/api/v1/docs-ssh/rag/documents', handleListRagDocuments);
 app.delete('/api/v1/docs-ssh/rag/documents/:id', handleDeleteRagDocument);
 app.post('/api/v1/docs-ssh/ssh/execute', handleSshExecute);
 app.post('/api/v1/docs-ssh/ssh/read-to-rag', handleSshReadToRag);
 
-// 6. Webhooks de Entrada (Orquestrador Central, Áudio Whisper, Agentes Diretos e Webhook Global 1:N)
+// 8. Webhooks de Entrada (Orquestrador Central, Áudio Whisper, Agentes Diretos e Webhook Global 1:N)
 app.post('/api/v1/webhook/ingress', handleWebhookIngress);
 app.post('/api/v1/audio/transcribe', handleLocalAudioTranscribe);
 app.all('/api/v1/webhook/agents/:slug', handleAgentProductionWebhook);
@@ -244,7 +291,7 @@ app.all('/api/v1/webhook-test/agents/:slug', handleAgentTestWebhook);
 app.all('/api/v1/webhook/global/:key', handleGlobalWebhookTrigger);
 app.all('/api/v1/webhook-test/global/:key', handleGlobalWebhookTrigger);
 
-// 7. Health Check
+// 9. Health Check
 app.get('/health', (_req: Request, res: Response) => {
   return res.json({
     status: 'online',
@@ -253,7 +300,7 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
-// 8. Roteamento de Telas
+// 10. Roteamento de Telas
 const staticCandidates = [
   path.resolve(currentDir, '../dist'),
   path.resolve(currentDir, '../../dist'),
@@ -285,7 +332,7 @@ if (fs.existsSync(clientDistPath)) {
   });
 }
 
-// 9. Interceptor Global de Erros
+// 11. Interceptor Global de Erros
 app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   console.error('💥 [Global Error Interceptor]:', err.message);
   if (typeof dispatchErrorTrigger === 'function') {
