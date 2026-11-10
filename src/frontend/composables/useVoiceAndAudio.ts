@@ -8,7 +8,7 @@ export function useVoiceAndAudio(
   const isJarvisAwake = ref<boolean>(false);
   const isJarvisSpeaking = ref<boolean>(false);
   const isRecordingAudio = ref<boolean>(false);
-  const voiceStatusText = ref<string>('🟢 Vigília ativa: Diga "Jarvis" ou toque no Globo');
+  const voiceStatusText = ref<string>('🟢 Vigília ativa: Diga "Jarvis" ou toque no Microfone');
   const isVoiceMuted = ref<boolean>(false);
 
   let recognition: any = null;
@@ -18,7 +18,7 @@ export function useVoiceAndAudio(
   let speechAccumulatedBuffer = '';
   let lastChimeTimestamp = 0;
 
-  // Analisador Acústico e Biometria Vocal
+  // Analisador Acústico e Biometria
   let localAudioStream: MediaStream | null = null;
   let audioContext: AudioContext | null = null;
   let analyserNode: AnalyserNode | null = null;
@@ -27,8 +27,7 @@ export function useVoiceAndAudio(
   let measuredEnergies: number[] = [];
   let measuredSpectra: number[][] = [];
   let mediaRecorder: MediaRecorder | null = null;
-  let audioChunks: Blob[] = [];
-  let vadDetectedHumanSpeech = false;
+  let recordedChunks: Blob[] = [];
 
   function playJarvisChime(type: 'wake' | 'send' = 'wake') {
     const now = Date.now();
@@ -63,34 +62,30 @@ export function useVoiceAndAudio(
     } catch {}
   }
 
-  function detectPitchFromBuffer(buf: Float32Array, sampleRate: number): { pitch: number; rms: number } {
-    let sumSquares = 0;
-    for (let i = 0; i < buf.length; i++) sumSquares += buf[i] * buf[i];
-    const rms = Math.sqrt(sumSquares / buf.length);
-    if (rms < 0.014) return { pitch: -1, rms };
+  function detectPitch(buf: Float32Array, sampleRate: number): { pitch: number; rms: number } {
+    let sumSq = 0;
+    for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
+    const rms = Math.sqrt(sumSq / buf.length);
+    if (rms < 0.015) return { pitch: -1, rms };
 
     const minPeriod = Math.floor(sampleRate / 380);
     const maxPeriod = Math.floor(sampleRate / 75);
     let bestOffset = -1;
-    let bestCorrelation = 0;
+    let bestCorr = 0;
 
     for (let offset = minPeriod; offset <= maxPeriod; offset++) {
-      let correlation = 0;
-      for (let i = 0; i < buf.length - offset; i++) correlation += buf[i] * buf[i + offset];
-      if (correlation > bestCorrelation) {
-        bestCorrelation = correlation;
+      let corr = 0;
+      for (let i = 0; i < buf.length - offset; i++) corr += buf[i] * buf[i + offset];
+      if (corr > bestCorr) {
+        bestCorr = corr;
         bestOffset = offset;
       }
     }
-
-    if (bestOffset > 0) {
-      const pitch = sampleRate / bestOffset;
-      if (pitch >= 75 && pitch <= 380) return { pitch, rms };
-    }
-    return { pitch: -1, rms };
+    const pitch = bestOffset > 0 ? sampleRate / bestOffset : -1;
+    return { pitch: pitch >= 75 && pitch <= 380 ? pitch : -1, rms };
   }
 
-  function extract16BandVoiceSpectrum(analyser: AnalyserNode): number[] {
+  function extract16Bands(analyser: AnalyserNode): number[] {
     const freqData = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(freqData);
     const bands: number[] = [];
@@ -102,18 +97,76 @@ export function useVoiceAndAudio(
     return bands;
   }
 
+  // Inicializa uma gravação preservando os blocos com o cabeçalho EBML
+  function startRecordingUtterance() {
+    if (!localAudioStream || !localAudioStream.active) return;
+    try {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+    } catch {}
+
+    recordedChunks = [];
+    try {
+      mediaRecorder = new MediaRecorder(localAudioStream);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordedChunks.push(e.data);
+        }
+      };
+      mediaRecorder.start(100);
+      isRecordingAudio.value = true;
+    } catch {}
+  }
+
+  // Aguarda o fechamento do gravador e exporta o arquivo WebM em Base64
+  async function stopAndExportAudioBase64(): Promise<string> {
+    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+      return '';
+    }
+
+    return new Promise<string>((resolve) => {
+      mediaRecorder!.onstop = () => {
+        isRecordingAudio.value = false;
+        try {
+          if (recordedChunks.length === 0) return resolve('');
+          const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const res = (reader.result as string) || '';
+            resolve(res.split(',')[1] || '');
+          };
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(blob);
+        } catch {
+          resolve('');
+        }
+      };
+      try {
+        mediaRecorder!.stop();
+      } catch {
+        resolve('');
+      }
+    });
+  }
+
   async function startAcousticBiometricCapture(): Promise<boolean> {
     try {
+      const nav = navigator as any;
       if (!localAudioStream || !localAudioStream.active) {
-        localAudioStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-        });
+        if (nav.mediaDevices && nav.mediaDevices.getUserMedia) {
+          localAudioStream = await nav.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          });
+        } else {
+          return false;
+        }
       }
 
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtx && !audioContext) {
         audioContext = new AudioCtx();
-        const source = audioContext.createMediaStreamSource(localAudioStream);
+        const source = audioContext.createMediaStreamSource(localAudioStream!);
         analyserNode = audioContext.createAnalyser();
         analyserNode.fftSize = 2048;
         source.connect(analyserNode);
@@ -123,59 +176,48 @@ export function useVoiceAndAudio(
         await audioContext.resume();
       }
 
+      startRecordingUtterance();
+
       if (pitchMonitorInterval) clearInterval(pitchMonitorInterval);
       pitchMonitorInterval = setInterval(() => {
         if (!analyserNode || !audioContext || isJarvisSpeaking.value) return;
         const buffer = new Float32Array(analyserNode.fftSize);
         analyserNode.getFloatTimeDomainData(buffer);
-        const { pitch, rms } = detectPitchFromBuffer(buffer, audioContext.sampleRate);
+        const { pitch, rms } = detectPitch(buffer, audioContext.sampleRate);
 
         if (pitch > 0 && rms >= 0.016) {
           measuredPitches.push(pitch);
           measuredEnergies.push(rms);
-          measuredSpectra.push(extract16BandVoiceSpectrum(analyserNode));
+          measuredSpectra.push(extract16Bands(analyserNode));
 
-          if (measuredPitches.length > 40) measuredPitches.shift();
-          if (measuredEnergies.length > 40) measuredEnergies.shift();
-          if (measuredSpectra.length > 40) measuredSpectra.shift();
+          if (measuredPitches.length > 45) measuredPitches.shift();
+          if (measuredEnergies.length > 45) measuredEnergies.shift();
+          if (measuredSpectra.length > 45) measuredSpectra.shift();
 
-          // VAD Fallback caso o navegador falhe no Web Speech
           if (isJarvisAwake.value) {
-            vadDetectedHumanSpeech = true;
+            voiceStatusText.value = `🎙️ Ouvindo você (${Math.round(pitch)} Hz)...`;
             if (vadFallbackTimer) clearTimeout(vadFallbackTimer);
             vadFallbackTimer = setTimeout(async () => {
-              if (isJarvisAwake.value && vadDetectedHumanSpeech && speechAccumulatedBuffer.trim().length === 0) {
-                vadDetectedHumanSpeech = false;
+              if (isJarvisAwake.value && speechAccumulatedBuffer.trim().length === 0) {
                 playJarvisChime('send');
-                voiceStatusText.value = '⚡ Processando áudio via Whisper...';
-                const bioPayload = await buildVoiceBiometricPayloadAsync();
+                voiceStatusText.value = '⚡ Transcrevendo voz no Whisper Local...';
+                const audioB64 = await stopAndExportAudioBase64();
+                const bioPayload = buildBiometricString(audioB64);
                 isJarvisAwake.value = false;
                 onCommandDetected('__VAD_AUDIO_ONLY__', bioPayload);
               }
-            }, 2400);
+            }, 1800);
           }
         }
       }, 60);
 
-      if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-        audioChunks = [];
-        mediaRecorder = new MediaRecorder(localAudioStream);
-        mediaRecorder.ondataavailable = (e) => {
-          if (e.data.size > 0) {
-            audioChunks.push(e.data);
-            if (audioChunks.length > 25) audioChunks.shift();
-          }
-        };
-        mediaRecorder.start(250);
-        isRecordingAudio.value = true;
-      }
       return true;
     } catch {
       return false;
     }
   }
 
-  async function buildVoiceBiometricPayloadAsync(): Promise<string> {
+  function buildBiometricString(base64Data: string): string {
     const avgPitch =
       measuredPitches.length > 0
         ? (measuredPitches.reduce((a, b) => a + b, 0) / measuredPitches.length).toFixed(2)
@@ -195,26 +237,9 @@ export function useVoiceAndAudio(
       }
     }
 
-    let base64Data = '';
-    if (audioChunks.length > 0) {
-      try {
-        const blob = new Blob(audioChunks, { type: 'audio/webm' });
-        base64Data = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const res = (reader.result as string) || '';
-            resolve(res.split(',')[1] || '');
-          };
-          reader.onerror = () => resolve('');
-          reader.readAsDataURL(blob);
-        });
-      } catch {}
-    }
-
     measuredPitches = [];
     measuredEnergies = [];
     measuredSpectra = [];
-    audioChunks = [];
 
     return `PITCH:${avgPitch}|ENERGY:${avgEnergy}|SPEC:${avgSpectrum.join(',')}|DATA:${base64Data || 'SPEECH_SAMPLE'}`;
   }
@@ -234,8 +259,8 @@ export function useVoiceAndAudio(
     rec.onstart = () => {
       isRecognitionRunning = true;
       voiceStatusText.value = isJarvisAwake.value
-        ? '🎙️ Ouvindo você... Pode falar'
-        : '🟢 Vigília ativa: Diga "Jarvis" ou toque no Globo';
+        ? '🎙️ Ouvindo você... Pode falar!'
+        : '🟢 Vigília ativa: Diga "Jarvis" ou toque no Microfone';
     };
 
     rec.onresult = (event: any) => {
@@ -259,10 +284,10 @@ export function useVoiceAndAudio(
       const wakeWordPattern =
         /(?:oi|ol[aá]|ei|ok|fala|al[oô]|e a[ií])?\s*(jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves|j[aá]rvis)|(?:preciso\s+de\s+ajuda|me\s+ajuda|socorro|assistente)/i;
 
-      // 1. Detectou a chamada / Wake Word
       if (!isJarvisAwake.value && wakeWordPattern.test(liveText)) {
         isJarvisAwake.value = true;
         playJarvisChime('wake');
+        startRecordingUtterance();
 
         const parts = liveText.split(wakeWordPattern);
         const remainder = parts.pop()?.replace(/^[,.\s!?-]+/, '').trim() || '';
@@ -277,7 +302,6 @@ export function useVoiceAndAudio(
         }
       }
 
-      // 2. Se já estiver acordado ouvindo o comando, envia após 1.6s de silêncio natural
       if (isJarvisAwake.value && liveText.length > 1) {
         const cleaned = liveText.replace(wakeWordPattern, '').replace(/^[,.\s!?-]+/, '').trim() || liveText;
         if (onTextChange) onTextChange(cleaned);
@@ -287,21 +311,18 @@ export function useVoiceAndAudio(
           if (cleaned.length > 1) {
             playJarvisChime('send');
             voiceStatusText.value = '⚡ Processando comando...';
-            const bioPayload = await buildVoiceBiometricPayloadAsync();
+            const audioB64 = await stopAndExportAudioBase64();
+            const bioPayload = buildBiometricString(audioB64);
             isJarvisAwake.value = false;
             speechAccumulatedBuffer = '';
-            vadDetectedHumanSpeech = false;
             onCommandDetected(cleaned, bioPayload);
           }
-        }, 1600);
+        }, 1500);
       }
     };
 
-    rec.onerror = (event: any) => {
-      if (event.error === 'not-allowed') {
-        isVigilanceEnabled.value = false;
-        voiceStatusText.value = '⚠️ Microfone bloqueado no navegador';
-      }
+    rec.onerror = () => {
+      // Ignora erro em navegadores que bloqueiam reconhecimento por falta de HTTPS
     };
 
     rec.onend = () => {
@@ -325,22 +346,34 @@ export function useVoiceAndAudio(
     }
 
     if (isJarvisAwake.value) {
+      if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
+      if (vadFallbackTimer) clearTimeout(vadFallbackTimer);
+      playJarvisChime('send');
+      voiceStatusText.value = '⚡ Transcrevendo fala...';
+      const textCaptured = speechAccumulatedBuffer.trim();
+      const audioB64 = await stopAndExportAudioBase64();
+      const bioPayload = buildBiometricString(audioB64);
       isJarvisAwake.value = false;
-      voiceStatusText.value = '🟢 Vigília ativa: Diga "Jarvis" ou toque no Globo';
+      speechAccumulatedBuffer = '';
+      onCommandDetected(textCaptured || '__VAD_AUDIO_ONLY__', bioPayload);
       return;
     }
 
     isVigilanceEnabled.value = true;
     playJarvisChime('wake');
-    await startAcousticBiometricCapture();
+    const hasMic = await startAcousticBiometricCapture();
 
     speechAccumulatedBuffer = '';
     measuredPitches = [];
     measuredEnergies = [];
     measuredSpectra = [];
-    audioChunks = [];
     isJarvisAwake.value = true;
-    voiceStatusText.value = '🎙️ Ouvindo você... Pode falar!';
+
+    if (hasMic) {
+      voiceStatusText.value = '🎙️ Gravando... Fale seu comando (ou toque no botão para enviar)!';
+    } else {
+      voiceStatusText.value = '⚠️ Microfone bloqueado pelo navegador';
+    }
 
     if (!recognition) recognition = initSTT(onTextChange);
     if (!isRecognitionRunning) {
@@ -373,7 +406,7 @@ export function useVoiceAndAudio(
 
     const finish = () => {
       isJarvisSpeaking.value = false;
-      voiceStatusText.value = '🟢 Vigília ativa: Diga "Jarvis" ou toque no Globo';
+      voiceStatusText.value = '🟢 Vigília ativa: Diga "Jarvis" ou toque no Microfone';
 
       if (isVigilanceEnabled.value && recognition && !isRecognitionRunning) {
         setTimeout(() => {
@@ -383,7 +416,6 @@ export function useVoiceAndAudio(
       if (onDone) onDone();
     };
 
-    // 1. Tenta sintetizar primeiro via Edge-TTS do backend na VM
     try {
       const res = await fetch('/api/v1/audio/speak', {
         method: 'POST',
@@ -400,7 +432,6 @@ export function useVoiceAndAudio(
       }
     } catch {}
 
-    // 2. Fallback: síntese de voz nativa do dispositivo
     fallbackSpeech(cleanText, finish);
   }
 
