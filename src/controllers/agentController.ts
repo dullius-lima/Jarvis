@@ -123,7 +123,8 @@ function buildAgentWebhookUrls(req: Request, slug: string) {
   return {
     webhook_prod_url: `${baseUrl}/api/v1/webhook/agents/${slug}`,
     webhook_test_url: `${baseUrl}/api/v1/webhook-test/agents/${slug}`,
-    webhook_url: `${baseUrl}/api/v1/webhook/agents/${slug}`
+    webhook_url: `${baseUrl}/api/v1/webhook/agents/${slug}`,
+    webhook_global_sample: `${baseUrl}/api/v1/webhook/global/${slug}`
   };
 }
 
@@ -374,10 +375,59 @@ export async function runAgentPipelineWithWaitSupport(
       executionTimeMs: stepExecution.executionTimeMs
     });
 
-    if (currentAgent.next_agent_slug) {
+    // Resolução de Múltiplos Próximos Agentes (1:N Fan-Out)
+    let proximosSlugs: string[] = [];
+    if (Array.isArray(currentAgent.next_agent_slugs) && currentAgent.next_agent_slugs.length > 0) {
+      proximosSlugs = currentAgent.next_agent_slugs;
+    } else if (typeof currentAgent.next_agent_slugs === 'string') {
+      try {
+        const parsed = JSON.parse(currentAgent.next_agent_slugs);
+        if (Array.isArray(parsed)) proximosSlugs = parsed;
+      } catch {
+        proximosSlugs = [];
+      }
+    }
+    if (proximosSlugs.length === 0 && currentAgent.next_agent_slug) {
+      proximosSlugs = [currentAgent.next_agent_slug];
+    }
+
+    if (proximosSlugs.length > 1) {
+      // Ramificação concorrente para múltiplos agentes subsequentes
+      const subRes = await pool.query(
+        'SELECT * FROM ai_agents WHERE slug = ANY($1) AND is_active = TRUE;',
+        [proximosSlugs]
+      );
+
+      const ramificacoes = await Promise.allSettled(
+        subRes.rows.map((subAgent: any) =>
+          executeSingleAgentLogic(
+            subAgent,
+            {
+              previous_agent: currentAgent.slug,
+              previous_output: stepExecution.output,
+              original_input: initialPayload
+            },
+            environment
+          )
+        )
+      );
+
+      subRes.rows.forEach((subAgent: any, idx: number) => {
+        const r = ramificacoes[idx];
+        pipelineHistory.push({
+          hop: hop + 2,
+          agent: subAgent.name,
+          slug: subAgent.slug,
+          environment,
+          output: r.status === 'fulfilled' ? r.value.output : (r as PromiseRejectedResult).reason?.message
+        });
+      });
+
+      break; // Conclui este branch após ramificar
+    } else if (proximosSlugs.length === 1) {
       const nextRes = await pool.query(
         'SELECT * FROM ai_agents WHERE slug = $1 AND is_active = TRUE LIMIT 1;',
-        [currentAgent.next_agent_slug]
+        [proximosSlugs[0]]
       );
       if (nextRes.rows.length > 0) {
         currentPayload = {
@@ -417,6 +467,7 @@ export async function listAgents(req: Request, res: Response) {
 
 export async function createAgent(req: Request, res: Response) {
   try {
+    const body = req.body || {};
     const {
       name,
       slug,
@@ -439,13 +490,14 @@ export async function createAgent(req: Request, res: Response) {
       response_instruction = '',
       tools = [],
       next_agent_slug = null,
+      next_agent_slugs = [],
       schedule_enabled = false,
       cron_expression = '*/5 * * * *',
       schedule_prompt = '',
       is_error_trigger = false,
       error_notify_channel = 'telegram',
       is_active = true
-    } = req.body || {};
+    } = body;
 
     if (!name) {
       return res.status(400).json({ success: false, error: 'O nome do agente é obrigatório.' });
@@ -457,13 +509,23 @@ export async function createAgent(req: Request, res: Response) {
     const defaultIcon = agent_type === 'mcp' ? '🔌' : agent_type === 'api' ? '🌐' : '🤖';
 
     const resolvedCred = await resolveSecretByCredentialId(
-      req.body?.credential_id || req.body?.credentials?.id
+      body?.credential_id || body?.credentials?.id
     );
     const finalProvider = (resolvedCred.provider || provider || 'groq').toLowerCase().trim();
 
     const cleanApiKey = sanitizeApiKey(api_key || resolvedCred.api_key) || null;
     const cleanAuthToken = sanitizeApiKey(auth_token || resolvedCred.auth_token) || null;
     const finalEndpointUrl = (endpoint_url || resolvedCred.endpoint_url || '').trim() || null;
+
+    const next_agent_slugs_val = Array.isArray(body.next_agent_slugs)
+      ? JSON.stringify(body.next_agent_slugs)
+      : typeof body.next_agent_slugs === 'string' && body.next_agent_slugs.startsWith('[')
+      ? body.next_agent_slugs
+      : JSON.stringify(body.next_agent_slug ? [body.next_agent_slug] : []);
+
+    const primaryNextSlug = Array.isArray(body.next_agent_slugs) && body.next_agent_slugs.length > 0
+      ? body.next_agent_slugs[0]
+      : (next_agent_slug || null);
 
     const values = [
       name,
@@ -485,7 +547,8 @@ export async function createAgent(req: Request, res: Response) {
       payload_template,
       response_instruction,
       normalizeToolsArray(tools),
-      next_agent_slug || null,
+      primaryNextSlug,
+      next_agent_slugs_val,
       Boolean(schedule_enabled),
       cron_expression,
       schedule_prompt,
@@ -499,14 +562,14 @@ export async function createAgent(req: Request, res: Response) {
         name, slug, agent_type, description, system_prompt, provider, model,
         api_key, base_url, temperature, icon, script_handler, code_snippet,
         http_method, endpoint_url, auth_token, payload_template, response_instruction,
-        tools, next_agent_slug, schedule_enabled, cron_expression, schedule_prompt,
+        tools, next_agent_slug, next_agent_slugs, schedule_enabled, cron_expression, schedule_prompt,
         is_error_trigger, error_notify_channel, is_active, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7,
         $8, $9, $10, $11, $12, $13,
         $14, $15, $16, $17, $18,
-        $19, $20, $21, $22, $23,
-        $24, $25, $26, CURRENT_TIMESTAMP
+        $19, $20, $21, $22, $23, $24,
+        $25, $26, $27, CURRENT_TIMESTAMP
       )
       ON CONFLICT (slug) DO UPDATE SET
         name = EXCLUDED.name,
@@ -528,6 +591,7 @@ export async function createAgent(req: Request, res: Response) {
         response_instruction = EXCLUDED.response_instruction,
         tools = EXCLUDED.tools,
         next_agent_slug = EXCLUDED.next_agent_slug,
+        next_agent_slugs = EXCLUDED.next_agent_slugs,
         schedule_enabled = EXCLUDED.schedule_enabled,
         cron_expression = EXCLUDED.cron_expression,
         schedule_prompt = EXCLUDED.schedule_prompt,
@@ -590,6 +654,20 @@ export async function updateAgent(req: Request, res: Response) {
 
     const updatedTools = normalizeToolsArray(body.tools !== undefined ? body.tools : curr.tools);
 
+    const next_agent_slugs_val = body.next_agent_slugs !== undefined
+      ? (Array.isArray(body.next_agent_slugs)
+          ? JSON.stringify(body.next_agent_slugs)
+          : typeof body.next_agent_slugs === 'string' && body.next_agent_slugs.startsWith('[')
+          ? body.next_agent_slugs
+          : JSON.stringify(body.next_agent_slugs ? [body.next_agent_slugs] : []))
+      : (curr.next_agent_slugs ? JSON.stringify(curr.next_agent_slugs) : (curr.next_agent_slug ? JSON.stringify([curr.next_agent_slug]) : '[]'));
+
+    const primaryNextSlug = body.next_agent_slugs !== undefined
+      ? (Array.isArray(body.next_agent_slugs) && body.next_agent_slugs.length > 0
+          ? body.next_agent_slugs[0]
+          : (body.next_agent_slug || null))
+      : (body.next_agent_slug !== undefined ? body.next_agent_slug : curr.next_agent_slug);
+
     const updated = await pool.query(
       `UPDATE ai_agents SET
         name = $1,
@@ -612,14 +690,15 @@ export async function updateAgent(req: Request, res: Response) {
         response_instruction = $18,
         tools = $19,
         next_agent_slug = $20,
-        schedule_enabled = $21,
-        cron_expression = $22,
-        schedule_prompt = $23,
-        is_error_trigger = $24,
-        error_notify_channel = $25,
-        is_active = $26,
+        next_agent_slugs = $21,
+        schedule_enabled = $22,
+        cron_expression = $23,
+        schedule_prompt = $24,
+        is_error_trigger = $25,
+        error_notify_channel = $26,
+        is_active = $27,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $27 RETURNING *;`,
+      WHERE id = $28 RETURNING *;`,
       [
         body.name ?? curr.name,
         body.slug ?? curr.slug,
@@ -640,7 +719,8 @@ export async function updateAgent(req: Request, res: Response) {
         body.payload_template !== undefined ? body.payload_template : curr.payload_template,
         body.response_instruction !== undefined ? body.response_instruction : curr.response_instruction,
         updatedTools,
-        body.next_agent_slug !== undefined ? body.next_agent_slug : curr.next_agent_slug,
+        primaryNextSlug,
+        next_agent_slugs_val,
         body.schedule_enabled !== undefined ? Boolean(body.schedule_enabled) : curr.schedule_enabled,
         body.cron_expression ?? curr.cron_expression,
         body.schedule_prompt !== undefined ? body.schedule_prompt : curr.schedule_prompt,
@@ -784,6 +864,62 @@ export async function handleAgentTestWebhook(req: Request, res: Response) {
       slug: agent.slug,
       capturedWebhookData: capturedEnvelope,
       ...result
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+/**
+ * Webhook Global 1:N (Broadcast)
+ * POST ou GET /api/v1/webhook/global/:key
+ * Aciona todos os agentes que possuem esta Tool conectada ou vinculados à chave
+ */
+export async function handleGlobalWebhookTrigger(req: Request, res: Response) {
+  const { key } = req.params;
+  const payload = req.method === 'GET' ? req.query : req.body;
+
+  try {
+    const agentsRes = await pool.query(
+      `SELECT * FROM ai_agents 
+       WHERE is_active = TRUE 
+         AND (
+           tools::text ILIKE $1 
+           OR slug = $2 
+           OR next_agent_slug = $2 
+           OR next_agent_slugs::text ILIKE $1
+         );`,
+      [`%"${key}"%`, key]
+    );
+
+    if (agentsRes.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: `Nenhum agente ativo está conectado ao webhook global "${key}".`
+      });
+    }
+
+    const execucoes = await Promise.allSettled(
+      agentsRes.rows.map((agent: any) =>
+        executeSingleAgentLogic(agent, payload, 'production')
+      )
+    );
+
+    const resultados = agentsRes.rows.map((agent: any, idx: number) => {
+      const exec = execucoes[idx];
+      return {
+        agent: agent.name,
+        slug: agent.slug,
+        status: exec.status === 'fulfilled' ? 'SUCCESS' : 'FAILED',
+        output: exec.status === 'fulfilled' ? exec.value.output : (exec as PromiseRejectedResult).reason?.message
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      webhook_key: key,
+      total_disparados: agentsRes.rows.length,
+      resultados
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
