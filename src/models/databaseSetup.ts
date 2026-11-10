@@ -284,6 +284,12 @@ export async function initializeDatabaseSchema() {
       ALTER TABLE identities ADD COLUMN IF NOT EXISTS access_level INTEGER DEFAULT 10;
     `);
 
+    // Adicione dentro de initializeDatabaseSchema(), na seção de migração de colunas da tabela ai_agents:
+    await client.query(`
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS next_agent_slug VARCHAR(100) DEFAULT NULL;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS next_agent_slugs JSONB DEFAULT '[]'::jsonb;
+    `);
+
     console.log('✅ [Database Setup] Esquema e tabelas unificadas alinhados com sucesso!');
   } catch (error: any) {
     console.error('❌ [Database Setup] Falha ao alinhar esquema:', error.message);
