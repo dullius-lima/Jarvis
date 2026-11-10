@@ -1,5 +1,4 @@
 <script setup lang="ts">
-// src/frontend/components/settings/AbaVozes.vue
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 
 interface PerfilVoz {
@@ -18,10 +17,9 @@ const perfisSalvos = ref<PerfilVoz[]>([]);
 const carregando = ref<boolean>(false);
 const mensagemFeedback = ref<{ tipo: 'sucesso' | 'erro'; texto: string } | null>(null);
 
-// Estado do Treinador Guiado (3 Frases estilo Google Voice Match)
 const nomeNovaPessoa = ref<string>('');
 const papelNovaPessoa = ref<'admin' | 'family' | 'guest'>('family');
-const etapaTreinamento = ref<number>(1); // 1, 2 ou 3
+const etapaTreinamento = ref<number>(1);
 const gravandoAmostra = ref<boolean>(false);
 const segundosRestantes = ref<number>(0);
 const pitchAoVivo = ref<number>(0);
@@ -101,7 +99,7 @@ async function gravarAmostraDeVoz(nomeAlvo?: string, papelAlvo?: 'admin' | 'fami
   const papelFinal = papelAlvo || papelNovaPessoa.value;
 
   if (!nomeFinal) {
-    mensagemFeedback.value = { tipo: 'erro', texto: 'Digite o nome da pessoa antes de iniciar a gravação.' };
+    mensagemFeedback.value = { tipo: 'erro', texto: 'Indique o nome da pessoa antes de iniciar a gravação.' };
     return;
   }
 
@@ -163,7 +161,7 @@ async function gravarAmostraDeVoz(nomeAlvo?: string, papelAlvo?: 'admin' | 'fami
     if (pitches.length < 3) {
       mensagemFeedback.value = {
         tipo: 'erro',
-        texto: 'Não detectamos voz suficiente. Fale um pouco mais perto do microfone.'
+        texto: 'Voz insuficiente detectada. Fale mais próximo do microfone.'
       };
       return;
     }
@@ -195,7 +193,7 @@ async function gravarAmostraDeVoz(nomeAlvo?: string, papelAlvo?: 'admin' | 'fami
     });
 
     const json = await res.json();
-    if (!json.success) throw new Error(json.error || 'Falha ao salvar perfil vocal.');
+    if (!json.success) throw new Error(json.error || 'Falha ao gravar perfil de voz.');
 
     await carregarPerfisDeVoz();
 
@@ -204,12 +202,12 @@ async function gravarAmostraDeVoz(nomeAlvo?: string, papelAlvo?: 'admin' | 'fami
         etapaTreinamento.value++;
         mensagemFeedback.value = {
           tipo: 'sucesso',
-          texto: `✅ Amostra ${etapaTreinamento.value - 1}/3 de ${nomeFinal} gravada (${json.data.pitchHz} Hz)! Agora grave a frase ${etapaTreinamento.value}/3.`
+          texto: `✅ Amostra ${etapaTreinamento.value - 1}/3 de ${nomeFinal} gravada (${json.data.pitchHz} Hz). Prossiga com a frase ${etapaTreinamento.value}/3.`
         };
       } else {
         mensagemFeedback.value = {
           tipo: 'sucesso',
-          texto: `🎉 Treinamento Voice Match de ${nomeFinal} concluído com 3 amostras calibradas!`
+          texto: `🎉 Treinamento Voice Match de ${nomeFinal} concluído com sucesso!`
         };
         etapaTreinamento.value = 1;
         nomeNovaPessoa.value = '';
@@ -217,14 +215,14 @@ async function gravarAmostraDeVoz(nomeAlvo?: string, papelAlvo?: 'admin' | 'fami
     } else {
       mensagemFeedback.value = {
         tipo: 'sucesso',
-        texto: `✅ Nova amostra calibrada para ${nomeFinal} (${json.data.samplesCount} amostras no total)!`
+        texto: `✅ Nova amostra registada para ${nomeFinal} (${json.data.samplesCount} amostras no total).`
       };
     }
   } catch (err: any) {
     pararCaptacaoAudio();
     mensagemFeedback.value = {
       tipo: 'erro',
-      texto: `Erro ao acessar microfone ou salvar voz: ${err.message}`
+      texto: `Erro ao aceder ao microfone ou gravar perfil: ${err.message}`
     };
   }
 }
@@ -246,23 +244,23 @@ function pararCaptacaoAudio() {
 }
 
 async function excluirPerfil(perfil: PerfilVoz) {
-  if (!confirm(`Deseja realmente remover a voz salva de "${perfil.name}"?`)) return;
+  if (!confirm(`Remover o perfil de voz de "${perfil.name}"?`)) return;
   try {
     const res = await fetch(`/api/v1/voice-profiles/${perfil.id}`, { method: 'DELETE' });
     const json = await res.json();
     if (json.success) {
       await carregarPerfisDeVoz();
-      mensagemFeedback.value = { tipo: 'sucesso', texto: `Voz de ${perfil.name} removida com sucesso.` };
+      mensagemFeedback.value = { tipo: 'sucesso', texto: `Perfil de ${perfil.name} removido com sucesso.` };
     }
   } catch (err: any) {
-    mensagemFeedback.value = { tipo: 'erro', texto: `Erro ao excluir: ${err.message}` };
+    mensagemFeedback.value = { tipo: 'erro', texto: `Erro ao remover perfil: ${err.message}` };
   }
 }
 
 function rotuloPapel(role: string) {
   if (role === 'admin') return '👑 Administrador';
   if (role === 'family') return '🏠 Familiar';
-  return '👤 Visitante';
+  return '👤 Convidado';
 }
 
 onMounted(() => {
@@ -276,12 +274,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="voice-match-container">
-    <!-- Cabeçalho -->
     <div class="section-header">
       <div>
-        <h2>🎙️ Biometria Vocal & Treinamento Voice Match</h2>
+        <h2>🎙️ Biometria Vocal &amp; Voice Match</h2>
         <p class="subtitle">
-          Cadastre e visualize todas as pessoas reconhecidas pelo JARVIS. O treinamento em 3 etapas captura a frequência (Hz), os formantes vocais e a assinatura neural de 256 dimensões.
+          Gestão e calibração das vozes reconhecidas pelo ecossistema JARVIS.
         </p>
       </div>
       <button class="btn-refresh" @click="carregarPerfisDeVoz" :disabled="carregando">
@@ -289,16 +286,14 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <!-- Alerta de Feedback -->
     <div v-if="mensagemFeedback" :class="['feedback-banner', mensagemFeedback.tipo]">
       {{ mensagemFeedback.texto }}
     </div>
 
-    <!-- Card de Treinamento Guiado (Estilo Google Voice Match) -->
     <div class="trainer-card">
       <div class="trainer-header">
         <span class="badge-step">Etapa {{ etapaTreinamento }} de 3</span>
-        <h3>Treinar Nova Voz (ou Recalibrar Pessoa)</h3>
+        <h3>Treinar Nova Voz (ou Calibrar Perfil)</h3>
       </div>
 
       <div class="form-row">
@@ -307,34 +302,31 @@ onBeforeUnmount(() => {
           <input
             v-model="nomeNovaPessoa"
             type="text"
-            placeholder="Digite o nome (ex: quem você quiser cadastrar)"
+            placeholder="Ex: Matheus, Esposa..."
             :disabled="gravandoAmostra"
           />
         </div>
         <div class="form-group">
-          <label>Nível de Permissão</label>
+          <label>Nível de Acesso</label>
           <select v-model="papelNovaPessoa" :disabled="gravandoAmostra">
-            <option value="admin">👑 Administrador (Acesso Total)</option>
-            <option value="family">🏠 Familiar (Uso Residencial & Agentes)</option>
-            <option value="guest">👤 Visitante (Consultas Básicas)</option>
+            <option value="admin">👑 Administrador</option>
+            <option value="family">🏠 Familiar</option>
+            <option value="guest">👤 Convidado</option>
           </select>
         </div>
       </div>
 
-      <!-- Frase sugerida para leitura -->
       <div class="phrase-box">
-        <span class="phrase-label">Peça para a pessoa ler em voz alta durante os 4 segundos:</span>
+        <span class="phrase-label">Frase para leitura durante a captura (4 segundos):</span>
         <p class="phrase-text">"{{ frasesDeTreinamento[etapaTreinamento - 1] }}"</p>
       </div>
 
-      <!-- Barra de Progresso das 3 Amostras -->
       <div class="steps-indicator">
         <div :class="['step-dot', { active: etapaTreinamento >= 1 }]">1ª Amostra</div>
         <div :class="['step-dot', { active: etapaTreinamento >= 2 }]">2ª Amostra</div>
         <div :class="['step-dot', { active: etapaTreinamento >= 3 }]">3ª Amostra</div>
       </div>
 
-      <!-- Medidor Acústico ao Vivo e Botão de Gravação -->
       <div class="recorder-actions">
         <button
           class="btn-record"
@@ -342,12 +334,12 @@ onBeforeUnmount(() => {
           @click="gravarAmostraDeVoz()"
           :disabled="gravandoAmostra"
         >
-          <span v-if="!gravandoAmostra">🎙️ Gravar Amostra {{ etapaTreinamento }}/3 (4 seg)</span>
-          <span v-else>🔴 Gravando... Fale agora ({{ segundosRestantes }}s)</span>
+          <span v-if="!gravandoAmostra">🎙️ Gravar Amostra {{ etapaTreinamento }}/3</span>
+          <span v-else>🔴 A gravar... ({{ segundosRestantes }}s)</span>
         </button>
 
         <div v-if="gravandoAmostra || pitchAoVivo > 0" class="live-meter">
-          <span>Frequência detectada: <strong>{{ pitchAoVivo }} Hz</strong></span>
+          <span>Frequência: <strong>{{ pitchAoVivo }} Hz</strong></span>
           <div class="volume-bar-bg">
             <div class="volume-bar-fill" :style="{ width: nivelVolumeAoVivo + '%' }"></div>
           </div>
@@ -355,12 +347,11 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Lista de Todas as Pessoas com Voz Gravada -->
     <div class="profiles-section">
-      <h3>👥 Pessoas com Voz Gravada ({{ perfisSalvos.length }})</h3>
+      <h3>👥 Perfis Gravados ({{ perfisSalvos.length }})</h3>
 
       <div v-if="perfisSalvos.length === 0 && !carregando" class="empty-state">
-        Nenhuma voz cadastrada ainda. Use o treinador acima para gravar a primeira voz!
+        Nenhum perfil de voz cadastrado de momento.
       </div>
 
       <div class="profiles-grid">
@@ -375,16 +366,16 @@ onBeforeUnmount(() => {
 
           <div class="profile-metrics">
             <div class="metric-item">
-              <span>Amostras Treinadas:</span>
-              <strong>{{ perfil.samples_count }} {{ perfil.samples_count >= 3 ? '✅ (Calibrado)' : '⚠️ (Recomenda-se 3)' }}</strong>
+              <span>Amostras:</span>
+              <strong>{{ perfil.samples_count }} {{ perfil.samples_count >= 3 ? '✅' : '⚠️' }}</strong>
             </div>
             <div class="metric-item">
-              <span>Timbre Espectral:</span>
-              <strong>{{ perfil.spectral_vector?.length ? '16 Bandas Ativas' : 'Padrão' }}</strong>
+              <span>Espectro:</span>
+              <strong>{{ perfil.spectral_vector?.length ? '16 Bandas' : 'Padrão' }}</strong>
             </div>
             <div class="metric-item">
-              <span>Assinatura Neural VM:</span>
-              <strong>{{ perfil.neural_embedding?.length ? '🧠 256D Ativo' : 'Acústico Local' }}</strong>
+              <span>Embedding VM:</span>
+              <strong>{{ perfil.neural_embedding?.length ? '🧠 256D' : 'Acústico' }}</strong>
             </div>
           </div>
 
@@ -393,7 +384,6 @@ onBeforeUnmount(() => {
               class="btn-calibrate"
               @click="gravarAmostraDeVoz(perfil.name, perfil.role)"
               :disabled="gravandoAmostra"
-              title="Gravar mais 4 segundos para refinar o reconhecimento desta pessoa"
             >
               🎙️ +1 Amostra
             </button>
@@ -537,7 +527,6 @@ onBeforeUnmount(() => {
 }
 .btn-record.recording {
   background: linear-gradient(135deg, #dc2626, #ef4444);
-  animation: pulse 1s infinite;
 }
 .live-meter {
   flex: 1;
@@ -623,4 +612,7 @@ onBeforeUnmount(() => {
   border-color: rgba(239, 68, 68, 0.4);
   color: #fca5a5;
 }
-</style>
+.empty-state {
+  color: #64748b;
+  padding: 20px 0;
+}
