@@ -1,9 +1,11 @@
-// src/services/orchestrator/cortexSensorial.ts
 import { pool } from '../../config/database.js';
 import { appendShortTermMemory } from '../shortTermMemoryService.js';
 import { identifySpeaker, enrollSpeakerVoice, extractAcousticFeatures } from '../voiceBiometricService.js';
 import { transcribeWithLocalWhisper } from '../whisperLocalService.js';
 import { SensoryAttachments, SensorPayload } from './brainConfigAndUtils.js';
+
+// Mantém controle de quando o JARVIS foi chamado pelo nome para permitir resposta contínua por 25s
+const activeWakeSessions = new Map<string, number>();
 
 export interface RespostaFiltroSensorial {
   interceptado: boolean;
@@ -26,6 +28,7 @@ export async function processarBiometriaESaudacao(
   let speakerRole = 'admin';
   let isVoiceIdentified = false;
   let promptEfetivo = (userPrompt || '').trim();
+  const isWakeWordCheckMode = promptEfetivo === '__VAD_AUDIO_ONLY__' || promptEfetivo === '__WAKE_WORD_CHECK__';
 
   const audioSample =
     sensoryInput?.audioBase64 ||
@@ -33,8 +36,8 @@ export async function processarBiometriaESaudacao(
     sensoryInput?.sensorData?.audio ||
     sensoryInput?.audio;
 
-  // 0. Fallback Whisper Local caso o frontend envie apenas o áudio
-  if ((!promptEfetivo || promptEfetivo === '__VAD_AUDIO_ONLY__') && audioSample) {
+  // 0. Transcrição do Áudio via Whisper
+  if ((!promptEfetivo || isWakeWordCheckMode) && audioSample) {
     const { rawAudioBase64 } = extractAcousticFeatures(audioSample);
     const b64ToTranscribe = rawAudioBase64 && rawAudioBase64.length > 150 ? rawAudioBase64 : audioSample;
 
@@ -46,13 +49,17 @@ export async function processarBiometriaESaudacao(
             ? whisperRes.trim()
             : (whisperRes?.text || '').trim();
 
-        if (textoExtraido.length > 0) {
+        // Filtra alucinações típicas de silêncio do Whisper ("Obrigado.", "Legendas...", ".")
+        const ehRuidoSilencio = /^(obrigad[oa]|legendas|amara\.org|inscreva-se|\.+|\s*)$/i.test(
+          textoExtraido.replace(/[!.,?]/g, '').trim()
+        );
+
+        if (textoExtraido.length > 1 && !ehRuidoSilencio) {
           promptEfetivo = textoExtraido;
         } else {
           promptEfetivo = '';
         }
-      } catch (e: any) {
-        console.warn('⚠️ [Whisper Fallback] Erro na transcrição local:', e?.message);
+      } catch {
         promptEfetivo = '';
       }
     } else {
@@ -60,8 +67,8 @@ export async function processarBiometriaESaudacao(
     }
   }
 
-  if (promptEfetivo === '__VAD_AUDIO_ONLY__' || !promptEfetivo) {
-    const msgNaoOuvi = `Não consegui captar o áudio com clareza, ${activeSpeakerName}. Toque no microfone e repita o comando.`;
+  // Se o áudio em vigília não tinha fala compreensível, IGNORA EM SILÊNCIO (Não mostra erro na tela!)
+  if (!promptEfetivo || promptEfetivo === '__VAD_AUDIO_ONLY__' || promptEfetivo === '__WAKE_WORD_CHECK__') {
     return {
       interceptado: true,
       promptTranscrito: '',
@@ -70,16 +77,46 @@ export async function processarBiometriaESaudacao(
       isVoiceIdentified: false,
       respostaPronta: {
         success: true,
-        triggeredSuccess: true,
+        ignored: true,
+        silentIgnore: true,
         agent: 'JARVIS',
         agentId: 'jarvis_core',
-        nodeType: 'core',
-        identity: activeSpeakerName,
-        sessionId,
-        response: msgNaoOuvi,
+        response: '',
         executionTimeMs: Date.now() - inicioExecucao
       }
     };
+  }
+
+  // Verifica se a pessoa falou "Jarvis" na frase OU se já está com a conversa aberta nos últimos 25 segundos
+  const regexContemJarvis = /\b(jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves|j[aá]rvis)\b/i;
+  const falouJarvisAgora = regexContemJarvis.test(promptEfetivo);
+  const lastWakeTime = activeWakeSessions.get(sessionId) || 0;
+  const estaEmJanelaDeConversaAtiva = Date.now() - lastWakeTime < 25000;
+
+  // Se veio do microfone automático (Vigília) e a pessoa NÃO disse "Jarvis" e NÃO está em conversa ativa -> IGNORA EM SILÊNCIO!
+  if (isWakeWordCheckMode && !falouJarvisAgora && !estaEmJanelaDeConversaAtiva) {
+    console.log(`🔇 [Vigília Ignorou fala sem "Jarvis"]: "${promptEfetivo}"`);
+    return {
+      interceptado: true,
+      promptTranscrito: '',
+      activeSpeakerName,
+      speakerRole,
+      isVoiceIdentified: false,
+      respostaPronta: {
+        success: true,
+        ignored: true,
+        silentIgnore: true,
+        agent: 'JARVIS',
+        agentId: 'jarvis_core',
+        response: '',
+        executionTimeMs: Date.now() - inicioExecucao
+      }
+    };
+  }
+
+  // Se falou "Jarvis", renova a janela de conversa ativa por 25 segundos!
+  if (falouJarvisAgora || !isWakeWordCheckMode) {
+    activeWakeSessions.set(sessionId, Date.now());
   }
 
   // 1. Biometria Vocal + Treinamento Voice Match
@@ -100,18 +137,13 @@ export async function processarBiometriaESaudacao(
         if (enrolled.samplesCount === 1) {
           respostaCadastro = `Perfeito, ${nomeDetectado}! Gravei a 1ª amostra da sua voz (${enrolled.pitchHz.toFixed(0)} Hz). Para calibrar, diga: "Jarvis, aqui quem fala é ${nomeDetectado}".`;
         } else if (enrolled.samplesCount === 2) {
-          respostaCadastro = `Excelente, ${nomeDetectado}! 2ª amostra calibrada. Para finalizar, diga: "Eu sou ${nomeDetectado} e minha voz está ativa".`;
+          respostaCadastro = `Excelente, ${nomeDetectado}! 2ª amostra calibrada. Para finalizar, diga: "Jarvis, eu sou ${nomeDetectado} e minha voz está ativa".`;
         } else {
           respostaCadastro = `Treinamento Voice Match concluído para ${nomeDetectado} (${enrolled.pitchHz.toFixed(0)} Hz)! Como posso ajudar?`;
         }
 
         appendShortTermMemory(sessionId, 'user', promptEfetivo);
         appendShortTermMemory(sessionId, 'assistant', respostaCadastro);
-
-        pool.query(
-          `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
-          [sessionId, promptEfetivo, respostaCadastro]
-        ).catch(() => {});
 
         return {
           interceptado: true,
@@ -125,15 +157,7 @@ export async function processarBiometriaESaudacao(
             agent: 'JARVIS (Voice Match)',
             agentId: 'jarvis_core',
             nodeType: 'core',
-            memoryStored: true,
-            memoryCount: historicoLinhas + 2,
             identity: nomeDetectado,
-            speaker: {
-              name: nomeDetectado,
-              role: papelAtribuido,
-              identified: true,
-              samplesCount: enrolled.samplesCount
-            },
             sessionId,
             response: respostaCadastro,
             executionTimeMs: Date.now() - inicioExecucao
@@ -147,17 +171,16 @@ export async function processarBiometriaESaudacao(
         speakerRole = checagemVoz.role;
         isVoiceIdentified = true;
       }
-    } catch (err: any) {
-      console.warn('⚠️ [Córtex Sensorial] Aviso na biometria vocal:', err?.message);
-    }
+    } catch {}
   }
 
-  // 2. Limpeza da Wake Word e Detecção de Chamada Isolada
-  const padraoWakeWord = /^(?:oi|ol[aá]|ei|ok|fala)?\s*(?:jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves)[,.\s!?-]*/i;
-  const apenasChamouWakeWord = /^(?:oi|ol[aá]|ei|ok|fala)?\s*(?:jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves)[!.,?\s]*$/i.test(promptEfetivo);
+  // 2. Se a pessoa chamou apenas "Jarvis" ou "Oi Jarvis" (sem comando ainda)
+  const padraoWakeWordInicio = /^(?:oi|ol[aá]|ei|ok|fala|e a[ií])?\s*(?:jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves|j[aá]rvis)[,.\s!?-]*/i;
+  const apenasChamouWakeWord = /^(?:oi|ol[aá]|ei|ok|fala|e a[ií])?\s*(?:jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves|j[aá]rvis)[!.,?\s]*$/i.test(promptEfetivo);
 
   if (apenasChamouWakeWord) {
-    const saudacaoVoz = `Sim, ${activeSpeakerName}? Estou ouvindo. O que você precisa?`;
+    activeWakeSessions.set(sessionId, Date.now());
+    const saudacaoVoz = `Sim, ${activeSpeakerName}? Estou ouvindo. Pode falar o seu comando.`;
     appendShortTermMemory(sessionId, 'user', promptEfetivo);
     appendShortTermMemory(sessionId, 'assistant', saudacaoVoz);
 
@@ -181,36 +204,9 @@ export async function processarBiometriaESaudacao(
     };
   }
 
-  const comandoLimpo = promptEfetivo.replace(padraoWakeWord, '').trim();
-
-  // 3. Filtro de saudações básicas
-  const textoLimpo = (comandoLimpo || promptEfetivo).toLowerCase().replace(/[!.,?]/g, '');
-  const ehSaudacaoBasica = /^(oi|ol[aá]|bom dia|boa tarde|boa noite|e ai|ei|fala ai)$/i.test(textoLimpo);
-
-  if (ehSaudacaoBasica) {
-    const respostaSaudacao = `Olá, ${activeSpeakerName}! Todos os sistemas estão operacionais. Como posso ajudar você agora?`;
-    appendShortTermMemory(sessionId, 'user', promptEfetivo);
-    appendShortTermMemory(sessionId, 'assistant', respostaSaudacao);
-
-    return {
-      interceptado: true,
-      promptTranscrito: promptEfetivo,
-      activeSpeakerName,
-      speakerRole,
-      isVoiceIdentified,
-      respostaPronta: {
-        success: true,
-        triggeredSuccess: true,
-        agent: 'JARVIS',
-        agentId: 'jarvis_core',
-        nodeType: 'core',
-        identity: activeSpeakerName,
-        sessionId,
-        response: respostaSaudacao,
-        executionTimeMs: Date.now() - inicioExecucao
-      }
-    };
-  }
+  // Limpa o prefixo "Jarvis," e envia o comando real para o Orquestrador!
+  const comandoLimpo = promptEfetivo.replace(padraoWakeWordInicio, '').trim();
+  activeWakeSessions.set(sessionId, Date.now());
 
   return {
     interceptado: false,
