@@ -12,7 +12,7 @@ export async function initializeDatabaseSchema() {
       await client.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
       hasVectorExtension = true;
     } catch {
-      console.info('ℹ️ [Modo Compatibilidade] pgvector não detectado localmente. Usando TEXT para vetores.');
+      console.info('ℹ️ [Modo Compatibilidade] pgvector não detetado localmente. A utilizar TEXT para vetores.');
     }
 
     // 2. Configurações Globais do Sistema (Cérebro Central)
@@ -46,7 +46,7 @@ export async function initializeDatabaseSchema() {
       DELETE FROM system_configs WHERE key IN ('brain_config', 'brain_llm');
     `);
 
-    // Insere a configuração inicial apenas se a tabela estiver 100% vazia (NUNCA sobrescreve o que você salvou)
+    // Insere a configuração inicial apenas se a tabela estiver 100% vazia
     await client.query(`
       INSERT INTO system_configs (key, provider, model, base_url, temperature, value)
       VALUES (
@@ -70,7 +70,7 @@ export async function initializeDatabaseSchema() {
       ON CONFLICT (key) DO NOTHING;
     `);
 
-    // Limpa eventuais resíduos de máscara ('•' ou '*') que possam ter ficado gravados no JSONB do cérebro
+    // Limpa eventuais resíduos de máscara ('•' ou '*') gravados no JSONB do cérebro
     await client.query(`
       UPDATE system_configs
       SET value = jsonb_set(value, '{api_key}', '""'::jsonb)
@@ -122,6 +122,7 @@ export async function initializeDatabaseSchema() {
         auth_token TEXT,
         payload_template TEXT,
         next_agent_slug VARCHAR(100) DEFAULT NULL,
+        next_agent_slugs JSONB DEFAULT '[]'::jsonb,
         is_active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -147,6 +148,7 @@ export async function initializeDatabaseSchema() {
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS auth_token TEXT;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS payload_template TEXT;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS next_agent_slug VARCHAR(100) DEFAULT NULL;
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS next_agent_slugs JSONB DEFAULT '[]'::jsonb;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS response_instruction TEXT DEFAULT '';
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS schedule_enabled BOOLEAN DEFAULT FALSE;
@@ -158,16 +160,16 @@ export async function initializeDatabaseSchema() {
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS approval_message TEXT DEFAULT '';
     `);
 
-    // HIGIENIZAÇÃO: Remove máscaras residuais ('••••') que tenham ficado gravadas na coluna api_key dos agentes
-    // Isso libera os Agentes Especialistas para utilizarem de forma transparente a chave válida do cofre do Cérebro
+    // Limpeza de eventuais máscaras residuais na api_key dos agentes
     await client.query(`
       UPDATE ai_agents
       SET api_key = NULL
       WHERE api_key LIKE '%•%' OR api_key LIKE '%*%';
     `);
 
-    // 5. Tabelas de Memória de Chat e Contexto por Session ID
+    // 5. Tabelas de Memória: Curto Prazo (Sessões) e Médio Prazo (Episódica / Projetos)
     await client.query(`
+      -- Curto Prazo: Histórico de Conversação da Sessão
       CREATE TABLE IF NOT EXISTS jarvis_chat_memory (
         id SERIAL PRIMARY KEY,
         session_id VARCHAR(120) NOT NULL,
@@ -178,6 +180,7 @@ export async function initializeDatabaseSchema() {
       );
       CREATE INDEX IF NOT EXISTS idx_jarvis_memory_session ON jarvis_chat_memory(session_id);
 
+      -- Curto Prazo: Contexto Técnico dos Especialistas
       CREATE TABLE IF NOT EXISTS specialist_context_memory (
         id SERIAL PRIMARY KEY,
         session_id VARCHAR(120) NOT NULL,
@@ -186,9 +189,23 @@ export async function initializeDatabaseSchema() {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_spec_context_session ON specialist_context_memory(session_id);
+
+      -- Médio Prazo: Memória Episódica com Expiração Configurável (TTL)
+      CREATE TABLE IF NOT EXISTS jarvis_episodic_memory (
+        id SERIAL PRIMARY KEY,
+        identity_token VARCHAR(100) DEFAULT 'Matheus-Admin',
+        categoria VARCHAR(60) NOT NULL DEFAULT 'tarefa_ativa', -- 'projeto', 'tarefa_ativa', 'habito', 'contexto_semanal'
+        titulo VARCHAR(150) NOT NULL,
+        conteudo TEXT NOT NULL,
+        metadata JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP + INTERVAL '30 days')
+      );
+      CREATE INDEX IF NOT EXISTS idx_episodic_expires ON jarvis_episodic_memory(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_episodic_categoria ON jarvis_episodic_memory(categoria);
     `);
 
-    // 6. Cofre de Conectores Externos & IoT (Gmail, Outlook, WhatsApp, Telegram, Home Assistant)
+    // 6. Cofre de Conectores Externos & Ferramentas Nativas
     await client.query(`
       CREATE TABLE IF NOT EXISTS external_connectors (
         provider_key VARCHAR(80) PRIMARY KEY,
@@ -213,7 +230,46 @@ export async function initializeDatabaseSchema() {
       ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS endpoint_url TEXT DEFAULT '';
     `);
 
-    // 7. Memória Vetorial (RAG) e Auditoria de Execução
+    // Registo de fábrica do conector de Banco de Dados para seleção na interface
+    await client.query(`
+      INSERT INTO external_connectors (provider_key, name, category, icon, description, is_enabled)
+      VALUES (
+        'dynamicdatabasetool',
+        'Banco de Dados (Dynamic Collections)',
+        'Banco de Dados',
+        '🗄️',
+        'Grava e consulta contactos e tabelas dinâmicas no PostgreSQL',
+        true
+      )
+      ON CONFLICT (provider_key) DO UPDATE 
+      SET is_enabled = true,
+          name = EXCLUDED.name,
+          description = EXCLUDED.description;
+    `);
+
+    // 7. Tabela Dedicada da Agenda de Contactos (Integrada ao WhatsApp e PBX)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS contatos_agenda (
+        id SERIAL PRIMARY KEY,
+        nome VARCHAR(100) UNIQUE NOT NULL,
+        telefone VARCHAR(25) NOT NULL,
+        apelidos TEXT[],
+        criado_em TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        atualizado_em TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Semente inicial de contactos garantindo que nunca é reiniciada ou perdida
+    await client.query(`
+      INSERT INTO contatos_agenda (nome, telefone, apelidos) VALUES
+        ('mae', '5567991153233', ARRAY['mãe', 'mainha']),
+        ('matheus', '5567991289607', ARRAY['eu', 'meu', 'mim', 'meu numero']),
+        ('amor', '5567992537089', ARRAY['este', 'ester', 'esposa'])
+      ON CONFLICT (nome) DO UPDATE 
+      SET telefone = EXCLUDED.telefone, atualizado_em = NOW();
+    `);
+
+    // 8. Memória Vetorial de Longo Prazo (RAG) e Auditoria de Execução
     const embeddingColumnType = hasVectorExtension ? 'VECTOR(1536)' : 'TEXT';
     await client.query(`
       CREATE TABLE IF NOT EXISTS vector_documents (
@@ -236,7 +292,7 @@ export async function initializeDatabaseSchema() {
       );
     `);
 
-    // 8. Versionamento de Prompts (Rollback), Coleções Dinâmicas e Estado Wait (Human-in-the-Loop)
+    // 9. Versionamento de Prompts, Coleções Dinâmicas e Estado Wait
     await client.query(`
       CREATE TABLE IF NOT EXISTS prompt_versions (
         id SERIAL PRIMARY KEY,
@@ -278,16 +334,10 @@ export async function initializeDatabaseSchema() {
       );
     `);
 
-    // Complemento seguro para colunas em identities
+    // Complementos finais de compatibilidade
     await client.query(`
       ALTER TABLE identities ADD COLUMN IF NOT EXISTS full_name VARCHAR(150);
       ALTER TABLE identities ADD COLUMN IF NOT EXISTS access_level INTEGER DEFAULT 10;
-    `);
-
-    // Adicione dentro de initializeDatabaseSchema(), na seção de migração de colunas da tabela ai_agents:
-    await client.query(`
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS next_agent_slug VARCHAR(100) DEFAULT NULL;
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS next_agent_slugs JSONB DEFAULT '[]'::jsonb;
     `);
 
     console.log('✅ [Database Setup] Esquema e tabelas unificadas alinhados com sucesso!');
