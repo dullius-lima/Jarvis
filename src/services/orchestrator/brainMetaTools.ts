@@ -8,7 +8,7 @@ import {
 import { construirOuEvoluirSubagente } from '../agents/fabricaAgentesService.js';
 
 // ============================================================================
-// DEFINIÇÃO DA META-TOOL DO SUBAGENTE ARQUITETO
+// 1. META-TOOL DO SUBAGENTE ARQUITETO (CRIAÇÃO/AJUSTE DE AGENTES)
 // ============================================================================
 export const toolDelegarCriacaoSubagente = {
   type: 'function' as const,
@@ -29,15 +29,61 @@ export const toolDelegarCriacaoSubagente = {
   }
 };
 
+// ============================================================================
+// 2. META-TOOL DE MEMÓRIA COGNITIVA (CURTO, MÉDIO E LONGO PRAZO)
+// ============================================================================
+export const toolGerenciarMemoria = {
+  type: 'function' as const,
+  function: {
+    name: 'gerenciar_memoria_cognitiva',
+    description:
+      'Acione para salvar, consultar ou classificar informações na memória do JARVIS nos 3 níveis estruturados: curto_prazo (sessão imediata), medio_prazo (projetos/tarefas ativas de 7 a 90 dias com validade automática) ou longo_prazo (fatos imutáveis, diretrizes permanentes e contatos da agenda).',
+    parameters: {
+      type: 'object',
+      properties: {
+        acao: {
+          type: 'string',
+          enum: ['salvar', 'consultar'],
+          description: 'Ação a ser executada: salvar nova memória ou consultar histórico armazenado.'
+        },
+        tipo_memoria: {
+          type: 'string',
+          enum: ['curto_prazo', 'medio_prazo', 'longo_prazo'],
+          description:
+            'Nível de persistência: curto_prazo (sessão), medio_prazo (episódica/projetos com expiração) ou longo_prazo (permanente).'
+        },
+        titulo: {
+          type: 'string',
+          description: 'Título ou identificador temático da memória (ex: "Rotina de Treino", "Projeto Reforma", "Telefone do João").'
+        },
+        conteudo: {
+          type: 'string',
+          description: 'O texto detalhado do fato, instrução, número ou regra a ser gravada ou localizada.'
+        },
+        categoria: {
+          type: 'string',
+          description: 'Categoria de classificação (ex: "contato", "projeto", "habito", "financeiro", "rotina").'
+        },
+        dias_validade: {
+          type: 'number',
+          description: 'Duração em dias caso seja medio_prazo (padrão: 30 dias).'
+        }
+      },
+      required: ['acao', 'tipo_memoria', 'titulo']
+    }
+  }
+};
+
 /**
- * Registra a ferramenta do arquiteto na lista de ferramentas da LLM
+ * Registra o catálogo de Meta-Tools universais na chamada da LLM Central
  */
 export function registrarMetaToolsDoBrain(tools: any[]) {
   tools.push(toolDelegarCriacaoSubagente);
+  tools.push(toolGerenciarMemoria);
 }
 
 /**
- * Despacha a criação/ajuste diretamente para a Fábrica de Agentes com as travas de segurança
+ * Despacha a criação/ajuste diretamente para a Fábrica de Agentes
  */
 export async function executarDelegacaoSubagente(
   intencao: string,
@@ -53,9 +99,175 @@ export async function executarDelegacaoSubagente(
 export { construirOuEvoluirSubagente };
 
 // ============================================================================
+// EXECUÇÃO DO GERENCIAMENTO DE MEMÓRIA (3 NÍVEIS)
+// ============================================================================
+export async function executarGerenciamentoMemoria(params: {
+  acao: 'salvar' | 'consultar';
+  tipo_memoria: 'curto_prazo' | 'medio_prazo' | 'longo_prazo';
+  titulo: string;
+  conteudo?: string;
+  categoria?: string;
+  dias_validade?: number;
+  session_id?: string;
+}) {
+  const {
+    acao,
+    tipo_memoria,
+    titulo,
+    conteudo = '',
+    categoria = 'geral',
+    dias_validade = 30,
+    session_id = 'default_session'
+  } = params;
+
+  // 1. AÇÃO: SALVAR MEMÓRIA
+  if (acao === 'salvar') {
+    if (tipo_memoria === 'curto_prazo') {
+      await pool.query(
+        `INSERT INTO jarvis_chat_memory (session_id, role, content)
+         VALUES ($1, 'system', $2);`,
+        [session_id, `[MEMÓRIA CURTO PRAZO - ${titulo}]: ${conteudo}`]
+      ).catch(() => {});
+
+      return {
+        success: true,
+        tipo_memoria: 'curto_prazo',
+        titulo,
+        message: `Memória de curto prazo retida na sessão ativa: "${titulo}".`
+      };
+    }
+
+    if (tipo_memoria === 'medio_prazo') {
+      const dias = Number(dias_validade) > 0 ? Number(dias_validade) : 30;
+      await pool.query(
+        `INSERT INTO jarvis_episodic_memory (categoria, titulo, conteudo, expires_at, metadata)
+         VALUES ($1, $2, $3, NOW() + ($4 || ' days')::interval, $5::jsonb);`,
+        [
+          categoria,
+          titulo,
+          conteudo,
+          dias,
+          JSON.stringify({ origem: 'brainMetaTools', dias_validade: dias, salvo_em: new Date().toISOString() })
+        ]
+      );
+
+      return {
+        success: true,
+        tipo_memoria: 'medio_prazo',
+        dias_validade: dias,
+        titulo,
+        message: `Memória de médio prazo guardada na camada episódica por ${dias} dias: "${titulo}".`
+      };
+    }
+
+    if (tipo_memoria === 'longo_prazo') {
+      // Sincronização automática com a tabela de contatos se o dado envolver contato/telefone
+      if (categoria === 'contato' || /telefone|contato|whatsapp|celular/i.test(titulo)) {
+        const digitos = conteudo.replace(/\D/g, '');
+        if (digitos.length >= 8) {
+          let fone = digitos;
+          if (fone.length === 8 || fone.length === 9) {
+            fone = `5567${fone.length === 8 ? '9' + fone : fone}`;
+          } else if (fone.length === 10 || fone.length === 11) {
+            fone = `55${fone}`;
+          }
+
+          const nomeNormalizado = titulo
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim();
+
+          await pool.query(
+            `INSERT INTO contatos_agenda (nome, telefone, apelidos)
+             VALUES ($1, $2, ARRAY[$3])
+             ON CONFLICT (nome) DO UPDATE SET telefone = EXCLUDED.telefone, atualizado_em = NOW();`,
+            [nomeNormalizado, fone, titulo]
+          ).catch(() => {});
+        }
+      }
+
+      // Ingestão no repositório de documentos vetoriais permanentes
+      await pool.query(
+        `INSERT INTO vector_documents (content, metadata)
+         VALUES ($1, $2::jsonb);`,
+        [
+          `[MEMÓRIA LONGO PRAZO - ${titulo}]: ${conteudo}`,
+          JSON.stringify({ titulo, categoria, nivel: 'longo_prazo', persistencia: 'permanente' })
+        ]
+      );
+
+      return {
+        success: true,
+        tipo_memoria: 'longo_prazo',
+        titulo,
+        message: `Fato gravado permanentemente na memória de longo prazo: "${titulo}".`
+      };
+    }
+  }
+
+  // 2. AÇÃO: CONSULTAR MEMÓRIA
+  if (acao === 'consultar') {
+    if (tipo_memoria === 'curto_prazo') {
+      const res = await pool.query(
+        `SELECT role, content, created_at FROM jarvis_chat_memory 
+         WHERE session_id = $1 AND content ILIKE $2 
+         ORDER BY id DESC LIMIT 5;`,
+        [session_id, `%${titulo}%`]
+      ).catch(() => ({ rows: [] as any[] }));
+
+      return {
+        success: true,
+        tipo_memoria: 'curto_prazo',
+        total: res.rows.length,
+        registros: res.rows
+      };
+    }
+
+    if (tipo_memoria === 'medio_prazo') {
+      const res = await pool.query(
+        `SELECT id, categoria, titulo, conteudo, expires_at, created_at 
+         FROM jarvis_episodic_memory 
+         WHERE expires_at > NOW() AND (titulo ILIKE $1 OR conteudo ILIKE $1)
+         ORDER BY id DESC LIMIT 5;`,
+        [`%${titulo}%`]
+      ).catch(() => ({ rows: [] as any[] }));
+
+      return {
+        success: true,
+        tipo_memoria: 'medio_prazo',
+        total: res.rows.length,
+        registros: res.rows
+      };
+    }
+
+    if (tipo_memoria === 'longo_prazo') {
+      const res = await pool.query(
+        `SELECT id, content, metadata, created_at 
+         FROM vector_documents 
+         WHERE content ILIKE $1 
+         ORDER BY id DESC LIMIT 5;`,
+        [`%${titulo}%`]
+      ).catch(() => ({ rows: [] as any[] }));
+
+      return {
+        success: true,
+        tipo_memoria: 'longo_prazo',
+        total: res.rows.length,
+        registros: res.rows
+      };
+    }
+  }
+
+  return { success: false, message: 'Operação de memória não reconhecida.' };
+}
+
+// Alias direto para chamadas programáticas do orquestrador
+export const salvarMemoriaClassificada = executarGerenciamentoMemoria;
+
+// ============================================================================
 // CONECTORES / TOOLS DINÂMICAS NO POSTGRESQL
 // ============================================================================
-
 export async function criarOuAtualizarToolNoBrain(params: {
   name: string;
   provider_key?: string;
@@ -161,7 +373,7 @@ export async function excluirConectorToolDoBrain(params: { provider_key: string 
     }
   } catch {}
 
-  // Desvincula de agentes que tinham essa ferramenta associada (com proteção de tipo JSONB)
+  // Desvincula de agentes que tinham essa ferramenta associada
   await pool
     .query(
       `UPDATE ai_agents
@@ -188,9 +400,8 @@ export async function excluirConectorToolDoBrain(params: { provider_key: string 
 }
 
 // ============================================================================
-// CRIAÇÃO / ATUALIZAÇÃO DIRETA DE AGENTES (COM RETORNO COMPLETO DO OBJETO AGENT)
+// CRIAÇÃO / ATUALIZAÇÃO DIRETA DE AGENTES (RETORNO COMPLETO DO OBJETO AGENT)
 // ============================================================================
-
 export async function criarOuAtualizarAgenteNoBrain(
   params: {
     name: string;
@@ -217,7 +428,6 @@ export async function criarOuAtualizarAgenteNoBrain(
 ) {
   await ensureOrchestratorSchema();
 
-  // Prevenção de timestamp aleatório no slug: deriva do nome se o slug não for enviado
   const baseName = (params.name || 'agente_especialista').trim();
   const slug = sanitizeToolName(params.slug || baseName || 'agente_especialista');
   const name = baseName;
@@ -449,7 +659,7 @@ export async function criarOuAtualizarAgenteNoBrain(
 
   return {
     success: true,
-    agent: persistedAgent, // CORREÇÃO: objeto agent completo exigido pelo orchestrator
+    agent: persistedAgent,
     agent_id: persistedAgent?.id,
     slug,
     name,
@@ -462,7 +672,6 @@ export async function criarOuAtualizarAgenteNoBrain(
 // ============================================================================
 // ATUALIZAÇÃO DE PERSONA (PRESERVANDO COFRE SAVED_KEYS)
 // ============================================================================
-
 export async function atualizarPersonaAgenteOuJarvis(params: {
   target_slug: string;
   behavior_instruction: string;
@@ -476,7 +685,6 @@ export async function atualizarPersonaAgenteOuJarvis(params: {
   }
 
   if (slug === 'jarvis' || slug === 'jarvis_core' || slug === 'core') {
-    // CORREÇÃO: Lê a configuração bruta para NUNCA apagar o saved_keys do cofre
     const cfgRes = await pool.query(
       `SELECT value FROM system_configs WHERE key IN ('brain_llm_config', 'brain_llm') ORDER BY updated_at DESC LIMIT 1;`
     );
@@ -559,7 +767,6 @@ export async function atualizarPersonaAgenteOuJarvis(params: {
 // ============================================================================
 // SUÍTE DE SEGURANÇA E DIAGNÓSTICO (RED TEAM, PROBE E AUTO-CURA)
 // ============================================================================
-
 export async function executarSuiteSegurancaHacker(params?: {
   mode?: 'red_team_audit' | 'self_healing_debug' | 'api_probe' | string;
   target_slug?: string;
@@ -567,7 +774,6 @@ export async function executarSuiteSegurancaHacker(params?: {
 }) {
   const modo = params?.mode || 'red_team_audit';
 
-  // 1. Diagnóstico de Falhas e Auto-Cura
   if (modo === 'self_healing_debug') {
     const logsRecentes = await pool.query(`
       SELECT agent_name, action_payload, response_payload, execution_time_ms, created_at
@@ -585,7 +791,6 @@ export async function executarSuiteSegurancaHacker(params?: {
     };
   }
 
-  // 2. Sonda de Rota / API Probe
   if (modo === 'api_probe' && params?.target_url) {
     try {
       const inicio = Date.now();
@@ -608,7 +813,6 @@ export async function executarSuiteSegurancaHacker(params?: {
     }
   }
 
-  // 3. Auditoria Preventiva (Red Team)
   const agentesSemProtecao = await pool.query(`
     SELECT count(*)::int as total
     FROM ai_agents
@@ -632,3 +836,23 @@ export const deleteToolConnectorFromBrain = excluirConectorToolDoBrain;
 export const createOrUpdateAgentFromBrain = criarOuAtualizarAgenteNoBrain;
 export const updateAgentOrJarvisPersona = atualizarPersonaAgenteOuJarvis;
 export const executeHackerSecuritySuite = executarSuiteSegurancaHacker;
+
+export default {
+  toolDelegarCriacaoSubagente,
+  toolGerenciarMemoria,
+  registrarMetaToolsDoBrain,
+  executarDelegacaoSubagente,
+  construirOuEvoluirSubagente,
+  executarGerenciamentoMemoria,
+  salvarMemoriaClassificada,
+  criarOuAtualizarToolNoBrain,
+  excluirConectorToolDoBrain,
+  criarOuAtualizarAgenteNoBrain,
+  atualizarPersonaAgenteOuJarvis,
+  executarSuiteSegurancaHacker,
+  createOrUpdateToolFromBrain,
+  deleteToolConnectorFromBrain,
+  createOrUpdateAgentFromBrain,
+  updateAgentOrJarvisPersona,
+  executeHackerSecuritySuite
+};
