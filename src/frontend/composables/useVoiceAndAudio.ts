@@ -1,3 +1,4 @@
+// src/frontend/composables/useVoiceAndAudio.ts
 import { ref } from 'vue';
 
 export function useVoiceAndAudio(
@@ -17,7 +18,7 @@ export function useVoiceAndAudio(
   let speechAccumulatedBuffer = '';
   let lastChimeTimestamp = 0;
 
-  // Analisador Acústico
+  // Analisador Acústico e Biometria Vocal
   let localAudioStream: MediaStream | null = null;
   let audioContext: AudioContext | null = null;
   let analyserNode: AnalyserNode | null = null;
@@ -31,7 +32,7 @@ export function useVoiceAndAudio(
 
   function playJarvisChime(type: 'wake' | 'send' = 'wake') {
     const now = Date.now();
-    if (now - lastChimeTimestamp < 1000 && type === 'wake') return;
+    if (now - lastChimeTimestamp < 800) return;
     lastChimeTimestamp = now;
 
     try {
@@ -58,7 +59,7 @@ export function useVoiceAndAudio(
       gain.connect(ctx.destination);
       osc.start();
       osc.stop(ctx.currentTime + 0.22);
-      setTimeout(() => ctx.close().catch(() => {}), 300);
+      setTimeout(() => ctx.close().catch(() => {}), 250);
     } catch {}
   }
 
@@ -138,6 +139,7 @@ export function useVoiceAndAudio(
           if (measuredEnergies.length > 40) measuredEnergies.shift();
           if (measuredSpectra.length > 40) measuredSpectra.shift();
 
+          // VAD Fallback caso o navegador falhe no Web Speech
           if (isJarvisAwake.value) {
             vadDetectedHumanSpeech = true;
             if (vadFallbackTimer) clearTimeout(vadFallbackTimer);
@@ -145,12 +147,12 @@ export function useVoiceAndAudio(
               if (isJarvisAwake.value && vadDetectedHumanSpeech && speechAccumulatedBuffer.trim().length === 0) {
                 vadDetectedHumanSpeech = false;
                 playJarvisChime('send');
-                voiceStatusText.value = '⚡ Processando fala...';
+                voiceStatusText.value = '⚡ Processando áudio via Whisper...';
                 const bioPayload = await buildVoiceBiometricPayloadAsync();
                 isJarvisAwake.value = false;
                 onCommandDetected('__VAD_AUDIO_ONLY__', bioPayload);
               }
-            }, 2200);
+            }, 2400);
           }
         }
       }, 60);
@@ -161,7 +163,7 @@ export function useVoiceAndAudio(
         mediaRecorder.ondataavailable = (e) => {
           if (e.data.size > 0) {
             audioChunks.push(e.data);
-            if (audioChunks.length > 24) audioChunks.shift();
+            if (audioChunks.length > 25) audioChunks.shift();
           }
         };
         mediaRecorder.start(250);
@@ -252,42 +254,30 @@ export function useVoiceAndAudio(
       }
 
       const liveText = (speechAccumulatedBuffer + ' ' + currentInterim).trim();
-      const lower = liveText.toLowerCase();
+      if (!liveText) return;
 
-      // Gatilho abrangente para despertar:
-      // "jarvis", "oi jarvis", "ei jarvis", "ok jarvis", "preciso de ajuda", "ajuda", "socorro", "alô"
       const wakeWordPattern =
         /(?:oi|ol[aá]|ei|ok|fala|al[oô]|e a[ií])?\s*(jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves|j[aá]rvis)|(?:preciso\s+de\s+ajuda|me\s+ajuda|socorro|assistente)/i;
 
-      // 1. Se estava em vigília e ouviu qualquer chamada de ativação
-      if (!isJarvisAwake.value && wakeWordPattern.test(lower)) {
+      // 1. Detectou a chamada / Wake Word
+      if (!isJarvisAwake.value && wakeWordPattern.test(liveText)) {
         isJarvisAwake.value = true;
         playJarvisChime('wake');
 
         const parts = liveText.split(wakeWordPattern);
-        const afterWake = parts.pop()?.replace(/^[,.\s!?-]+/, '').trim() || '';
+        const remainder = parts.pop()?.replace(/^[,.\s!?-]+/, '').trim() || '';
 
-        if (afterWake.length > 2) {
-          // A pessoa falou "Jarvis, ligue a luz" na mesma frase
-          speechAccumulatedBuffer = afterWake;
-          if (onTextChange) onTextChange(afterWake);
-          voiceStatusText.value = `🎙️ "${afterWake}"`;
+        if (remainder.length > 2) {
+          speechAccumulatedBuffer = remainder;
+          if (onTextChange) onTextChange(remainder);
+          voiceStatusText.value = `🎙️ "${remainder}"`;
         } else {
-          // A pessoa falou só "Jarvis" ou "Preciso de ajuda"
           speechAccumulatedBuffer = '';
-          voiceStatusText.value = '🎙️ Sim? Estou ouvindo... Pode falar!';
-          speechSilenceTimer = setTimeout(async () => {
-            if (isJarvisAwake.value && speechAccumulatedBuffer.trim().length === 0) {
-              const bioPayload = await buildVoiceBiometricPayloadAsync();
-              isJarvisAwake.value = false;
-              onCommandDetected('Jarvis', bioPayload);
-            }
-          }, 1800);
-          return;
+          voiceStatusText.value = '🎙️ Sim? Estou ouvindo... Diga seu comando!';
         }
       }
 
-      // 2. Se já está acordado, acumula a frase e despacha após pausa natural
+      // 2. Se já estiver acordado ouvindo o comando, envia após 1.6s de silêncio natural
       if (isJarvisAwake.value && liveText.length > 1) {
         const cleaned = liveText.replace(wakeWordPattern, '').replace(/^[,.\s!?-]+/, '').trim() || liveText;
         if (onTextChange) onTextChange(cleaned);
@@ -303,7 +293,7 @@ export function useVoiceAndAudio(
             vadDetectedHumanSpeech = false;
             onCommandDetected(cleaned, bioPayload);
           }
-        }, 1500);
+        }, 1600);
       }
     };
 
@@ -316,7 +306,6 @@ export function useVoiceAndAudio(
 
     rec.onend = () => {
       isRecognitionRunning = false;
-      // Mantém a escuta de vigília sempre viva se não estiver falando
       if (isVigilanceEnabled.value && !isJarvisSpeaking.value) {
         setTimeout(() => {
           if (!isRecognitionRunning && !isJarvisSpeaking.value) {
@@ -343,7 +332,7 @@ export function useVoiceAndAudio(
 
     isVigilanceEnabled.value = true;
     playJarvisChime('wake');
-    const hasPerm = await startAcousticBiometricCapture();
+    await startAcousticBiometricCapture();
 
     speechAccumulatedBuffer = '';
     measuredPitches = [];
@@ -378,7 +367,7 @@ export function useVoiceAndAudio(
     }
 
     const cleanText = rawText
-      .replace(/```[\s\S]*?```/g, 'bloco de código na tela.')
+      .replace(/```[\s\S]*?```/g, 'bloco de código.')
       .replace(/[*#_`~>|]/g, '')
       .trim();
 
@@ -389,7 +378,7 @@ export function useVoiceAndAudio(
       if (isVigilanceEnabled.value && recognition && !isRecognitionRunning) {
         setTimeout(() => {
           try { recognition.start(); } catch {}
-        }, 350);
+        }, 300);
       }
       if (onDone) onDone();
     };
@@ -405,31 +394,28 @@ export function useVoiceAndAudio(
       if (data.success && data.audioBase64) {
         const audio = new Audio(`data:${data.mimeType || 'audio/mpeg'};base64,${data.audioBase64}`);
         audio.onended = finish;
-        audio.onerror = () => {
-          // Se o áudio falhar, tenta o sintetizador nativo
-          fallbackBrowserSpeech(cleanText, finish);
-        };
+        audio.onerror = () => fallbackSpeech(cleanText, finish);
         await audio.play();
         return;
       }
     } catch {}
 
-    // 2. Fallback: Sintetizador nativo do navegador
-    fallbackBrowserSpeech(cleanText, finish);
+    // 2. Fallback: síntese de voz nativa do dispositivo
+    fallbackSpeech(cleanText, finish);
   }
 
-  function fallbackBrowserSpeech(cleanText: string, finish: () => void) {
+  function fallbackSpeech(text: string, finish: () => void) {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       setTimeout(() => {
-        const utterance = new SpeechSynthesisUtterance(cleanText);
+        const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'pt-BR';
         utterance.rate = 1.05;
         utterance.pitch = 0.95;
         utterance.onend = finish;
         utterance.onerror = finish;
         window.speechSynthesis.speak(utterance);
-      }, 80);
+      }, 60);
     } else {
       finish();
     }
