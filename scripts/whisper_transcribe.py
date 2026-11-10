@@ -93,7 +93,6 @@ def transcribe_audio(file_path: str, model_size: str = "base"):
             "text": ""
         }, ensure_ascii=False))
     finally:
-        # Limpeza do arquivo WAV temporário convertido
         if target_audio != file_path and os.path.exists(target_audio):
             try:
                 os.remove(target_audio)
