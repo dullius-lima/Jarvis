@@ -14,17 +14,26 @@ export interface WhisperTranscriptionResult {
 }
 
 async function getGroqApiKey(): Promise<string> {
+  // 1. Checa variáveis de ambiente
+  const envKey = (process.env.GROQ_API_KEY || process.env.LLM_API_KEY || '').trim();
+  if (envKey.startsWith('gsk_')) return envKey;
+
+  // 2. Varre todas as configurações do banco procurando qualquer chave gsk_ válida
   try {
-    const res = await pool.query(
-      "SELECT value FROM system_configs WHERE key IN ('brain_llm_config', 'brain_config') LIMIT 1;"
-    );
-    if (res.rows.length > 0) {
-      const val = typeof res.rows[0].value === 'string' ? JSON.parse(res.rows[0].value) : res.rows[0].value;
-      const key = val?.saved_keys?.groq || val?.api_key || '';
-      if (key && key.startsWith('gsk_')) return key.trim();
+    const res = await pool.query("SELECT value FROM system_configs;");
+    for (const row of res.rows) {
+      const val = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+      const candidate =
+        val?.saved_keys?.groq ||
+        val?.api_key ||
+        val?.groq_api_key ||
+        '';
+      if (typeof candidate === 'string' && candidate.trim().startsWith('gsk_')) {
+        return candidate.trim();
+      }
     }
   } catch {}
-  return (process.env.GROQ_API_KEY || process.env.LLM_API_KEY || '').trim();
+  return '';
 }
 
 export async function transcribeWithLocalWhisper(
@@ -41,7 +50,7 @@ export async function transcribeWithLocalWhisper(
   const audioBuffer = Buffer.from(cleanBase64, 'base64');
 
   if (audioBuffer.length < 400) {
-    return { success: false, error: 'Buffer de áudio sem conteúdo.' };
+    return { success: false, error: 'Buffer de áudio muito curto.' };
   }
 
   const tempWebmPath = path.join(os.tmpdir(), `jarvis_voice_${Date.now()}.webm`);
@@ -50,9 +59,11 @@ export async function transcribeWithLocalWhisper(
   try {
     await fs.promises.writeFile(tempWebmPath, audioBuffer);
 
+    // Converte com FFmpeg para WAV 16kHz Mono com normalização de volume (volume=2.5)
     await new Promise<void>((resolve) => {
       const ff = spawn('ffmpeg', [
         '-y', '-i', tempWebmPath,
+        '-af', 'volume=2.5',
         '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
         tempWavPath
       ]);
@@ -60,22 +71,23 @@ export async function transcribeWithLocalWhisper(
       ff.on('error', () => resolve());
     });
 
-    const finalAudioPath = fs.existsSync(tempWavPath) && fs.statSync(tempWavPath).size > 500
-      ? tempWavPath
-      : tempWebmPath;
+    const finalAudioPath =
+      fs.existsSync(tempWavPath) && fs.statSync(tempWavPath).size > 800
+        ? tempWavPath
+        : tempWebmPath;
 
-    // Tentativa prioritária: Groq Whisper Large V3 Turbo (~200ms)
+    // MOTOR 1: Groq Whisper Large V3 Turbo (Ultra-preciso em Português)
     const groqKey = await getGroqApiKey();
-    if (groqKey && groqKey.startsWith('gsk_')) {
+    if (groqKey) {
       try {
         const fileBytes = await fs.promises.readFile(finalAudioPath);
         const formData = new FormData();
-        const blob = new Blob([fileBytes], {
-          type: finalAudioPath.endsWith('.wav') ? 'audio/wav' : 'audio/webm'
-        });
-        formData.append('file', blob, finalAudioPath.endsWith('.wav') ? 'speech.wav' : 'speech.webm');
+        const isWav = finalAudioPath.endsWith('.wav');
+        const blob = new Blob([fileBytes], { type: isWav ? 'audio/wav' : 'audio/webm' });
+        formData.append('file', blob, isWav ? 'speech.wav' : 'speech.webm');
         formData.append('model', 'whisper-large-v3-turbo');
         formData.append('language', 'pt');
+        formData.append('prompt', 'Jarvis, Oi Jarvis, Olá Jarvis, comandos em português do Brasil.');
         formData.append('response_format', 'json');
         formData.append('temperature', '0.0');
 
@@ -91,6 +103,7 @@ export async function transcribeWithLocalWhisper(
           if (transcribed.length > 0) {
             try { if (fs.existsSync(tempWebmPath)) await fs.promises.unlink(tempWebmPath); } catch {}
             try { if (fs.existsSync(tempWavPath)) await fs.promises.unlink(tempWavPath); } catch {}
+            console.log(`⚡ [Groq Whisper] (${Date.now() - startTime}ms): "${transcribed}"`);
             return {
               success: true,
               text: transcribed,
@@ -101,11 +114,11 @@ export async function transcribeWithLocalWhisper(
           }
         }
       } catch (e: any) {
-        console.warn('Fallback Whisper Python:', e?.message);
+        console.warn('⚠️ [Groq Whisper Fallback]:', e?.message);
       }
     }
 
-    // Fallback local: faster-whisper Python
+    // MOTOR 2: Faster-Whisper Local Python
     const scriptPath = path.resolve(process.cwd(), 'scripts', 'whisper_transcribe.py');
     const venvPython = path.resolve(process.cwd(), 'whisper-env', 'bin', 'python3');
     const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
