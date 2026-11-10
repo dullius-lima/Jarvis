@@ -1,4 +1,3 @@
-# scripts/whisper_transcribe.py
 import sys
 import json
 import os
@@ -8,9 +7,6 @@ import warnings
 warnings.filterwarnings("ignore")
 
 def convert_to_wav_16k(input_path: str) -> str:
-    """
-    Converte qualquer áudio (WebM, Ogg, MP4) para WAV 16kHz Mono 16-bit PCM via FFmpeg.
-    """
     out_wav = input_path + ".converted.wav"
     try:
         cmd = [
@@ -36,10 +32,8 @@ def transcribe_audio(file_path: str, model_size: str = "base"):
         }, ensure_ascii=False))
         return
 
-    # Garante a conversão para WAV 16kHz para compatibilidade com o Whisper
     target_audio = convert_to_wav_16k(file_path)
 
-    # 1. Tentativa com Faster-Whisper (int8 / CPU otimizado)
     try:
         from faster_whisper import WhisperModel
         model = WhisperModel(model_size, device="cpu", compute_type="int8")
@@ -65,7 +59,6 @@ def transcribe_audio(file_path: str, model_size: str = "base"):
     except Exception as e:
         sys.stderr.write(f"[faster-whisper warning]: {str(e)}\n")
 
-    # 2. Fallback com OpenAI-Whisper tradicional
     try:
         import whisper
         model = whisper.load_model(model_size)
@@ -83,7 +76,7 @@ def transcribe_audio(file_path: str, model_size: str = "base"):
     except ImportError:
         print(json.dumps({
             "success": False,
-            "error": "Biblioteca Whisper não encontrada no ambiente virtual.",
+            "error": "Biblioteca Whisper não encontrada.",
             "text": ""
         }, ensure_ascii=False))
     except Exception as e:
