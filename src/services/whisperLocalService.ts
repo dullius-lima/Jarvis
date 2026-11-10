@@ -1,4 +1,3 @@
-// src/services/whisperLocalService.ts
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -35,7 +34,7 @@ export async function transcribeWithLocalWhisper(
   const startTime = Date.now();
 
   if (!audioBase64 || audioBase64.length < 100) {
-    return { success: false, error: 'Áudio Base64 vazio ou muito curto.' };
+    return { success: false, error: 'Áudio Base64 vazio ou insuficiente.' };
   }
 
   const cleanBase64 = audioBase64.replace(/^data:audio\/[a-zA-Z0-9+-]+;base64,/, '').trim();
@@ -51,7 +50,6 @@ export async function transcribeWithLocalWhisper(
   try {
     await fs.promises.writeFile(tempWebmPath, audioBuffer);
 
-    // Converte com FFmpeg para WAV 16kHz Mono limpo (compatível com Android, iOS e PC)
     await new Promise<void>((resolve) => {
       const ff = spawn('ffmpeg', [
         '-y', '-i', tempWebmPath,
@@ -66,9 +64,7 @@ export async function transcribeWithLocalWhisper(
       ? tempWavPath
       : tempWebmPath;
 
-    // =========================================================================
-    // MOTOR 1 (ULTRA-RÁPIDO E PRECISO): Groq Whisper-Large-V3-Turbo (200ms)
-    // =========================================================================
+    // Tentativa prioritária: Groq Whisper Large V3 Turbo (~200ms)
     const groqKey = await getGroqApiKey();
     if (groqKey && groqKey.startsWith('gsk_')) {
       try {
@@ -95,7 +91,6 @@ export async function transcribeWithLocalWhisper(
           if (transcribed.length > 0) {
             try { if (fs.existsSync(tempWebmPath)) await fs.promises.unlink(tempWebmPath); } catch {}
             try { if (fs.existsSync(tempWavPath)) await fs.promises.unlink(tempWavPath); } catch {}
-            console.log(`⚡ [Groq Whisper Turbo] (${Date.now() - startTime}ms): "${transcribed}"`);
             return {
               success: true,
               text: transcribed,
@@ -106,13 +101,11 @@ export async function transcribeWithLocalWhisper(
           }
         }
       } catch (e: any) {
-        console.warn('⚠️ [Groq Whisper Fallback para Python Local]:', e?.message);
+        console.warn('Fallback Whisper Python:', e?.message);
       }
     }
 
-    // =========================================================================
-    // MOTOR 2 (OFFLINE FALLBACK): Faster-Whisper Python na VM
-    // =========================================================================
+    // Fallback local: faster-whisper Python
     const scriptPath = path.resolve(process.cwd(), 'scripts', 'whisper_transcribe.py');
     const venvPython = path.resolve(process.cwd(), 'whisper-env', 'bin', 'python3');
     const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
