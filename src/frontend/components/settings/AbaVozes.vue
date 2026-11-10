@@ -55,6 +55,38 @@ async function carregarPerfisDeVoz() {
   }
 }
 
+// Obtenção universal do microfone compatível com Android, iOS e navegadores sem HTTPS estrito
+async function obterStreamMicrofone(): Promise<MediaStream> {
+  const nav = navigator as any;
+
+  if (nav.mediaDevices && typeof nav.mediaDevices.getUserMedia === 'function') {
+    return await nav.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+  }
+
+  const legacyGetUserMedia =
+    nav.getUserMedia ||
+    nav.webkitGetUserMedia ||
+    nav.mozGetUserMedia ||
+    nav.msGetUserMedia;
+
+  if (legacyGetUserMedia) {
+    return new Promise<MediaStream>((resolve, reject) => {
+      legacyGetUserMedia.call(
+        nav,
+        { audio: true },
+        (stream: MediaStream) => resolve(stream),
+        (err: any) => reject(err)
+      );
+    });
+  }
+
+  throw new Error(
+    'O seu navegador bloqueou o microfone devido ao endereço não utilizar HTTPS seguro ou flag de IP autorizada.'
+  );
+}
+
 function detectPitch(buf: Float32Array, sampleRate: number): { pitch: number; rms: number } {
   let sumSq = 0;
   for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
@@ -103,12 +135,18 @@ async function gravarAmostraDeVoz(nomeAlvo?: string, papelAlvo?: 'admin' | 'fami
 
   mensagemFeedback.value = null;
   try {
-    audioStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-    });
+    audioStream = await obterStreamMicrofone();
 
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) {
+      throw new Error('AudioContext não é suportado pelo seu navegador.');
+    }
+
     audioCtx = new AudioContextClass();
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+
     const source = audioCtx.createMediaStreamSource(audioStream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 2048;
@@ -152,8 +190,11 @@ async function gravarAmostraDeVoz(nomeAlvo?: string, papelAlvo?: 'admin' | 'fami
 
     pararCaptacaoAudio();
 
-    if (pitches.length < 3) {
-      mensagemFeedback.value = { tipo: 'erro', texto: 'Voz insuficiente detectada. Fale mais próximo do microfone.' };
+    if (pitches.length < 2) {
+      mensagemFeedback.value = {
+        tipo: 'erro',
+        texto: 'Voz insuficiente detectada. Fale mais próximo do microfone.'
+      };
       return;
     }
 
@@ -206,7 +247,7 @@ async function gravarAmostraDeVoz(nomeAlvo?: string, papelAlvo?: 'admin' | 'fami
     } else {
       mensagemFeedback.value = {
         tipo: 'sucesso',
-        texto: `✅ Nova amostra registrada para ${nomeFinal}!`
+        texto: `✅ Nova amostra registada para ${nomeFinal}!`
       };
     }
   } catch (err: any) {
@@ -241,7 +282,7 @@ async function excluirPerfil(perfil: PerfilVoz) {
       mensagemFeedback.value = { tipo: 'sucesso', texto: `Perfil removido com sucesso.` };
     }
   } catch (err: any) {
-    mensagemFeedback.value = { tipo: 'erro', texto: `Erro ao remover: ${err.message}` };
+    mensagemFeedback.value = { tipo: 'erro', texto: `Erro: ${err.message}` };
   }
 }
 
