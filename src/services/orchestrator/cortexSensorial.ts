@@ -14,9 +14,6 @@ export interface RespostaFiltroSensorial {
   isVoiceIdentified: boolean;
 }
 
-/**
- * Processa biometria de voz, treinamento Voice Match (Google style), saudações rápidas e limpeza de Wake Words
- */
 export async function processarBiometriaESaudacao(
   userPrompt: string,
   identityToken: string,
@@ -36,15 +33,21 @@ export async function processarBiometriaESaudacao(
     sensoryInput?.sensorData?.audio ||
     sensoryInput?.audio;
 
-  // 0. Fallback Whisper Local caso o frontend envie apenas o áudio sem texto
+  // 0. Fallback Whisper Local caso o frontend envie apenas o áudio
   if ((!promptEfetivo || promptEfetivo === '__VAD_AUDIO_ONLY__') && audioSample) {
     const { rawAudioBase64 } = extractAcousticFeatures(audioSample);
-    const b64ToTranscribe = rawAudioBase64 && rawAudioBase64.length > 200 ? rawAudioBase64 : audioSample;
-    if (b64ToTranscribe && b64ToTranscribe.length > 200) {
+    const b64ToTranscribe = rawAudioBase64 && rawAudioBase64.length > 150 ? rawAudioBase64 : audioSample;
+
+    if (b64ToTranscribe && b64ToTranscribe.length > 150 && b64ToTranscribe !== 'SPEECH_SAMPLE') {
       try {
-        const whisperRes = await transcribeWithLocalWhisper(b64ToTranscribe);
-        if (whisperRes && whisperRes.trim().length > 0) {
-          promptEfetivo = whisperRes.trim();
+        const whisperRes: any = await transcribeWithLocalWhisper(b64ToTranscribe);
+        const textoExtraido =
+          typeof whisperRes === 'string'
+            ? whisperRes.trim()
+            : (whisperRes?.text || '').trim();
+
+        if (textoExtraido.length > 0) {
+          promptEfetivo = textoExtraido;
         } else {
           promptEfetivo = '';
         }
@@ -57,9 +60,8 @@ export async function processarBiometriaESaudacao(
     }
   }
 
-  // Se o prompt ainda for a chave técnica ou estiver totalmente vazio após o VAD, solicita repetição
   if (promptEfetivo === '__VAD_AUDIO_ONLY__' || !promptEfetivo) {
-    const msgNaoOuvi = `Não consegui compreender o áudio com clareza, ${activeSpeakerName}. Pode repetir, por favor?`;
+    const msgNaoOuvi = `Não consegui captar o áudio com clareza, ${activeSpeakerName}. Toque no microfone e repita o comando.`;
     return {
       interceptado: true,
       promptTranscrito: '',
@@ -83,7 +85,6 @@ export async function processarBiometriaESaudacao(
   // 1. Biometria Vocal + Treinamento Voice Match
   if (audioSample && typeof audioSample === 'string' && audioSample.length > 12) {
     try {
-      // 1.1 Cadastro / Treinamento de voz por comando
       const matchCadastro = promptEfetivo.match(
         /(?:sou\s+(?:o|a)?|meu\s+nome\s+[eé]|aqui\s+[eé]\s+(?:o|a)?|aqui\s+quem\s+fala\s+[eé]\s+(?:o|a)?|treinar\s+(?:a\s+)?voz\s+(?:do|da)?|cadastre\s+a\s+voz\s+(?:do|da)?)\s+([A-Za-zÀ-ÖØ-öø-ÿ]+)/i
       );
@@ -97,11 +98,11 @@ export async function processarBiometriaESaudacao(
 
         let respostaCadastro = '';
         if (enrolled.samplesCount === 1) {
-          respostaCadastro = `Perfeito, ${nomeDetectado}! Gravei a 1ª amostra da sua voz (${enrolled.pitchHz.toFixed(0)} Hz). Para calibrar com precisão, diga mais uma frase: "Jarvis, aqui quem fala é ${nomeDetectado}".`;
+          respostaCadastro = `Perfeito, ${nomeDetectado}! Gravei a 1ª amostra da sua voz (${enrolled.pitchHz.toFixed(0)} Hz). Para calibrar, diga: "Jarvis, aqui quem fala é ${nomeDetectado}".`;
         } else if (enrolled.samplesCount === 2) {
-          respostaCadastro = `Excelente, ${nomeDetectado}! 2ª amostra calibrada. Para finalizar seu Voice Match, diga: "Eu sou ${nomeDetectado} e minha voz está ativa".`;
+          respostaCadastro = `Excelente, ${nomeDetectado}! 2ª amostra calibrada. Para finalizar, diga: "Eu sou ${nomeDetectado} e minha voz está ativa".`;
         } else {
-          respostaCadastro = `Treinamento Voice Match concluído para ${nomeDetectado} com ${enrolled.samplesCount} amostras calibradas (${enrolled.pitchHz.toFixed(0)} Hz)! Já reconheço sua voz automaticamente. Como posso ajudar?`;
+          respostaCadastro = `Treinamento Voice Match concluído para ${nomeDetectado} (${enrolled.pitchHz.toFixed(0)} Hz)! Como posso ajudar?`;
         }
 
         appendShortTermMemory(sessionId, 'user', promptEfetivo);
@@ -140,32 +141,11 @@ export async function processarBiometriaESaudacao(
         };
       }
 
-      // 1.2 Comparação com os perfis biométricos salvos
       const checagemVoz = await identifySpeaker(audioSample);
       if (checagemVoz.identified) {
         activeSpeakerName = checagemVoz.name;
         speakerRole = checagemVoz.role;
         isVoiceIdentified = true;
-      } else if (checagemVoz.ambiguous && checagemVoz.candidates) {
-        const msgDuvida = `Notei semelhança na voz entre ${checagemVoz.candidates[0]} e ${checagemVoz.candidates[1]}. Com quem estou falando? Diga "Sou a ${checagemVoz.candidates[0]}" ou "Sou a ${checagemVoz.candidates[1]}" para eu calibrar.`;
-        return {
-          interceptado: true,
-          promptTranscrito: promptEfetivo,
-          activeSpeakerName: 'Desconhecido',
-          speakerRole: 'family',
-          isVoiceIdentified: false,
-          respostaPronta: {
-            success: true,
-            triggeredSuccess: true,
-            agent: 'JARVIS (Voice Match)',
-            agentId: 'jarvis_core',
-            nodeType: 'core',
-            identity: 'Desconhecido',
-            sessionId,
-            response: msgDuvida,
-            executionTimeMs: Date.now() - inicioExecucao
-          }
-        };
       }
     } catch (err: any) {
       console.warn('⚠️ [Córtex Sensorial] Aviso na biometria vocal:', err?.message);
@@ -177,14 +157,9 @@ export async function processarBiometriaESaudacao(
   const apenasChamouWakeWord = /^(?:oi|ol[aá]|ei|ok|fala)?\s*(?:jarvis|j[aá]vis|jarves|iarvis|jarbas|chaves)[!.,?\s]*$/i.test(promptEfetivo);
 
   if (apenasChamouWakeWord) {
-    const saudacaoVoz = `Sim, ${activeSpeakerName}? Estou ouvindo perfeitamente. O que você precisa?`;
+    const saudacaoVoz = `Sim, ${activeSpeakerName}? Estou ouvindo. O que você precisa?`;
     appendShortTermMemory(sessionId, 'user', promptEfetivo);
     appendShortTermMemory(sessionId, 'assistant', saudacaoVoz);
-
-    pool.query(
-      `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
-      [sessionId, promptEfetivo, saudacaoVoz]
-    ).catch(() => {});
 
     return {
       interceptado: true,
@@ -199,7 +174,6 @@ export async function processarBiometriaESaudacao(
         agentId: 'jarvis_core',
         nodeType: 'core',
         identity: activeSpeakerName,
-        speaker: { name: activeSpeakerName, role: speakerRole, identified: isVoiceIdentified },
         sessionId,
         response: saudacaoVoz,
         executionTimeMs: Date.now() - inicioExecucao
@@ -207,10 +181,9 @@ export async function processarBiometriaESaudacao(
     };
   }
 
-  // Extrai o comando real removendo prefixos de wake word (ex.: "Jarvis, ligue as luzes" -> "ligue as luzes")
   const comandoLimpo = promptEfetivo.replace(padraoWakeWord, '').trim();
 
-  // 3. Filtro de saudações básicas de texto sem comando posterior
+  // 3. Filtro de saudações básicas
   const textoLimpo = (comandoLimpo || promptEfetivo).toLowerCase().replace(/[!.,?]/g, '');
   const ehSaudacaoBasica = /^(oi|ol[aá]|bom dia|boa tarde|boa noite|e ai|ei|fala ai)$/i.test(textoLimpo);
 
@@ -219,11 +192,6 @@ export async function processarBiometriaESaudacao(
     appendShortTermMemory(sessionId, 'user', promptEfetivo);
     appendShortTermMemory(sessionId, 'assistant', respostaSaudacao);
 
-    pool.query(
-      `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
-      [sessionId, promptEfetivo, respostaSaudacao]
-    ).catch(() => {});
-
     return {
       interceptado: true,
       promptTranscrito: promptEfetivo,
@@ -236,8 +204,6 @@ export async function processarBiometriaESaudacao(
         agent: 'JARVIS',
         agentId: 'jarvis_core',
         nodeType: 'core',
-        memoryStored: true,
-        memoryCount: historicoLinhas + 2,
         identity: activeSpeakerName,
         sessionId,
         response: respostaSaudacao,
@@ -246,7 +212,6 @@ export async function processarBiometriaESaudacao(
     };
   }
 
-  // Permite que comandos reais sigam livremente para o orquestrador e agentes especialistas
   return {
     interceptado: false,
     promptTranscrito: comandoLimpo || promptEfetivo,
@@ -256,9 +221,6 @@ export async function processarBiometriaESaudacao(
   };
 }
 
-/**
- * Trata visão computacional de tela e webcam
- */
 export function processarEntradaVisual(
   sensoryInput: any,
   userPrompt: string,
@@ -290,7 +252,7 @@ export function processarEntradaVisual(
       : `data:image/jpeg;base64,${frameAtivo.replace(/^data:image\/\w+;base64,/, '')}`;
 
     const rotuloOrigem = frameWebcam ? 'WEBCAM (Ambiente do Usuário)' : 'TELA DO COMPUTADOR';
-    instrucaoVisualSistema = `\n\n[SINAL VISUAL ATIVO - ${rotuloOrigem}]: Você está visualizando o usuário (${activeSpeakerName}) em tempo real pela imagem anexada. Descreva de forma objetiva e natural. Não use ferramentas para ler a imagem.`;
+    instrucaoVisualSistema = `\n\n[SINAL VISUAL ATIVO - ${rotuloOrigem}]: Você está visualizando o usuário (${activeSpeakerName}) em tempo real pela imagem anexada. Descreva de forma objetiva e natural.`;
 
     conteudoMensagemUsuario = [
       {
