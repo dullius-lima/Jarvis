@@ -139,6 +139,25 @@ if (typeof (connectorController as any).deleteExternalConnector === 'function') 
   app.delete('/api/v1/connectors/:key', (connectorController as any).deleteExternalConnector);
 }
 
+// ROTA DE CONSULTA DIRETA AO BANCO PARA A ABA DE MEMÓRIA (MÉDIO E LONGO PRAZO)
+app.post('/api/v1/connectors/query-db', async (req: Request, res: Response) => {
+  try {
+    const { query, params } = req.body || {};
+    if (!query) {
+      return res.status(400).json({ success: false, error: 'Query SQL obrigatória.' });
+    }
+    const result = await pool.query(query, params || []);
+    return res.status(200).json({
+      success: true,
+      rows: result.rows,
+      data: result.rows,
+      rowCount: result.rowCount
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 4. Gestão de Memória por Session ID, Rollback de Prompts e Coleções Dinâmicas
 app.get('/api/v1/memory/sessions', listMemorySessions);
 app.get('/api/v1/memory/sessions/:sessionId', getSessionDetails);
