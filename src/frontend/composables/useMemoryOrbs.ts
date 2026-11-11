@@ -1,4 +1,5 @@
-// Desenha as bolinhas azuis de memória e o anel de agente acionado no 3D
+// src/frontend/composables/useMemoryOrbs.ts
+// Desenha as bolinhas azuis de memória e gerencia o estado luminoso do agente e das tools acionadas no 3D
 import { ref } from 'vue';
 
 export interface MemoryOrb3D {
@@ -27,6 +28,9 @@ export function useMemoryOrbs() {
   const lastTelemetry = ref<AgentTriggerTelemetry | null>(null);
   const highlightedAgentSlug = ref<string | null>(null);
   const highlightedStatusColor = ref<string>('#22c55e');
+
+  // [NOVO] Conjunto reativo com os identificadores normalizados das ferramentas em execução
+  const highlightedToolSlugs = ref<Set<string>>(new Set());
 
   // Inicializa ou sincroniza a quantidade de bolinhas azuis com o histórico da sessão
   function syncMemoryOrbsCount(count: number) {
@@ -85,12 +89,20 @@ export function useMemoryOrbs() {
     }, 3500);
   }
 
-  // Registra o retorno do webhook/orquestrador e acende o agente acionado
+  // Registra o retorno do webhook/orquestrador, acende o agente acionado e as tools exclusivas
   function registerAgentExecution(apiResponse: any) {
     const payload = apiResponse?.data || apiResponse || {};
     const slug = payload.agentId || payload.agentSlug || payload.slug || 'jarvis_core';
     const name = payload.agent || payload.agentName || (slug === 'jarvis_core' ? 'JARVIS (Núcleo Central)' : slug);
     const ok = apiResponse?.success !== false && payload.triggeredSuccess !== false;
+
+    // [NOVO] Extrai e normaliza as tools efetivamente chamadas neste ciclo
+    const rawTools: string[] = payload.executedTools || apiResponse?.executedTools || [];
+    const normalizedTools = rawTools
+      .map((t: string) => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, ''))
+      .filter(Boolean);
+
+    highlightedToolSlugs.value = new Set(normalizedTools);
 
     lastTelemetry.value = {
       agentName: name,
@@ -110,10 +122,18 @@ export function useMemoryOrbs() {
     if (slug && slug !== 'jarvis_core') {
       highlightedAgentSlug.value = slug;
       highlightedStatusColor.value = ok ? '#22c55e' : '#ef4444';
+
       setTimeout(() => {
         if (highlightedAgentSlug.value === slug) {
           highlightedAgentSlug.value = null;
         }
+        // Limpa o realce das ferramentas junto com o agente
+        highlightedToolSlugs.value.clear();
+      }, 6500);
+    } else {
+      // Se a chamada partiu diretamente do Core ou sem slug específico, desliga as tools após 6.5s
+      setTimeout(() => {
+        highlightedToolSlugs.value.clear();
       }, 6500);
     }
   }
@@ -154,6 +174,7 @@ export function useMemoryOrbs() {
     lastTelemetry,
     highlightedAgentSlug,
     highlightedStatusColor,
+    highlightedToolSlugs, // Exposto para o Canvas 3D
     fetchSessionMemoryOrbs,
     spawnBlueMemoryOrb,
     registerAgentExecution,
