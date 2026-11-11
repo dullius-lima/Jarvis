@@ -147,7 +147,7 @@ export async function processarExecucaoWorkflow(
 
     const { activeSpeakerName, speakerRole, isVoiceIdentified } = filtroSensorial;
     if (filtroSensorial.promptTranscrito && filtroSensorial.promptTranscrito.trim().length > 0) {
-    userPrompt = filtroSensorial.promptTranscrito.trim();
+      userPrompt = filtroSensorial.promptTranscrito.trim();
     }
 
     // 2. Visão Multimodal
@@ -159,6 +159,7 @@ export async function processarExecucaoWorkflow(
         agent: 'JARVIS (Córtex Visual)',
         agentId: 'jarvis_vision',
         nodeType: 'core',
+        executedTools: [],
         memoryStored: false,
         memoryCount: 0,
         identity: activeSpeakerName,
@@ -240,6 +241,9 @@ export async function processarExecucaoWorkflow(
     let triggeredAgentId = 'jarvis_core';
     let triggeredNodeType = 'core';
 
+    // [NOVO] Conjunto acumulador das ferramentas executadas nesta execução
+    let executedTools: string[] = [];
+
     // 5. Execução de Ferramentas Nativas / Especialistas
     if (Array.isArray(mensagemEscolha?.tool_calls) && mensagemEscolha.tool_calls.length > 0) {
       const callMemoria = mensagemEscolha.tool_calls.find(
@@ -268,6 +272,7 @@ export async function processarExecucaoWorkflow(
         triggeredAgentName = 'JARVIS (Memória Evolutiva)';
         triggeredAgentId = 'jarvis_core';
         triggeredNodeType = 'core';
+        executedTools.push('salvar_memoria_permanente');
       } else {
         for (const tc of mensagemEscolha.tool_calls) {
           const rawName = tc.function?.name || '';
@@ -277,7 +282,8 @@ export async function processarExecucaoWorkflow(
           }
         }
 
-        const resultadoFerramentas = await processarChamadasDeFerramentas({
+        // [NOVO] Chamada do despachante capturando executedTools
+        const resultadoDespacho = await processarChamadasDeFerramentas({
           toolCalls: mensagemEscolha.tool_calls,
           configuracaoCerebro: dadosContexto.configuracaoCerebro,
           contextoTemporal: dadosContexto.contextoTemporal,
@@ -291,10 +297,11 @@ export async function processarExecucaoWorkflow(
           mensagensBase
         });
 
-        textoRespostaFinal = resultadoFerramentas.textoFinal;
-        triggeredAgentName = resultadoFerramentas.triggeredAgentName;
-        triggeredAgentId = resultadoFerramentas.triggeredAgentId;
-        triggeredNodeType = resultadoFerramentas.triggeredNodeType;
+        textoRespostaFinal = resultadoDespacho.textoFinal;
+        triggeredAgentName = resultadoDespacho.triggeredAgentName;
+        triggeredAgentId = resultadoDespacho.triggeredAgentId;
+        triggeredNodeType = resultadoDespacho.triggeredNodeType;
+        executedTools = resultadoDespacho.executedTools || [];
       }
     } else {
       // 5.1 Heurística de Memória
@@ -323,12 +330,12 @@ export async function processarExecucaoWorkflow(
           textoRespostaFinal = `Entendido, ${activeSpeakerName}! Guardei isso na minha memória permanente: "${regraExtraida}".`;
           triggeredAgentName = 'JARVIS (Memória Evolutiva)';
           triggeredAgentId = 'jarvis_core';
+          executedTools.push('salvar_memoria_permanente');
         }
       }
     }
 
-    // 6. INTERCEPTAÇÃO DE CHAMADAS PSEUDO-TEXTO (Elimina os erros das imagens)
-    // Se a IA cuspiu "consultar_mercado_de_valores query=SUZB3", "google_calendar..." ou repetições de slugs
+    // 6. INTERCEPTAÇÃO DE CHAMADAS PSEUDO-TEXTO
     const textoLimpoPrimeiraLinha = textoRespostaFinal.trim().split('\n')[0].trim();
     const ehPseudoComandoTexto =
       /^[a-z0-9_]{3,50}(?:\s+[a-z0-9_]+=[^\s]+.*|\s+list_events.*|\s+get_.*|---.*)?$/i.test(textoLimpoPrimeiraLinha) ||
@@ -368,6 +375,10 @@ export async function processarExecucaoWorkflow(
           dadosContexto.connectorsMap
         );
 
+        // Extrai tools executadas na cadeia do subagente
+        const toolsSub = execCadeia.flatMap((elo: any) => elo.executedTools || []);
+        executedTools.push(...toolsSub);
+
         const saidaElo = execCadeia[execCadeia.length - 1]?.output;
         if (typeof saidaElo === 'string' && saidaElo.length > 0 && !saidaElo.startsWith('{')) {
           textoRespostaFinal = saidaElo;
@@ -392,6 +403,7 @@ export async function processarExecucaoWorkflow(
         triggeredAgentName = dadosContexto.connectorsMap.get(primeiroToken)?.name || primeiroToken;
         triggeredAgentId = primeiroToken;
         triggeredNodeType = 'api';
+        executedTools.push(primeiroToken);
 
         const outBound = await executeBoundTool(
           primeiroToken,
@@ -423,6 +435,7 @@ export async function processarExecucaoWorkflow(
       triggeredAgentName = 'Agente de Agendamento';
       triggeredAgentId = 'calendar_agent';
       triggeredNodeType = 'api';
+      executedTools.push('google_calendar');
     } else {
       const temJsonResidual =
         extractJsonActionBlocks(textoRespostaFinal).length > 0 ||
@@ -441,6 +454,9 @@ export async function processarExecucaoWorkflow(
           triggeredAgentName = interceptado.agentName;
           triggeredAgentId = interceptado.agentSlug;
           triggeredNodeType = interceptado.nodeType || 'api';
+          if (interceptado.agentSlug) {
+            executedTools.push(interceptado.agentSlug);
+          }
         }
       }
     }
@@ -517,12 +533,14 @@ export async function processarExecucaoWorkflow(
       metadata: { agent: triggeredAgentName, agentId: triggeredAgentId, speaker: activeSpeakerName }
     } as any);
 
+    // [NOVO] Retorno com executedTools desduplicado no nível superior e dentro de data
     const retornoExecucao: any = {
       success: true,
       triggeredSuccess: true,
       agent: triggeredAgentName,
       agentId: triggeredAgentId,
       nodeType: triggeredNodeType,
+      executedTools: Array.from(new Set(executedTools)),
       memoryStored: true,
       memoryCount: dadosContexto.historicoLinhas + 2,
       identity: activeSpeakerName,
@@ -553,6 +571,7 @@ export async function processarExecucaoWorkflow(
       agent: 'Sistema Nervoso Central (Fallback Local)',
       agentId: 'jarvis_core',
       nodeType: 'core',
+      executedTools: [],
       memoryStored: false,
       memoryCount: 0,
       identity: identityToken,
