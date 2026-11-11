@@ -19,7 +19,7 @@
           @click="$emit('toggle-mic')"
           class="dock-curved-btn mic-btn"
           :class="{ active: isJarvisAwake || isRecordingAudio }"
-          title="Ativar Voz do JARVIS"
+          title="Ativar / Pausar Microfone do JARVIS"
         >
           🎙️
         </button>
@@ -45,7 +45,7 @@
         </button>
       </div>
 
-      <!-- Textarea Multilinha com Auto-Resize -->
+      <!-- Textarea Multilinha Livre (NUNCA trava com vozes externas) -->
       <div class="dock-input-wrapper">
         <textarea
           ref="textareaRef"
@@ -53,9 +53,8 @@
           @input="onInput"
           @keydown="handleKeydown"
           rows="1"
-          placeholder="Digite ou fale com JARVIS..."
+          placeholder="Digite ou fale 'Jarvis'..."
           class="dock-textarea"
-          :disabled="isProcessing"
         ></textarea>
       </div>
 
@@ -64,7 +63,7 @@
         type="button"
         @click="$emit('send')"
         class="send-curved-btn"
-        :disabled="!modelValue.trim() || isProcessing"
+        :disabled="!modelValue.trim()"
         title="Enviar mensagem"
       >
         {{ isProcessing ? '⚡' : '➤' }}
@@ -76,7 +75,7 @@
 <script setup lang="ts">
 import { ref, nextTick } from 'vue';
 
-const props = defineProps<{
+defineProps<{
   modelValue: string;
   isProcessing: boolean;
   isJarvisAwake: boolean;
@@ -222,68 +221,54 @@ defineExpose({
 }
 
 .dock-curved-btn.active {
-  background: #0284c7;
-  border-color: #38bdf8;
-  box-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
-}
-
-.mic-btn.active {
-  background: #ea580c;
+  background: rgba(249, 115, 22, 0.25);
   border-color: #f97316;
-  box-shadow: 0 0 10px rgba(234, 88, 12, 0.55);
+  box-shadow: 0 0 10px rgba(249, 115, 22, 0.35);
 }
 
 .dock-input-wrapper {
   flex: 1;
   display: flex;
   align-items: center;
-  min-width: 0;
 }
 
 .dock-textarea {
   width: 100%;
   background: transparent;
   border: none;
-  outline: none;
   color: #f8fafc;
-  font-size: 12.5px;
-  font-family: inherit;
+  font-size: 13px;
   line-height: 1.4;
+  padding: 4px 2px;
   resize: none;
+  outline: none;
+  font-family: inherit;
   max-height: 115px;
-  min-height: 22px;
-  padding: 4px 6px;
-  box-sizing: border-box;
   overflow-y: auto;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
 }
 
 .dock-textarea::placeholder {
   color: #64748b;
-  font-size: 11.5px;
 }
 
 .send-curved-btn {
   background: linear-gradient(135deg, #0284c7, #2563eb);
+  border: 1px solid rgba(56, 189, 248, 0.4);
   color: #ffffff;
-  border: none;
   width: 30px;
-  height: 28px;
-  border-radius: 9px;
-  font-size: 11.5px;
-  font-weight: 700;
+  height: 30px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 13px;
   cursor: pointer;
-  margin-bottom: 1px;
-  transition: opacity 0.2s;
+  transition: all 0.2s ease;
   flex-shrink: 0;
 }
 
 .send-curved-btn:disabled {
-  opacity: 0.35;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 </style>
