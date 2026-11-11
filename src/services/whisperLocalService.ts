@@ -17,7 +17,8 @@ export interface WhisperTranscriptionResult {
 function cleanGroqKey(raw: any): string {
   if (typeof raw !== 'string') return '';
   const cleaned = raw.replace(/[•*]/g, '').replace(/^Bearer\s+/i, '').trim();
-  return /^gsk_[a-zA-Z0-9]{20,}/i.test(cleaned) ? cleaned : '';
+  // Aceita letras, números, sublinhados e hífens das chaves reais da Groq
+  return /^gsk_[a-zA-Z0-9_\-]{20,}/i.test(cleaned) ? cleaned : '';
 }
 
 async function getGroqApiKey(): Promise<string> {
@@ -62,37 +63,60 @@ export async function transcribeWithLocalWhisper(
     return { success: false, error: 'Áudio Base64 vazio ou insuficiente.' };
   }
 
-  const cleanBase64 = audioBase64.replace(/^data:audio\/[a-zA-Z0-9+-]+;base64,/, '').trim();
-  const audioBuffer = Buffer.from(cleanBase64, 'base64');
+  // Extrai apenas a base64 caso venha combinada com metadados biométricos
+  let cleanBase64 = audioBase64;
+  if (cleanBase64.includes('|DATA:')) {
+    cleanBase64 = cleanBase64.split('|DATA:')[1] || cleanBase64;
+  }
+  cleanBase64 = cleanBase64.replace(/^data:audio\/[a-zA-Z0-9+-]+;base64,/, '').trim();
+
+  let audioBuffer: Buffer;
+  try {
+    audioBuffer = Buffer.from(cleanBase64, 'base64');
+  } catch {
+    return { success: false, error: 'Falha ao decodificar Base64 de áudio.' };
+  }
 
   if (audioBuffer.length < 400) {
     return { success: false, error: 'Buffer de áudio muito curto.' };
   }
 
-  const tempInputPath = path.join(os.tmpdir(), `jarvis_voice_${Date.now()}.webm`);
-  const tempWavPath = `${tempInputPath}.wav`;
+  // Verifica se o áudio já é um WAV válido (cabeçalho RIFF)
+  const isWavInput = audioBuffer.length >= 4 && audioBuffer.toString('utf8', 0, 4) === 'RIFF';
+  const ext = isWavInput ? '.wav' : '.webm';
+  const tempInputPath = path.join(os.tmpdir(), `jarvis_voice_${Date.now()}${ext}`);
+  const tempConvertedWavPath = `${tempInputPath}.converted.wav`;
+
+  const cleanupFiles = async () => {
+    try { if (fs.existsSync(tempInputPath)) await fs.promises.unlink(tempInputPath); } catch {}
+    try { if (fs.existsSync(tempConvertedWavPath)) await fs.promises.unlink(tempConvertedWavPath); } catch {}
+  };
 
   try {
     await fs.promises.writeFile(tempInputPath, audioBuffer);
 
-    // Filtro de voz humana no FFmpeg: corta ruído abaixo de 85Hz e acima de 7500Hz e nivela a voz sem distorcer
-    await new Promise<void>((resolve) => {
-      const ff = spawn('ffmpeg', [
-        '-y', '-i', tempInputPath,
-        '-af', 'highpass=f=85,lowpass=f=7500,dynaudnorm',
-        '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
-        tempWavPath
-      ]);
-      ff.on('close', () => resolve());
-      ff.on('error', () => resolve());
-    });
+    let finalAudioPath = tempInputPath;
 
-    const finalAudioPath =
-      fs.existsSync(tempWavPath) && fs.statSync(tempWavPath).size > 800
-        ? tempWavPath
-        : tempInputPath;
+    // Se NÃO for WAV nativo (ex: WebM legado), converte via FFmpeg para WAV 16kHz
+    if (!isWavInput) {
+      await new Promise<void>((resolve) => {
+        const ff = spawn('ffmpeg', [
+          '-y', '-i', tempInputPath,
+          '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
+          tempConvertedWavPath
+        ]);
+        ff.on('close', () => resolve());
+        ff.on('error', () => resolve());
+      });
 
+      if (fs.existsSync(tempConvertedWavPath) && fs.statSync(tempConvertedWavPath).size > 600) {
+        finalAudioPath = tempConvertedWavPath;
+      }
+    }
+
+    // =========================================================================
     // MOTOR 1: Groq Whisper Large V3 Turbo (~200ms)
+    // =========================================================================
     const groqKey = await getGroqApiKey();
     if (groqKey) {
       try {
@@ -116,10 +140,10 @@ export async function transcribeWithLocalWhisper(
         if (resp.ok) {
           const data: any = await resp.json();
           const transcribed = (data?.text || '').trim();
+          await cleanupFiles();
+
           if (transcribed.length > 0) {
-            try { if (fs.existsSync(tempInputPath)) await fs.promises.unlink(tempInputPath); } catch {}
-            try { if (fs.existsSync(tempWavPath)) await fs.promises.unlink(tempWavPath); } catch {}
-            console.log(`⚡ [Groq Whisper] (${Date.now() - startTime}ms): "${transcribed}"`);
+            console.log(`⚡ [Groq Whisper Turbo] (${Date.now() - startTime}ms): "${transcribed}"`);
             return {
               success: true,
               text: transcribed,
@@ -128,13 +152,18 @@ export async function transcribeWithLocalWhisper(
               durationMs: Date.now() - startTime
             };
           }
+        } else {
+          const errBody = await resp.text().catch(() => '');
+          console.warn(`⚠️ [Groq Whisper HTTP ${resp.status}]:`, errBody);
         }
       } catch (e: any) {
-        console.warn('⚠️ [Groq Whisper Fallback]:', e?.message);
+        console.warn('⚠️ [Groq Whisper Erro]:', e?.message);
       }
     }
 
-    // MOTOR 2: Faster-Whisper Local Python
+    // =========================================================================
+    // MOTOR 2: Fallback Faster-Whisper Local Python
+    // =========================================================================
     const scriptPath = path.resolve(process.cwd(), 'scripts', 'whisper_transcribe.py');
     const venvPython = path.resolve(process.cwd(), 'whisper-env', 'bin', 'python3');
     const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
@@ -151,9 +180,7 @@ export async function transcribeWithLocalWhisper(
       pyProcess.stderr.on('data', (chunk) => { stderrData += chunk.toString('utf8'); });
 
       pyProcess.on('close', async () => {
-        try { if (fs.existsSync(tempInputPath)) await fs.promises.unlink(tempInputPath); } catch {}
-        try { if (fs.existsSync(tempWavPath)) await fs.promises.unlink(tempWavPath); } catch {}
-
+        await cleanupFiles();
         const durationMs = Date.now() - startTime;
         try {
           const lines = stdoutData.trim().split('\n');
@@ -169,11 +196,13 @@ export async function transcribeWithLocalWhisper(
         }
       });
 
-      pyProcess.on('error', (err) => {
+      pyProcess.on('error', async (err) => {
+        await cleanupFiles();
         resolve({ success: false, error: err.message });
       });
     });
   } catch (error: any) {
+    await cleanupFiles();
     return { success: false, error: error.message };
   }
 }
