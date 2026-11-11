@@ -159,6 +159,7 @@ export async function processarBiometriaESaudacao(
   activeWakeSessions.set(sessionKey, Date.now());
 
    // 5. Biometria Vocal e Treinamento Voice Match
+  // 5. Biometria Vocal e Treinamento Voice Match
   if (rawAudioInput && typeof rawAudioInput === 'string' && rawAudioInput.length > 12) {
     try {
       const matchCadastro = promptEfetivo.match(
@@ -207,6 +208,7 @@ export async function processarBiometriaESaudacao(
         };
       }
 
+      // Identifica o locutor pelo pacote acústico completo
       const checagemVoz = await identifySpeaker(rawAudioInput);
       if (checagemVoz && checagemVoz.identified) {
         activeSpeakerName = checagemVoz.name;
