@@ -48,6 +48,9 @@ export async function processarChamadasDeFerramentas(params: {
   let triggeredAgentId = 'jarvis_core';
   let triggeredNodeType = 'core';
 
+  // [NOVO] Declarado no escopo da função para acumular todas as tools do ciclo e evitar erro de referência
+  const toolsUsadas: string[] = [];
+
   const saidasFerramentasParaSintese: Array<{
     toolName: string;
     agentName?: string;
@@ -151,6 +154,7 @@ export async function processarChamadasDeFerramentas(params: {
       triggeredAgentName = 'PostgreSQL Dinâmico';
       triggeredAgentId = 'save_to_database';
       triggeredNodeType = 'code';
+      toolsUsadas.push('save_to_database');
       const res = await saveToDatabase({
         collectionName: argsParsed.collectionName || 'autonomous_logs',
         documentData: argsParsed.documentData || argsParsed,
@@ -164,6 +168,7 @@ export async function processarChamadasDeFerramentas(params: {
       triggeredAgentName = `Protocolo: ${(argsParsed.provider || 'externo').toUpperCase()}`;
       triggeredAgentId = sanitizeToolName(argsParsed.provider || 'external_api');
       triggeredNodeType = 'api';
+      toolsUsadas.push(triggeredAgentId);
       const res = await executeProtocolOrIntegration(argsParsed.provider, {
         protocol: argsParsed.provider,
         endpoint: argsParsed.endpoint,
@@ -178,6 +183,7 @@ export async function processarChamadasDeFerramentas(params: {
       triggeredAgentName = 'Terminal SSH Remoto';
       triggeredAgentId = 'executar_comando_ssh';
       triggeredNodeType = 'ssh';
+      toolsUsadas.push('executar_comando_ssh');
       const res = argsParsed.remoteFilePath
         ? await readRemoteFileViaSshToRag({ remoteFilePath: String(argsParsed.remoteFilePath) })
         : await executeSshCommand(argsParsed.command || 'uptime');
@@ -224,6 +230,10 @@ export async function processarChamadasDeFerramentas(params: {
       triggeredAgentId = ultimoElo?.agentSlug || agenteCorrespondente.slug;
       triggeredNodeType = ultimoElo?.agentType || agenteCorrespondente.agent_type || 'llm';
 
+      // [NOVO] Extrai todas as tools executadas em todos os elos da cadeia e acumula
+      const toolsDaCadeia = resultadoCadeia.flatMap((elo: any) => elo.executedTools || []);
+      toolsUsadas.push(...toolsDaCadeia);
+
       const ultimaSaida = ultimoElo?.output;
       const ehTextoLimpo =
         typeof ultimaSaida === 'string' &&
@@ -269,6 +279,9 @@ export async function processarChamadasDeFerramentas(params: {
         configuracaoCerebro.server_base_url
       );
 
+      // [NOVO] Registra a execução direta do conector
+      toolsUsadas.push(slugConectorFinal);
+
       saidasFerramentasParaSintese.push({
         toolName: slugConectorFinal,
         agentName: triggeredAgentName,
@@ -286,7 +299,6 @@ export async function processarChamadasDeFerramentas(params: {
   ) {
     textoFinal = saidasFerramentasParaSintese[0].result;
   } else {
-    // Substitui a trava de delegação da 1ª passada por autorização de síntese final
     const mensagensSemTravaDePrimeiraPassada = [
       {
         role: 'system',
@@ -325,6 +337,7 @@ export async function processarChamadasDeFerramentas(params: {
     textoFinal,
     triggeredAgentName,
     triggeredAgentId,
-    triggeredNodeType
+    triggeredNodeType,
+    executedTools: Array.from(new Set(toolsUsadas)) // Retorna a lista desduplicada
   };
 }
