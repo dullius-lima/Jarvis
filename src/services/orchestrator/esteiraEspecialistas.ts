@@ -143,6 +143,36 @@ export async function executarEsteiraEspecialistas(
     }
     // Rota 3: Especialista Cognitivo LLM (Multi-turn Tool Calling com Contrato Universal)
     else {
+      // 1. Busca memória técnica anterior deste especialista e contatos da agenda no banco
+      const [specMemRes, agendaRes] = await Promise.all([
+        pool
+          .query(
+            `SELECT context_data FROM specialist_context_memory 
+             WHERE session_id = $1 AND specialist_slug = $2 
+             ORDER BY id DESC LIMIT 5;`,
+            [sessionId, currentAgent.slug]
+          )
+          .catch(() => ({ rows: [] as any[] })),
+        pool
+          .query(`SELECT nome, telefone, apelidos FROM contatos_agenda ORDER BY nome ASC;`)
+          .catch(() => ({ rows: [] as any[] }))
+      ]);
+
+      const resumoContatosSubagente = agendaRes.rows
+        .map((c: any) => `${c.nome}: ${c.telefone} (${(c.apelidos || []).join(', ')})`)
+        .join(' | ');
+
+      const resumoMemoriaTecnica = specMemRes.rows
+        .reverse()
+        .map((r: any) => JSON.stringify(r.context_data))
+        .join('\n');
+
+      const contextoEnriquecidoSubagente = [
+        currentAgent.system_prompt || `Você é o especialista ${currentAgent.name}.`,
+        resumoContatosSubagente ? `\n[CONTATOS SALVOS NO BANCO]: ${resumoContatosSubagente}` : '',
+        resumoMemoriaTecnica ? `\n[SUAS ÚLTIMAS EXECUÇÕES NESTA SESSÃO]:\n${resumoMemoriaTecnica}` : ''
+      ].join('\n');
+
       let enabledTools: string[] = [];
       if (Array.isArray(currentAgent.tools)) {
         enabledTools = currentAgent.tools;
@@ -266,12 +296,14 @@ export async function executarEsteiraEspecialistas(
       const mensagensEspecialista: any[] = [
         {
           role: 'system',
-          content: `${currentAgent.system_prompt || `Você é o especialista ${currentAgent.name}.`}
+          content: `${contextoEnriquecidoSubagente}
+
 REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
 1. Você possui acesso direto às ferramentas: [${enabledTools.join(', ')}].
-2. Para acionar mais de uma lâmpada ou dispositivo no mesmo cômodo, você pode enviar ambos os IDs separados por vírgula em "entity_id" (ex: "switch.luz_1_switch_1, switch.luz_2_switch_1") ou realizar chamadas de ferramentas para cada dispositivo.
-3. Para alterar temperatura do ar-condicionado, passe "entity_id" e "temperature" (número). Para modo, passe "hvac_mode". Para vento, passe "fan_mode" ou "swing_mode".
-4. NUNCA exiba código JSON cru na resposta final ao usuário. Responda sempre em português natural, claro e direto.`
+2. Se a tarefa envolver envio de mensagens, ligações ou lembretes, consulte o bloco [CONTATOS SALVOS NO BANCO] acima para obter o número de telefone correto antes de acionar a ferramenta.
+3. Para acionar mais de uma lâmpada ou dispositivo no mesmo cômodo, envie ambos os IDs separados por vírgula em "entity_id" ou realize chamadas separadas.
+4. Para alterar temperatura do ar-condicionado, passe "entity_id" e "temperature" (número). Para modo, passe "hvac_mode". Para vento, passe "fan_mode" ou "swing_mode".
+5. NUNCA exiba código JSON cru na resposta final ao usuário. Responda sempre em português natural, claro e direto.`
         },
         ...conversationThread.slice(-4),
         {
@@ -346,7 +378,6 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
               content: JSON.stringify(resultadoTool)
             });
           }
-          // Continua para o próximo turno do loop para a IA analisar o retorno da ferramenta
           continue;
         }
 
@@ -415,6 +446,14 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
 
       stepOutput = respostaTextualEspecialista || resultadosBrutosFerramentas;
     }
+
+    // Persistência de contexto técnico do especialista para continuidade nas próximas mensagens
+    pool
+      .query(
+        `INSERT INTO specialist_context_memory (session_id, specialist_slug, context_data) VALUES ($1, $2, $3);`,
+        [sessionId, currentAgent.slug, JSON.stringify({ lastInput: currentPayload, lastOutput: stepOutput })]
+      )
+      .catch(() => {});
 
     cadeiaExecucao.push({
       agentSlug: currentAgent.slug,
