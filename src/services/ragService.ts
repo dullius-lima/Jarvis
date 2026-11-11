@@ -69,13 +69,15 @@ export async function ingestDocumentToRag(
       : await generateEmbedding(content);
   const vectorLiteral = `[${embedding.join(',')}]`;
   const hasPgVector = await isPgVectorAvailable();
+  const title = metadata?.title || metadata?.fileName || null;
+  const category = metadata?.category || 'permanente';
 
   if (hasPgVector) {
     try {
       const res = await pool.query(
-        `INSERT INTO vector_documents (content, metadata, embedding)
-         VALUES ($1, $2, $3::vector) RETURNING id, created_at;`,
-        [content, JSON.stringify(metadata), vectorLiteral]
+        `INSERT INTO vector_documents (title, category, content, metadata, embedding)
+         VALUES ($1, $2, $3, $4, $5::vector) RETURNING id, created_at;`,
+        [title, category, content, JSON.stringify(metadata), vectorLiteral]
       );
       return res.rows[0];
     } catch {
@@ -84,9 +86,9 @@ export async function ingestDocumentToRag(
   }
 
   const res = await pool.query(
-    `INSERT INTO vector_documents (content, metadata, embedding)
-     VALUES ($1, $2, $3) RETURNING id, created_at;`,
-    [content, JSON.stringify(metadata), JSON.stringify(embedding)]
+    `INSERT INTO vector_documents (title, category, content, metadata, embedding)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at;`,
+    [title, category, content, JSON.stringify(metadata), JSON.stringify(embedding)]
   );
   return res.rows[0];
 }
@@ -96,7 +98,7 @@ export const ingestDocumentToRAG = ingestDocumentToRag;
 
 /**
  * Exigido por src/controllers/ragController.ts e src/services/documentLoaderService.ts
- * Suporta tanto objeto { content, metadata, embedding } quanto parâmetros posicionais (content, metadata, embedding)
+ * Suporta tanto objeto { content, metadata, embedding } quanto parâmetros posicionais
  */
 export async function ingestDocument(
   docOrContent:
@@ -122,51 +124,95 @@ export async function ingestDocument(
 export async function searchVectorDocuments(queryText: string, limit: number = 5) {
   const queryEmbedding = await generateEmbedding(queryText);
   const hasPgVector = await isPgVectorAvailable();
+  let vectorMatches: any[] = [];
 
+  // 1. Busca Semântica Vetorial (se houver pgvector)
   if (hasPgVector) {
     try {
       const vectorLiteral = `[${queryEmbedding.join(',')}]`;
       const res = await pool.query(
-        `SELECT id, content, metadata, 1 - (embedding <=> $1::vector) AS similarity
+        `SELECT id, title, category, content, metadata, 1 - (embedding <=> $1::vector) AS similarity
          FROM vector_documents
+         WHERE embedding IS NOT NULL
          ORDER BY embedding <=> $1::vector
          LIMIT $2;`,
         [vectorLiteral, limit]
       );
-      return res.rows;
+      vectorMatches = res.rows;
     } catch {
       // Fallback para cálculo em memória caso a coluna seja TEXT
     }
   }
 
-  const res = await pool
-    .query(
-      `SELECT id, content, metadata, embedding, created_at FROM vector_documents ORDER BY id DESC LIMIT 200;`
-    )
-    .catch(() => ({ rows: [] }));
+  // 2. Fallback de cálculo em memória caso não haja pgvector nativo
+  if (vectorMatches.length === 0) {
+    const res = await pool
+      .query(
+        `SELECT id, title, category, content, metadata, embedding, created_at 
+         FROM vector_documents 
+         WHERE embedding IS NOT NULL 
+         ORDER BY id DESC LIMIT 200;`
+      )
+      .catch(() => ({ rows: [] }));
 
-  const scored = res.rows.map((row: any) => {
-    let docVec: number[] = [];
-    try {
-      docVec =
-        typeof row.embedding === 'string'
-          ? JSON.parse(row.embedding)
-          : Array.isArray(row.embedding)
-          ? row.embedding
-          : [];
-    } catch {
-      docVec = [];
+    const scored = res.rows.map((row: any) => {
+      let docVec: number[] = [];
+      try {
+        docVec =
+          typeof row.embedding === 'string'
+            ? JSON.parse(row.embedding)
+            : Array.isArray(row.embedding)
+            ? row.embedding
+            : [];
+      } catch {
+        docVec = [];
+      }
+      return {
+        id: row.id,
+        title: row.title,
+        category: row.category,
+        content: row.content,
+        metadata: row.metadata,
+        similarity: cosineSimilarity(queryEmbedding, docVec),
+        created_at: row.created_at
+      };
+    });
+
+    vectorMatches = scored.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
+  }
+
+  // 3. Fallback e complemento híbrido: garante leitura de registros inseridos sem embedding (embedding IS NULL)
+  let fallbackMatches: any[] = [];
+  try {
+    const fallbackRes = await pool.query(
+      `SELECT id, title, category, content, metadata, 0.85 AS similarity
+       FROM vector_documents
+       WHERE category IN ('contatos', 'permanente')
+          OR content ILIKE '%' || $1 || '%'
+          OR title ILIKE '%' || $1 || '%'
+       ORDER BY id DESC
+       LIMIT $2;`,
+      [queryText.trim(), limit]
+    );
+    fallbackMatches = fallbackRes.rows || [];
+  } catch {
+    fallbackMatches = [];
+  }
+
+  // 4. Mesclagem e desduplicação por ID mantendo a maior pontuação de similaridade
+  const mapDocumentos = new Map<number | string, any>();
+
+  for (const doc of [...fallbackMatches, ...vectorMatches]) {
+    if (!doc || !doc.id) continue;
+    const existing = mapDocumentos.get(doc.id);
+    if (!existing || Number(doc.similarity) > Number(existing.similarity)) {
+      mapDocumentos.set(doc.id, doc);
     }
-    return {
-      id: row.id,
-      content: row.content,
-      metadata: row.metadata,
-      similarity: cosineSimilarity(queryEmbedding, docVec),
-      created_at: row.created_at
-    };
-  });
+  }
 
-  return scored.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
+  return Array.from(mapDocumentos.values())
+    .sort((a, b) => Number(b.similarity) - Number(a.similarity))
+    .slice(0, limit);
 }
 
 export async function queryRAGKnowledgeBase(queryText: string, limit: number = 3) {
