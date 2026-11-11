@@ -1,4 +1,5 @@
 // src/services/orchestrator/executorFerramentasFixas.ts
+import { pool } from '../../config/database.js';
 import { searchVectorDocuments } from '../ragService.js';
 import { executeProtocolOrIntegration } from '../integrationAndProtocolService.js';
 import { obterTokenAcessoGoogle, obterConfiguracaoConector } from '../integrationService.js';
@@ -25,13 +26,11 @@ async function despacharHomeAssistantUniversal(
   const serviceDataBruto =
     args?.service_data && typeof args.service_data === 'object' ? args.service_data : {};
 
-  // Unifica parâmetros vindos da raiz de args ou de dentro de service_data
   const payloadUnificado: Record<string, any> = {
     ...args,
     ...serviceDataBruto
   };
 
-  // Identifica se a chamada é estritamente de leitura/consulta de sensores
   const ehToolDetector =
     chaveLimpa.includes('detector') ||
     chaveLimpa.includes('sensor') ||
@@ -100,7 +99,7 @@ async function despacharHomeAssistantUniversal(
     return { status: 'success', total_devices: dispositivos.length, devices: dispositivos };
   }
 
-  // 2. Extração de Entidades Alvo (Suporta 1 entidade, Array de entidades ou string separada por vírgula)
+  // 2. Extração de Entidades Alvo
   let entidadesAlvo: string[] = [];
   const rawEntity = payloadUnificado.entity_id || payloadUnificado.entities || payloadUnificado.target;
 
@@ -113,7 +112,6 @@ async function despacharHomeAssistantUniversal(
       .filter(Boolean);
   }
 
-  // Auto-discovery caso a IA não tenha enviado o entity_id explícito
   if (entidadesAlvo.length === 0) {
     try {
       const respEstados = await fetch(`${baseUrl}/api/states`, {
@@ -136,7 +134,7 @@ async function despacharHomeAssistantUniversal(
     } catch {}
   }
 
-  // 3. Resolução Dinâmica de Domínio e Serviço (100% orientado pelos parâmetros da LLM)
+  // 3. Resolução Dinâmica de Domínio e Serviço
   const primeiraEntidade = entidadesAlvo[0] || '';
   const dominioDaEntidade = primeiraEntidade.includes('.')
     ? primeiraEntidade.split('.')[0]
@@ -145,7 +143,6 @@ async function despacharHomeAssistantUniversal(
   let domain = String(payloadUnificado.domain || '').toLowerCase().trim();
   let service = String(payloadUnificado.service || payloadUnificado.action || '').toLowerCase().trim();
 
-  // Se o serviço veio no formato "climate.set_temperature"
   if (service.includes('.')) {
     const partes = service.split('.');
     domain = domain || partes[0];
@@ -194,7 +191,7 @@ async function despacharHomeAssistantUniversal(
     }
   }
 
-  // 4. Montagem do Corpo da Requisição (Preserva todos os atributos extras enviados pela IA)
+  // 4. Montagem do Corpo da Requisição
   const corpoServico: Record<string, any> = {};
   if (entidadesAlvo.length === 1) {
     corpoServico.entity_id = entidadesAlvo[0];
@@ -225,11 +222,9 @@ async function despacharHomeAssistantUniversal(
     }
   }
 
-  // Se for climate e a IA pediu para ligar/mudar modo e definir temperatura juntos, garante execução completa
   const resultadosDisparo: any[] = [];
 
   if (domain === 'climate' && service === 'set_temperature' && temFan) {
-    // Dispara primeiro o set_fan_mode e em seguida o set_temperature
     const urlFan = `${baseUrl}/api/services/climate/set_fan_mode`;
     await fetch(urlFan, {
       method: 'POST',
@@ -286,10 +281,110 @@ export async function executarFerramentaVinculada(
   ).trim();
   const promptNormalizado = normalizarTexto(userPrompt);
 
-  // 1. BANCO DE DADOS DINÂMICO
+  // 1. GESTÃO E CONSULTA DIRETA DE CONTATOS (AGENDA)
+  const ehConsultaContato =
+    chaveLimpa === 'consultar_contato' ||
+    chaveLimpa === 'buscar_contato' ||
+    chaveLimpa === 'obter_contato' ||
+    chaveLimpa === 'agenda_de_contatos' ||
+    chaveLimpa === 'agenda_contatos';
+
+  if (ehConsultaContato) {
+    const termoBusca = normalizarTexto(
+      String(args?.nome || args?.contato || args?.target || valorConsulta || '')
+    );
+    try {
+      const res = await pool.query(
+        `SELECT nome, telefone, apelidos 
+         FROM contatos_agenda 
+         WHERE LOWER(nome) = LOWER($1) 
+            OR $1 = ANY(apelidos) 
+            OR LOWER(nome) LIKE '%' || LOWER($1) || '%' 
+         LIMIT 1;`,
+        [termoBusca]
+      );
+
+      if (res.rows.length > 0) {
+        const c = res.rows[0];
+        return {
+          status: 'success',
+          encontrado: true,
+          contato: c.nome,
+          telefone: c.telefone,
+          number: c.telefone,
+          recipientId: c.telefone
+        };
+      }
+
+      // Fallback: consulta na tabela dynamic_collections caso tenha sido salvo por lá
+      const resDyn = await pool.query(
+        `SELECT document_data FROM dynamic_collections 
+         WHERE collection_name = 'contatos_agenda' 
+           AND (LOWER(document_data->>'nome') LIKE '%' || LOWER($1) || '%' 
+                OR LOWER(document_data->>'contato') LIKE '%' || LOWER($1) || '%')
+         LIMIT 1;`,
+        [termoBusca]
+      );
+
+      if (resDyn.rows.length > 0) {
+        const doc = resDyn.rows[0].document_data;
+        const tel = doc.telefone || doc.number || doc.phone;
+        return {
+          status: 'success',
+          encontrado: true,
+          contato: doc.nome || termoBusca,
+          telefone: tel,
+          number: tel,
+          recipientId: tel
+        };
+      }
+
+      return {
+        status: 'not_found',
+        encontrado: false,
+        mensagem: `Contato '${termoBusca}' não localizado na agenda.`
+      };
+    } catch (err: any) {
+      return { status: 'error', message: err.message };
+    }
+  }
+
+  // 2. BANCO DE DADOS DINÂMICO (GRAVAÇÃO DEDICADA EM contatos_agenda E dynamic_collections)
   if (chaveLimpa === 'save_to_database' || chaveLimpa === 'dynamicdatabasetool') {
+    const dados = args?.documentData || args;
+    const nomeIdentificado = dados?.nome || dados?.contato || dados?.name;
+    const foneIdentificado = dados?.telefone || dados?.number || dados?.phone;
+
+    if (foneIdentificado || args?.collectionName === 'contatos_agenda') {
+      try {
+        const nomeNorm = normalizarTexto(String(nomeIdentificado || ''));
+        const foneLimpo = String(foneIdentificado || '').replace(/\D/g, '');
+        let foneFinal = foneLimpo;
+
+        if (foneFinal.length === 8 || foneFinal.length === 9) {
+          foneFinal = `5567${foneFinal.length === 8 ? '9' + foneFinal : foneFinal}`;
+        } else if (foneFinal.length === 10 || foneFinal.length === 11) {
+          foneFinal = `55${foneFinal}`;
+        } else if (!foneFinal.startsWith('55') && foneFinal.length > 0) {
+          foneFinal = `55${foneFinal}`;
+        }
+
+        if (nomeNorm && foneFinal) {
+          await pool.query(
+            `INSERT INTO contatos_agenda (nome, telefone, apelidos)
+             VALUES ($1, $2, ARRAY[$3])
+             ON CONFLICT (nome) DO UPDATE 
+             SET telefone = EXCLUDED.telefone, atualizado_em = NOW();`,
+            [nomeNorm, foneFinal, String(nomeIdentificado || nomeNorm)]
+          );
+        }
+      } catch (e: any) {
+        console.warn('⚠️ [Agenda] Falha ao espelhar em contatos_agenda:', e?.message);
+      }
+    }
+
     return await saveToDatabase({
-      collectionName: sanitizeToolName(args?.collectionName || 'jarvis_records'),
+      collectionName: sanitizeToolName(args?.collectionName || 'contatos_agenda'),
       documentData:
         typeof args?.documentData === 'object'
           ? args.documentData
@@ -298,7 +393,7 @@ export async function executarFerramentaVinculada(
     });
   }
 
-  // 2. RAG VETORIAL
+  // 3. RAG VETORIAL
   if (
     chaveLimpa === 'vector_rag' ||
     chaveLimpa === 'rag_search' ||
@@ -308,7 +403,7 @@ export async function executarFerramentaVinculada(
     return { matches: docs };
   }
 
-  // 3. TERMINAL SSH
+  // 4. TERMINAL SSH
   if (
     chaveLimpa === 'execute_ssh_command' ||
     chaveLimpa === 'ssh_terminal' ||
@@ -320,7 +415,7 @@ export async function executarFerramentaVinculada(
     return await executeSshCommand(args?.command || valorConsulta || 'uptime');
   }
 
-  // 4. CHAMADA DIRETA UNIVERSAL GOOGLE WORKSPACE (Se a LLM enviar endpointPath explícito)
+  // 5. CHAMADA DIRETA UNIVERSAL GOOGLE WORKSPACE
   if (
     (chaveLimpa.includes('google') ||
       chaveLimpa.includes('gmail') ||
@@ -367,11 +462,14 @@ export async function executarFerramentaVinculada(
     }
   }
 
-  // 5. ECOSSISTEMA NATIVO GOOGLE (GMAIL, CALENDAR, DRIVE), BRAPI B3 E MENSAGERIA
+  // 6. ECOSSISTEMA NATIVO GOOGLE, BRAPI B3 E MENSAGERIA
+  const ehGoogleCalendar =
+    chaveLimpa.includes('calendar') ||
+    (chaveLimpa.includes('agenda') && !chaveLimpa.includes('contat'));
+
   const ehConectorNativoIntegrado =
     chaveLimpa.includes('gmail') ||
-    chaveLimpa.includes('calendar') ||
-    chaveLimpa.includes('agenda') ||
+    ehGoogleCalendar ||
     chaveLimpa.includes('drive') ||
     chaveLimpa.includes('brapi') ||
     chaveLimpa.includes('telegram') ||
@@ -380,6 +478,30 @@ export async function executarFerramentaVinculada(
 
   if (ehConectorNativoIntegrado) {
     let acaoAlvo = String(args?.action || args?.service || '').toLowerCase().trim();
+
+    // Auto-resolução de nome de contato para número caso o WhatsApp receba texto
+    if (chaveLimpa.includes('whatsapp')) {
+      let dest = String(args?.to || args?.recipientId || args?.number || args?.target || '').trim();
+      const apenasDigitos = dest.replace(/\D/g, '');
+
+      if (dest && (apenasDigitos.length < 10 || !/^\d+$/.test(dest))) {
+        const termoNorm = normalizarTexto(dest);
+        try {
+          const resCont = await pool.query(
+            `SELECT telefone FROM contatos_agenda 
+             WHERE LOWER(nome) = LOWER($1) OR $1 = ANY(apelidos) OR LOWER(nome) LIKE '%' || LOWER($1) || '%' 
+             LIMIT 1;`,
+            [termoNorm]
+          );
+          if (resCont.rows.length > 0 && resCont.rows[0].telefone) {
+            const foneEncontrado = resCont.rows[0].telefone;
+            args.to = foneEncontrado;
+            args.recipientId = foneEncontrado;
+            args.number = foneEncontrado;
+          }
+        } catch {}
+      }
+    }
 
     let queryGmail = args?.query || args?.busca || '';
     if (chaveLimpa.includes('gmail')) {
@@ -400,7 +522,7 @@ export async function executarFerramentaVinculada(
       }
     }
 
-    if ((chaveLimpa.includes('calendar') || chaveLimpa.includes('agenda')) && !acaoAlvo) {
+    if (ehGoogleCalendar && !acaoAlvo) {
       acaoAlvo = /agendar|criar|novo|schedule|create|marcar/i.test(promptNormalizado)
         ? 'create_event'
         : 'list_events';
@@ -432,7 +554,7 @@ export async function executarFerramentaVinculada(
   const customConn = connectorsMap?.get(chaveLimpa);
   const cfg = customConn?.config || {};
 
-  // 6. HOME ASSISTANT / DISPOSITIVOS IOT (DESPACHANTE UNIVERSAL)
+  // 7. HOME ASSISTANT / DISPOSITIVOS IOT
   const ehDispositivoCasa =
     chaveLimpa.includes('home_assistant') ||
     chaveLimpa.includes('hass') ||
@@ -485,7 +607,7 @@ export async function executarFerramentaVinculada(
     }
   }
 
-  // 7. CONECTOR HTTP / REST UNIVERSAL (Igual ao Nó HTTP Request do n8n)
+  // 8. CONECTOR HTTP / REST UNIVERSAL
   return await executarConectorApiUniversal(
     customConn || chaveLimpa,
     args || {},
