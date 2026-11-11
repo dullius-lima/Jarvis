@@ -1,3 +1,5 @@
+//meu-n8n-backend/scripts/whisper_transcribe.py
+
 import sys
 import json
 import os
@@ -17,14 +19,14 @@ def convert_to_wav_16k(input_path: str) -> str:
             out_wav
         ]
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if res.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 1000:
+        if res.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 500:
             return out_wav
     except Exception:
         pass
     return input_path
 
 def transcribe_audio(file_path: str, model_size: str = "base"):
-    if not os.path.exists(file_path) or os.path.getsize(file_path) < 500:
+    if not os.path.exists(file_path) or os.path.getsize(file_path) < 300:
         print(json.dumps({
             "success": False,
             "error": "Arquivo de áudio não encontrado ou vazio.",
@@ -76,7 +78,7 @@ def transcribe_audio(file_path: str, model_size: str = "base"):
     except ImportError:
         print(json.dumps({
             "success": False,
-            "error": "Biblioteca Whisper não encontrada.",
+            "error": "Biblioteca Whisper não encontrada no ambiente virtual.",
             "text": ""
         }, ensure_ascii=False))
     except Exception as e:
