@@ -12,7 +12,7 @@ export async function initializeDatabaseSchema() {
       await client.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
       hasVectorExtension = true;
     } catch {
-      console.info('ℹ️ [Modo Compatibilidade] pgvector não detetado localmente. A utilizar TEXT para vetores.');
+      console.info('ℹ️ [Modo Compatibilidade] pgvector não detectado localmente. Usando TEXT para vetores.');
     }
 
     // 2. Configurações Globais do Sistema (Cérebro Central)
@@ -194,8 +194,8 @@ export async function initializeDatabaseSchema() {
       CREATE TABLE IF NOT EXISTS jarvis_episodic_memory (
         id SERIAL PRIMARY KEY,
         identity_token VARCHAR(100) DEFAULT 'Matheus-Admin',
-        categoria VARCHAR(60) NOT NULL DEFAULT 'tarefa_ativa', -- 'projeto', 'tarefa_ativa', 'habito', 'contexto_semanal'
-        titulo VARCHAR(150) NOT NULL,
+        categoria VARCHAR(60) NOT NULL DEFAULT 'tarefa_ativa',
+        titulo VARCHAR(255) NOT NULL,
         conteudo TEXT NOT NULL,
         metadata JSONB DEFAULT '{}'::jsonb,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -203,6 +203,15 @@ export async function initializeDatabaseSchema() {
       );
       CREATE INDEX IF NOT EXISTS idx_episodic_expires ON jarvis_episodic_memory(expires_at);
       CREATE INDEX IF NOT EXISTS idx_episodic_categoria ON jarvis_episodic_memory(categoria);
+    `);
+
+    await client.query(`
+      ALTER TABLE jarvis_episodic_memory ADD COLUMN IF NOT EXISTS identity_token VARCHAR(100) DEFAULT 'Matheus-Admin';
+      ALTER TABLE jarvis_episodic_memory ADD COLUMN IF NOT EXISTS categoria VARCHAR(60) DEFAULT 'tarefa_ativa';
+      ALTER TABLE jarvis_episodic_memory ADD COLUMN IF NOT EXISTS titulo VARCHAR(255);
+      ALTER TABLE jarvis_episodic_memory ADD COLUMN IF NOT EXISTS conteudo TEXT;
+      ALTER TABLE jarvis_episodic_memory ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
+      ALTER TABLE jarvis_episodic_memory ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE;
     `);
 
     // 6. Cofre de Conectores Externos & Ferramentas Nativas
@@ -230,7 +239,7 @@ export async function initializeDatabaseSchema() {
       ALTER TABLE external_connectors ADD COLUMN IF NOT EXISTS endpoint_url TEXT DEFAULT '';
     `);
 
-    // Registo de fábrica do conector de Banco de Dados para seleção na interface
+    // Registro de fábrica do conector de Banco de Dados para seleção na interface
     await client.query(`
       INSERT INTO external_connectors (provider_key, name, category, icon, description, is_enabled)
       VALUES (
@@ -238,7 +247,7 @@ export async function initializeDatabaseSchema() {
         'Banco de Dados (Dynamic Collections)',
         'Banco de Dados',
         '🗄️',
-        'Grava e consulta contactos e tabelas dinâmicas no PostgreSQL',
+        'Grava e consulta contatos e tabelas dinâmicas no PostgreSQL',
         true
       )
       ON CONFLICT (provider_key) DO UPDATE 
@@ -247,7 +256,7 @@ export async function initializeDatabaseSchema() {
           description = EXCLUDED.description;
     `);
 
-    // 7. Tabela Dedicada da Agenda de Contactos (Integrada ao WhatsApp e PBX)
+    // 7. Tabela Dedicada da Agenda de Contatos (Integrada ao WhatsApp e PBX)
     await client.query(`
       CREATE TABLE IF NOT EXISTS contatos_agenda (
         id SERIAL PRIMARY KEY,
@@ -259,7 +268,7 @@ export async function initializeDatabaseSchema() {
       );
     `);
 
-    // Semente inicial de contactos garantindo que nunca é reiniciada ou perdida
+    // Semente inicial de contatos garantindo que nunca é reiniciada ou perdida
     await client.query(`
       INSERT INTO contatos_agenda (nome, telefone, apelidos) VALUES
         ('mae', '5567991153233', ARRAY['mãe', 'mainha']),
@@ -274,6 +283,8 @@ export async function initializeDatabaseSchema() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS vector_documents (
         id SERIAL PRIMARY KEY,
+        title VARCHAR(255),
+        category VARCHAR(100) DEFAULT 'permanente',
         content TEXT NOT NULL,
         metadata JSONB DEFAULT '{}'::jsonb,
         embedding ${embeddingColumnType},
@@ -289,6 +300,25 @@ export async function initializeDatabaseSchema() {
         response_payload JSONB,
         execution_time_ms INTEGER DEFAULT 0,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Migração de colunas para garantir 'title' e 'category' em bancos pré-existentes
+    await client.query(`
+      ALTER TABLE vector_documents ADD COLUMN IF NOT EXISTS title VARCHAR(255);
+      ALTER TABLE vector_documents ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'permanente';
+    `);
+
+    // Espelhamento automático: transfere contatos existentes para vector_documents para exibição na Aba de Memória
+    await client.query(`
+      INSERT INTO vector_documents (title, category, content)
+      SELECT 
+        'Contato: ' || INITCAP(nome) AS title,
+        'contatos' AS category,
+        'Nome: ' || INITCAP(nome) || ' | Telefone: ' || telefone || ' | Apelidos: ' || COALESCE(array_to_string(apelidos, ', '), '') AS content
+      FROM contatos_agenda
+      WHERE NOT EXISTS (
+        SELECT 1 FROM vector_documents WHERE content LIKE '%' || contatos_agenda.telefone || '%'
       );
     `);
 
@@ -347,4 +377,41 @@ export async function initializeDatabaseSchema() {
   } finally {
     client.release();
   }
+}
+
+// ============================================================================
+// FUNÇÃO CLASSIFICADORA DE MEMÓRIAS (CURTO, MÉDIO E LONGO PRAZO)
+// ============================================================================
+
+export async function salvarMemoriaClassificada(params: {
+  tipo_memoria: 'curto_prazo' | 'medio_prazo' | 'longo_prazo';
+  titulo: string;
+  conteudo: string;
+  dias_validade?: number;
+}) {
+  const { tipo_memoria, titulo, conteudo, dias_validade = 30 } = params;
+
+  if (tipo_memoria === 'curto_prazo') {
+    return { sucesso: true, mensagem: `Armazenado na sessão ativa: "${titulo}"` };
+  }
+
+  if (tipo_memoria === 'medio_prazo') {
+    await pool.query(
+      `INSERT INTO jarvis_episodic_memory (categoria, titulo, conteudo, expires_at)
+       VALUES ('tarefa_ativa', $1, $2, NOW() + ($3 || ' days')::interval);`,
+      [titulo, conteudo, dias_validade]
+    );
+    return { sucesso: true, mensagem: `Memória de médio prazo guardada por ${dias_validade} dias: "${titulo}"` };
+  }
+
+  if (tipo_memoria === 'longo_prazo') {
+    await pool.query(
+      `INSERT INTO vector_documents (title, content, category)
+       VALUES ($1, $2, 'permanente');`,
+      [titulo, conteudo]
+    );
+    return { sucesso: true, mensagem: `Fato consolidado permanentemente na memória de longo prazo: "${titulo}"` };
+  }
+
+  return { sucesso: false, mensagem: `Tipo de memória inválido: "${tipo_memoria}"` };
 }
