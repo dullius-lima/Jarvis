@@ -12,19 +12,27 @@ export async function montarContextoEConexoes(
   speakerRole: string,
   instrucaoVisual: string
 ) {
-  // Carregamento paralelo de configurações, histórico, RAG, agentes e catálogo
+  // Carregamento paralelo completo: Cérebro, Curto Prazo, Médio Prazo, Agenda Permanente e RAG
   const [
     configuracaoCerebro,
     historicoRes,
     linhasRag,
+    contatosRes,
+    episodicaRes,
     todosAgentesRes,
     dadosCatalogoTools
   ] = await Promise.all([
     getCentralBrainConfig(),
     pool
-      .query(`SELECT role, content FROM jarvis_chat_memory WHERE session_id = $1 ORDER BY id DESC LIMIT 12;`, [sessionId])
+      .query(`SELECT role, content FROM jarvis_chat_memory WHERE session_id = $1 ORDER BY id DESC LIMIT 15;`, [sessionId])
       .catch(() => ({ rows: [] as any[] })),
-    searchVectorDocuments(userPrompt, 4).catch(() => []),
+    searchVectorDocuments(userPrompt, 6).catch(() => []),
+    pool
+      .query(`SELECT nome, telefone, apelidos FROM contatos_agenda ORDER BY nome ASC;`)
+      .catch(() => ({ rows: [] as any[] })),
+    pool
+      .query(`SELECT categoria, titulo, conteudo FROM jarvis_episodic_memory WHERE expires_at > NOW() ORDER BY created_at DESC LIMIT 15;`)
+      .catch(() => ({ rows: [] as any[] })),
     pool.query(`SELECT * FROM ai_agents ORDER BY is_active DESC, id ASC;`).catch(() => ({ rows: [] as any[] })),
     getDynamicToolsCatalog()
   ]);
@@ -49,6 +57,25 @@ export async function montarContextoEConexoes(
       .map((m: any) => `- ${m.content}`)
       .join('\n');
   }
+
+  const textoAgenda = contatosRes.rows.length > 0
+    ? contatosRes.rows
+        .map((c: any) => `- Nome: ${c.nome} | Telefone: ${c.telefone} | Apelidos/Vínculos: ${(c.apelidos || []).join(', ')}`)
+        .join('\n')
+    : 'Nenhum contato salvo.';
+
+  const textoMedioPrazo = episodicaRes.rows.length > 0
+    ? episodicaRes.rows
+        .map((e: any) => `- [${e.categoria}] ${e.titulo}: ${e.conteudo}`)
+        .join('\n')
+    : '';
+
+  // Anexa Agenda + Médio Prazo + Longo Prazo (RAG) de forma visível para o Orquestrador
+  contextoRagTexto = [
+    `[AGENDA PERMANENTE DE CONTATOS E IDENTIDADES]:\n${textoAgenda}`,
+    textoMedioPrazo ? `[MEMÓRIA EPISÓDICA ATIVA (MÉDIO PRAZO)]:\n${textoMedioPrazo}` : '',
+    contextoRagTexto ? `[DOCUMENTOS E FATOS DE LONGO PRAZO (RAG)]:\n${contextoRagTexto}` : ''
+  ].filter(Boolean).join('\n\n');
 
   const todosAgentes = todosAgentesRes.rows;
   const agentesAtivos = todosAgentes.filter((a: any) => a.is_active !== false);
@@ -262,7 +289,7 @@ ${resumoAgentesInativos}
  - Você só responde em texto após o especialista concluir a execução e trazer os dados reais.
  - Cumprimentos e conversação comum devem ser respondidos de forma amigável, inteligente e em português.
 
-${contextoRagTexto ? `\n--- MEMÓRIA VETORIAL (RAG) ---\n${contextoRagTexto}` : ''}`;
+${contextoRagTexto ? `\n--- MEMÓRIA E CONHECIMENTO DO SISTEMA (AGENDA, MÉDIO E LONGO PRAZO) ---\n${contextoRagTexto}` : ''}`;
 
   return {
     configuracaoCerebro,
