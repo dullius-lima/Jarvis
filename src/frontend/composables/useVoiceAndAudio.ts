@@ -14,37 +14,24 @@ export function useVoiceAndAudio(
   let speechSilenceTimer: any = null;
   let lastChimeTimestamp = 0;
 
+  // Web Audio Context & Processamento PCM WAV Nativo
   let localAudioStream: MediaStream | null = null;
   let audioContext: AudioContext | null = null;
   let analyserNode: AnalyserNode | null = null;
+  let scriptProcessorNode: ScriptProcessorNode | null = null;
+  let gainNode: GainNode | null = null;
   let pitchMonitorInterval: any = null;
-  let measuredPitches: number[] = [];
-  let measuredEnergies: number[] = [];
-  let measuredSpectra: number[][] = [];
 
-  // Sistema de Gravação com Pre-Roll (Nunca corta o início da palavra "Jarvis")
-  let mediaRecorder: MediaRecorder | null = null;
-  let webmHeaderChunk: Blob | null = null;
-  let preRollChunks: Blob[] = [];
-  let activeSpeechChunks: Blob[] = [];
+  // Buffer de Áudio em Memória com Pre-Roll Real (800ms a 16kHz)
+  const PRE_ROLL_SAMPLES = 12800;
+  let preRollBuffer: number[] = [];
+  let speechPcmSamples: number[] = [];
   let isCurrentlyCapturingSpeech = false;
   let speechFramesCount = 0;
   let forceDirectCommand = false;
 
-  function getSupportedMimeType(): string {
-    const types = [
-      'audio/webm;codecs=opus',
-      'audio/webm',
-      'audio/ogg;codecs=opus',
-      'audio/mp4'
-    ];
-    for (const t of types) {
-      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) {
-        return t;
-      }
-    }
-    return '';
-  }
+  let measuredPitches: number[] = [];
+  let measuredEnergies: number[] = [];
 
   function playJarvisChime(type: 'wake' | 'send' = 'wake') {
     const now = Date.now();
@@ -83,7 +70,7 @@ export function useVoiceAndAudio(
     let sumSq = 0;
     for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
     const rms = Math.sqrt(sumSq / buf.length);
-    if (rms < 0.024) return { pitch: -1, rms };
+    if (rms < 0.028) return { pitch: -1, rms };
 
     const minPeriod = Math.floor(sampleRate / 380);
     const maxPeriod = Math.floor(sampleRate / 75);
@@ -102,115 +89,84 @@ export function useVoiceAndAudio(
     return { pitch: pitch >= 75 && pitch <= 380 ? pitch : -1, rms };
   }
 
-  function extract16Bands(analyser: AnalyserNode): number[] {
-    const freqData = new Uint8Array(analyser.frequencyBinCount);
-    analyser.getByteFrequencyData(freqData);
-    const bands: number[] = [];
-    for (let b = 0; b < 16; b++) {
-      let sum = 0;
-      for (let j = 0; j < 4; j++) sum += freqData[b * 4 + j + 2] || 0;
-      bands.push(Number((sum / (4 * 255)).toFixed(4)));
+  // Conversor Universal de Float32 PCM para WAV 16kHz Mono 16-bit
+  function encodeWavBase64(samples: number[], sampleRate = 16000): string {
+    const numSamples = samples.length;
+    const buffer = new ArrayBuffer(44 + numSamples * 2);
+    const view = new DataView(buffer);
+
+    const writeStr = (offset: number, str: string) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + numSamples * 2, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // Mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true); // Byte rate
+    view.setUint16(32, 2, true);              // Block align
+    view.setUint16(34, 16, true);             // Bits per sample
+    writeStr(36, 'data');
+    view.setUint32(40, numSamples * 2, true);
+
+    let offset = 44;
+    for (let i = 0; i < numSamples; i++, offset += 2) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
     }
-    return bands;
-  }
 
-  function startContinuousPreRollRecorder() {
-    if (!localAudioStream || !localAudioStream.active) return;
-    try {
-      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-        mediaRecorder.stop();
-      }
-    } catch {}
-
-    webmHeaderChunk = null;
-    preRollChunks = [];
-    activeSpeechChunks = [];
-
-    try {
-      const mimeType = getSupportedMimeType();
-      mediaRecorder = mimeType
-        ? new MediaRecorder(localAudioStream, { mimeType })
-        : new MediaRecorder(localAudioStream);
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (!e.data || e.data.size === 0) return;
-
-        // O primeiro chunk contém obrigatoriamente o cabeçalho EBML do container WebM/MP4
-        if (!webmHeaderChunk) {
-          webmHeaderChunk = e.data;
-          return;
-        }
-
-        if (isCurrentlyCapturingSpeech) {
-          activeSpeechChunks.push(e.data);
-        } else {
-          // Mantém os últimos 8 chunks (~1.2s) antes da pessoa começar a falar (Pre-Roll)
-          preRollChunks.push(e.data);
-          if (preRollChunks.length > 8) {
-            preRollChunks.shift();
-          }
-        }
-      };
-
-      mediaRecorder.start(150);
-      isRecordingAudio.value = true;
-    } catch (err) {
-      console.warn('Erro ao iniciar MediaRecorder:', err);
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i += 8192) {
+      binary += String.fromCharCode.apply(
+        null,
+        bytes.subarray(i, Math.min(i + 8192, len)) as any
+      );
     }
+    return window.btoa(binary);
   }
 
-  async function finalizeAndExportAudioBase64(): Promise<string> {
-    if (!mediaRecorder) return '';
+  async function processFinishedSpeech() {
+    if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
+    isCurrentlyCapturingSpeech = false;
+    isRecordingAudio.value = false;
+    speechFramesCount = 0;
 
-    return new Promise<string>((resolve) => {
-      const assembleAndRead = () => {
-        try {
-          const allBlobs: Blob[] = [];
-          if (webmHeaderChunk) allBlobs.push(webmHeaderChunk);
-          if (preRollChunks.length > 0) allBlobs.push(...preRollChunks);
-          if (activeSpeechChunks.length > 0) allBlobs.push(...activeSpeechChunks);
+    const isDirect = forceDirectCommand;
+    forceDirectCommand = false;
 
-          if (allBlobs.length <= 1) {
-            startContinuousPreRollRecorder();
-            return resolve('');
-          }
+    // Concatena o pre-roll intacto (contendo o início "Jar-") com as amostras da fala
+    const completeSpeech = [...preRollBuffer, ...speechPcmSamples];
+    speechPcmSamples = [];
 
-          const mimeType = mediaRecorder?.mimeType || 'audio/webm';
-          const finalBlob = new Blob(allBlobs, { type: mimeType });
-
-          // Reinicia imediatamente o gravador limpo para a próxima fala
-          startContinuousPreRollRecorder();
-
-          if (finalBlob.size < 1000) return resolve('');
-
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const res = (reader.result as string) || '';
-            resolve(res.split(',')[1] || '');
-          };
-          reader.onerror = () => resolve('');
-          reader.readAsDataURL(finalBlob);
-        } catch {
-          startContinuousPreRollRecorder();
-          resolve('');
-        }
-      };
-
-      if (mediaRecorder.state === 'inactive') {
-        assembleAndRead();
-        return;
+    // Descarta ruídos com menos de 0.4s de áudio
+    if (completeSpeech.length < 6400) {
+      if (isDirect) {
+        isJarvisAwake.value = false;
+        voiceStatusText.value = '🟢 Vigília Ativa: Diga "Jarvis"...';
       }
+      return;
+    }
 
-      mediaRecorder.onstop = assembleAndRead;
-      try {
-        mediaRecorder.stop();
-      } catch {
-        assembleAndRead();
+    const wavBase64 = encodeWavBase64(completeSpeech, 16000);
+    if (!wavBase64 || wavBase64.length < 300) {
+      if (isDirect) {
+        isJarvisAwake.value = false;
+        voiceStatusText.value = '🟢 Vigília Ativa: Diga "Jarvis"...';
       }
-    });
-  }
+      return;
+    }
 
-  function buildBiometricString(base64Data: string): string {
+    if (isDirect) {
+      playJarvisChime('send');
+      voiceStatusText.value = '⚡ Processando seu comando de voz...';
+    }
+
     const avgPitch =
       measuredPitches.length > 0
         ? (measuredPitches.reduce((a, b) => a + b, 0) / measuredPitches.length).toFixed(2)
@@ -220,47 +176,10 @@ export function useVoiceAndAudio(
         ? (measuredEnergies.reduce((a, b) => a + b, 0) / measuredEnergies.length).toFixed(4)
         : '0.0500';
 
-    const avgSpectrum = new Array(16).fill(0);
-    if (measuredSpectra.length > 0) {
-      for (const spec of measuredSpectra) {
-        for (let i = 0; i < 16; i++) avgSpectrum[i] += spec[i] || 0;
-      }
-      for (let i = 0; i < 16; i++) {
-        avgSpectrum[i] = Number((avgSpectrum[i] / measuredSpectra.length).toFixed(4));
-      }
-    }
-
     measuredPitches = [];
     measuredEnergies = [];
-    measuredSpectra = [];
 
-    return `PITCH:${avgPitch}|ENERGY:${avgEnergy}|SPEC:${avgSpectrum.join(',')}|DATA:${base64Data}`;
-  }
-
-  async function processFinishedSpeech() {
-    if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
-    isCurrentlyCapturingSpeech = false;
-    speechFramesCount = 0;
-
-    const audioB64 = await finalizeAndExportAudioBase64();
-    if (!audioB64 || audioB64.length < 400) {
-      isJarvisAwake.value = false;
-      voiceStatusText.value = '🟢 Vigília Ativa: Diga "Jarvis"...';
-      return;
-    }
-
-    const isDirect = forceDirectCommand;
-    forceDirectCommand = false;
-    isJarvisAwake.value = false;
-
-    if (isDirect) {
-      playJarvisChime('send');
-      voiceStatusText.value = '⚡ Processando seu comando de voz...';
-    } else {
-      voiceStatusText.value = '🟢 Vigília Ativa: Analisando chamada...';
-    }
-
-    const bioPayload = buildBiometricString(audioB64);
+    const bioPayload = `PITCH:${avgPitch}|ENERGY:${avgEnergy}|DATA:${wavBase64}`;
     const modeTag = isDirect ? '__VAD_AUDIO_ONLY__' : '__WAKE_WORD_CHECK__';
 
     onCommandDetected(modeTag, bioPayload);
@@ -272,7 +191,11 @@ export function useVoiceAndAudio(
       if (!localAudioStream || !localAudioStream.active) {
         if (nav.mediaDevices && nav.mediaDevices.getUserMedia) {
           localAudioStream = await nav.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
           });
         } else {
           return false;
@@ -282,24 +205,60 @@ export function useVoiceAndAudio(
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtx && !audioContext) {
         audioContext = new AudioCtx();
-        const source = audioContext.createMediaStreamSource(localAudioStream!);
-        analyserNode = audioContext.createAnalyser();
-        analyserNode.fftSize = 2048;
-        source.connect(analyserNode);
       }
 
       if (audioContext && audioContext.state === 'suspended') {
         await audioContext.resume();
       }
 
-      startContinuousPreRollRecorder();
+      if (!analyserNode) {
+        const source = audioContext!.createMediaStreamSource(localAudioStream!);
+        analyserNode = audioContext!.createAnalyser();
+        analyserNode.fftSize = 2048;
+
+        scriptProcessorNode = audioContext!.createScriptProcessor(4096, 1, 1);
+        gainNode = audioContext!.createGain();
+        gainNode.gain.value = 0; // Evita microfonia em caixas e fones
+
+        scriptProcessorNode.onaudioprocess = (e) => {
+          if (isJarvisSpeaking.value || !isVigilanceEnabled.value) return;
+
+          const inputData = e.inputBuffer.getChannelData(0);
+          const sampleRate = audioContext!.sampleRate;
+          const ratio = sampleRate / 16000;
+          const newLength = Math.floor(inputData.length / ratio);
+          const downsampled = new Float32Array(newLength);
+          for (let i = 0; i < newLength; i++) {
+            downsampled[i] = inputData[Math.floor(i * ratio)];
+          }
+
+          if (isCurrentlyCapturingSpeech) {
+            for (let i = 0; i < downsampled.length; i++) {
+              speechPcmSamples.push(downsampled[i]);
+            }
+          } else {
+            for (let i = 0; i < downsampled.length; i++) {
+              preRollBuffer.push(downsampled[i]);
+            }
+            if (preRollBuffer.length > PRE_ROLL_SAMPLES) {
+              preRollBuffer.splice(0, preRollBuffer.length - PRE_ROLL_SAMPLES);
+            }
+          }
+        };
+
+        source.connect(analyserNode);
+        analyserNode.connect(scriptProcessorNode);
+        scriptProcessorNode.connect(gainNode);
+        gainNode.connect(audioContext!.destination);
+      }
+
       voiceStatusText.value = '🟢 Vigília Ativa: Diga "Jarvis"...';
 
       if (pitchMonitorInterval) clearInterval(pitchMonitorInterval);
       pitchMonitorInterval = setInterval(() => {
         if (!analyserNode || !audioContext || isJarvisSpeaking.value || !isVigilanceEnabled.value) return;
 
-        // Se o usuário está digitando no teclado (foco na textarea), não dispara o VAD sozinho para não interferir!
+        // Se o usuário está digitando no teclado, pausa a vigília para não interferir
         const activeTag = document.activeElement?.tagName?.toUpperCase();
         if (activeTag === 'TEXTAREA' || activeTag === 'INPUT') {
           if (!forceDirectCommand) return;
@@ -309,31 +268,35 @@ export function useVoiceAndAudio(
         analyserNode.getFloatTimeDomainData(buffer);
         const { pitch, rms } = detectPitch(buffer, audioContext.sampleRate);
 
-        // Exige voz próxima ao microfone (rms >= 0.030) para ignorar pessoas conversando longe
-        if (pitch > 0 && rms >= 0.030) {
+        // Limiar de proximidade vocal
+        if (pitch > 0 && rms >= 0.032) {
           speechFramesCount++;
           measuredPitches.push(pitch);
           measuredEnergies.push(rms);
-          measuredSpectra.push(extract16Bands(analyserNode));
 
           if (speechFramesCount >= 3 && !isCurrentlyCapturingSpeech) {
             isCurrentlyCapturingSpeech = true;
-            isJarvisAwake.value = true;
-            voiceStatusText.value = '🎙️ Ouvindo sua voz...';
+            isRecordingAudio.value = true;
+            if (forceDirectCommand) {
+              isJarvisAwake.value = true;
+              voiceStatusText.value = '🎙️ Ouvindo comando...';
+            }
           }
 
           if (isCurrentlyCapturingSpeech) {
             if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
             speechSilenceTimer = setTimeout(() => {
-              if (isCurrentlyCapturingSpeech && speechFramesCount >= 5) {
+              if (isCurrentlyCapturingSpeech && speechFramesCount >= 4) {
                 processFinishedSpeech();
               } else {
-                // Barulho curto (< 300ms), descarta sem chamar servidor
                 isCurrentlyCapturingSpeech = false;
+                isRecordingAudio.value = false;
                 speechFramesCount = 0;
-                activeSpeechChunks = [];
-                isJarvisAwake.value = false;
-                voiceStatusText.value = '🟢 Vigília Ativa: Diga "Jarvis"...';
+                speechPcmSamples = [];
+                if (forceDirectCommand) {
+                  isJarvisAwake.value = false;
+                  forceDirectCommand = false;
+                }
               }
             }, 1300);
           }
@@ -352,8 +315,7 @@ export function useVoiceAndAudio(
       isJarvisSpeaking.value = false;
     }
 
-    // Se já estava gravando fala e clicou de novo, envia na hora!
-    if (isCurrentlyCapturingSpeech && activeSpeechChunks.length > 1) {
+    if (isCurrentlyCapturingSpeech && speechPcmSamples.length > 2000) {
       forceDirectCommand = true;
       await processFinishedSpeech();
       return;
@@ -365,9 +327,10 @@ export function useVoiceAndAudio(
     const ok = await startAlwaysOnSentinel();
     if (ok) {
       isCurrentlyCapturingSpeech = true;
-      speechFramesCount = 6;
+      isRecordingAudio.value = true;
+      speechFramesCount = 5;
       isJarvisAwake.value = true;
-      voiceStatusText.value = '🎙️ Estou ouvindo! Fale seu comando...';
+      voiceStatusText.value = '🎙️ Estou ouvindo! Pode falar...';
     }
   }
 
@@ -375,6 +338,7 @@ export function useVoiceAndAudio(
     if (speechSilenceTimer) clearTimeout(speechSilenceTimer);
     isJarvisAwake.value = false;
     isCurrentlyCapturingSpeech = false;
+    isRecordingAudio.value = false;
   }
 
   async function speakJarvisResponse(rawText: string, onDone?: () => void) {
@@ -395,7 +359,6 @@ export function useVoiceAndAudio(
     const finish = () => {
       isJarvisSpeaking.value = false;
       voiceStatusText.value = '🟢 Vigília Ativa: Diga "Jarvis"...';
-      startContinuousPreRollRecorder();
       if (onDone) onDone();
     };
 
@@ -439,9 +402,21 @@ export function useVoiceAndAudio(
     isVigilanceEnabled.value = false;
     stopMicrophoneSession();
     if (pitchMonitorInterval) clearInterval(pitchMonitorInterval);
+    if (scriptProcessorNode) {
+      try { scriptProcessorNode.disconnect(); } catch {}
+      scriptProcessorNode = null;
+    }
+    if (gainNode) {
+      try { gainNode.disconnect(); } catch {}
+      gainNode = null;
+    }
     if (localAudioStream) {
       localAudioStream.getTracks().forEach((t) => t.stop());
       localAudioStream = null;
+    }
+    if (audioContext && audioContext.state !== 'closed') {
+      try { audioContext.close(); } catch {}
+      audioContext = null;
     }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   }
