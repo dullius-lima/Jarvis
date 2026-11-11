@@ -59,6 +59,7 @@ export async function executarEsteiraEspecialistas(
     agentType?: string;
     responseInstruction?: string;
     output: any;
+    executedTools?: string[];
   }> = [];
 
   const map = connectorsMap || new Map<string, any>();
@@ -80,6 +81,7 @@ export async function executarEsteiraEspecialistas(
     } catch {}
 
     let stepOutput: any = null;
+    const resultadosBrutosFerramentas: any[] = [];
     const agentType = (currentAgent.agent_type || 'llm').toLowerCase();
     const promptText =
       typeof currentPayload === 'string'
@@ -318,7 +320,6 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
       const MAX_TOOL_TURNS = 3;
       let turnoAtual = 0;
       let respostaTextualEspecialista = '';
-      const resultadosBrutosFerramentas: any[] = [];
 
       while (turnoAtual < MAX_TOOL_TURNS) {
         turnoAtual++;
@@ -357,6 +358,21 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
               fnArgs = { query: tc.function?.arguments || userPrompt };
             }
 
+            // Emite pulso direto do Subagente para a Tool ESPECÍFICA em execução
+            try {
+              emitBrainLinkEvent({
+                axon_id: `axon_${currentAgent.slug}_${fnName}`,
+                source_dendrite: currentAgent.slug,
+                target_dendrite: fnName,
+                source: currentAgent.slug,
+                target: fnName,
+                direction: 'FORWARD',
+                neurotransmitter_type: 'ACETILCOLINA',
+                intensity: 1.0,
+                metadata: { agentSlug: currentAgent.slug, toolName: fnName, status: 'executing' }
+              } as any);
+            } catch {}
+
             const resultadoTool = await executarFerramentaVinculada(
               fnName,
               fnArgs,
@@ -390,6 +406,21 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
               bloco.slug || bloco.tool || bloco.name || enabledTools[0]
             );
             const argsBloco = bloco.payload || bloco.params || bloco.arguments || bloco;
+
+            try {
+              emitBrainLinkEvent({
+                axon_id: `axon_${currentAgent.slug}_${toolAlvo}`,
+                source_dendrite: currentAgent.slug,
+                target_dendrite: toolAlvo,
+                source: currentAgent.slug,
+                target: toolAlvo,
+                direction: 'FORWARD',
+                neurotransmitter_type: 'ACETILCOLINA',
+                intensity: 1.0,
+                metadata: { agentSlug: currentAgent.slug, toolName: toolAlvo, status: 'executing' }
+              } as any);
+            } catch {}
+
             const resFallback = await executarFerramentaVinculada(
               toolAlvo,
               argsBloco,
@@ -455,12 +486,16 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
       )
       .catch(() => {});
 
+    // [NOVO] Extrai a lista única das ferramentas que foram efetivamente executadas neste ciclo
+    const executedTools = Array.from(new Set(resultadosBrutosFerramentas.map((r) => r.tool)));
+
     cadeiaExecucao.push({
       agentSlug: currentAgent.slug,
       agentName: currentAgent.name,
       agentType: currentAgent.agent_type || 'llm',
       responseInstruction: currentAgent.system_prompt,
-      output: stepOutput
+      output: stepOutput,
+      executedTools
     });
 
     try {
