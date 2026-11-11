@@ -120,26 +120,23 @@ export async function processarBiometriaESaudacao(
 
   // 4. Normalização Fonética Ampla para detecção da Wake Word ("Jarvis")
   // Transforma siglas como "J.A.R.V.I.S." em "jarvis" e remove acentos
+  // 4. Reconhecimento Fonético Abrangente de "Jarvis"
   const promptNormalizado = promptEfetivo
     .toLowerCase()
     .replace(/\bj\s*\.?\s*a\s*\.?\s*r\s*\.?\s*v\s*\.?\s*i\s*\.?\s*s\b/gi, 'jarvis')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
 
-  const regexWakeWord =
-    /(?:^|\s|\b)(jarvis|javis|jarves|javes|iarvis|yarvis|darvis|charvis|jarbas|chaves|ja\s+vi|ja\s+viu|ja\s+fiz|djarvis|djavis)(?:\b|\s|[!.,?]|$)/i;
+  const regexContemJarvis =
+    /(?:^|\s|\b)(jarvis|javis|jarves|javes|iarvis|yarvis|darvis|charvis|jarbas|chaves|ja\s+vi|ja\s+viu|ja\s+fiz)(?:\b|\s|[!.,?]|$)/i;
 
-  const falouJarvisAgora = regexWakeWord.test(promptNormalizado);
+  const falouJarvisAgora = regexContemJarvis.test(promptNormalizado);
   const sessionKey = (sessionId || 'sess_main_admin').toLowerCase();
-  const lastWakeTime = Math.max(
-    activeWakeSessions.get(sessionKey) || 0,
-    activeWakeSessions.get('__last_wake__') || 0
-  );
-  const emConversaAtiva = Date.now() - lastWakeTime < 30000;
+  const lastWakeTime = activeWakeSessions.get(sessionKey) || 0;
+  const estaEmJanelaDeConversaAtiva = Date.now() - lastWakeTime < 30000;
 
-  // Se for da vigília de fundo e ninguém disse "Jarvis" fora da janela de 30s, descarta em silêncio
-  if (isStrictWakeWordCheck && !falouJarvisAgora && !emConversaAtiva) {
-    console.log(`🔇 [Vigília Ignorou fala paralela sem "Jarvis"]: "${promptEfetivo}"`);
+  // Se veio da Vigília Automática e a pessoa NÃO disse "Jarvis" e NÃO está em conversa ativa -> IGNORA EM SILÊNCIO
+  if (isStrictWakeWordCheck && !falouJarvisAgora && !estaEmJanelaDeConversaAtiva) {
     return {
       interceptado: true,
       promptTranscrito: '',
@@ -158,11 +155,10 @@ export async function processarBiometriaESaudacao(
     };
   }
 
-  // Renova a janela de conversa ativa por 30 segundos
+  // Renova janela de conversa ativa por 30 segundos
   activeWakeSessions.set(sessionKey, Date.now());
-  activeWakeSessions.set('__last_wake__,', Date.now());
 
-  // 5. Biometria Vocal e Treinamento Voice Match
+   // 5. Biometria Vocal e Treinamento Voice Match
   if (rawAudioInput && typeof rawAudioInput === 'string' && rawAudioInput.length > 12) {
     try {
       const matchCadastro = promptEfetivo.match(
