@@ -17,7 +17,7 @@ export interface WhisperTranscriptionResult {
 function cleanGroqKey(raw: any): string {
   if (typeof raw !== 'string') return '';
   const cleaned = raw.replace(/[•*]/g, '').replace(/^Bearer\s+/i, '').trim();
-  // Permite letras, números, sublinhados e hífens das chaves reais da Groq
+  // Suporta letras, números, sublinhados (_) e traços (-) da chave Groq
   return /^gsk_[a-zA-Z0-9_\-]{15,}/i.test(cleaned) ? cleaned : '';
 }
 
@@ -81,7 +81,7 @@ export async function transcribeWithLocalWhisper(
     return { success: false, error: 'Buffer de áudio muito curto.' };
   }
 
-  // Verifica se o áudio já é um WAV válido (cabeçalho RIFF)
+  // Detecta o cabeçalho RIFF do WAV nativo enviado pelo frontend
   const isWavInput = audioBuffer.length >= 4 && audioBuffer.toString('utf8', 0, 4) === 'RIFF';
   const ext = isWavInput ? '.wav' : '.webm';
   const tempInputPath = path.join(os.tmpdir(), `jarvis_voice_${Date.now()}${ext}`);
@@ -97,17 +97,17 @@ export async function transcribeWithLocalWhisper(
 
     let finalAudioPath = tempInputPath;
 
-    // Se NÃO for WAV nativo (ex: WebM legado), converte via FFmpeg para WAV 16kHz
+    // Se NÃO for WAV nativo (ex: WebM legado), converte via FFmpeg usando a variável correta
     if (!isWavInput) {
-     await new Promise<void>((resolve) => {
-      const ff = spawn('ffmpeg', [
-        '-y', '-i', tempInputPath,
-        '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
-        tempWavPath
-      ]);
-      ff.on('close', () => resolve());
-      ff.on('error', () => resolve());
-    });
+      await new Promise<void>((resolve) => {
+        const ff = spawn('ffmpeg', [
+          '-y', '-i', tempInputPath,
+          '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
+          tempConvertedWavPath
+        ]);
+        ff.on('close', () => resolve());
+        ff.on('error', () => resolve());
+      });
 
       if (fs.existsSync(tempConvertedWavPath) && fs.statSync(tempConvertedWavPath).size > 600) {
         finalAudioPath = tempConvertedWavPath;
