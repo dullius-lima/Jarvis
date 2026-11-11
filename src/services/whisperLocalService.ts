@@ -17,8 +17,8 @@ export interface WhisperTranscriptionResult {
 function cleanGroqKey(raw: any): string {
   if (typeof raw !== 'string') return '';
   const cleaned = raw.replace(/[•*]/g, '').replace(/^Bearer\s+/i, '').trim();
-  // Aceita letras, números, sublinhados e hífens das chaves reais da Groq
-  return /^gsk_[a-zA-Z0-9_\-]{20,}/i.test(cleaned) ? cleaned : '';
+  // Permite letras, números, sublinhados e hífens das chaves reais da Groq
+  return /^gsk_[a-zA-Z0-9_\-]{15,}/i.test(cleaned) ? cleaned : '';
 }
 
 async function getGroqApiKey(): Promise<string> {
@@ -99,15 +99,15 @@ export async function transcribeWithLocalWhisper(
 
     // Se NÃO for WAV nativo (ex: WebM legado), converte via FFmpeg para WAV 16kHz
     if (!isWavInput) {
-      await new Promise<void>((resolve) => {
-        const ff = spawn('ffmpeg', [
-          '-y', '-i', tempInputPath,
-          '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
-          tempConvertedWavPath
-        ]);
-        ff.on('close', () => resolve());
-        ff.on('error', () => resolve());
-      });
+     await new Promise<void>((resolve) => {
+      const ff = spawn('ffmpeg', [
+        '-y', '-i', tempInputPath,
+        '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
+        tempWavPath
+      ]);
+      ff.on('close', () => resolve());
+      ff.on('error', () => resolve());
+    });
 
       if (fs.existsSync(tempConvertedWavPath) && fs.statSync(tempConvertedWavPath).size > 600) {
         finalAudioPath = tempConvertedWavPath;
