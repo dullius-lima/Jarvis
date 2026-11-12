@@ -288,6 +288,9 @@ function resetViewAndSelection() {
 }
 
 // 4. Envio de Comandos Unificado (Texto e Voz Desacoplados para Nunca Travar a UI)
+let isVoiceRequestInFlight = false;
+
+// 4. Envio de Comandos Unificado (Com trava de concorrência para Voz e Texto)
 async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
   const textToSend = (typeof overrideText === 'string' ? overrideText : promptText.value).trim();
   if (!textToSend) return;
@@ -295,8 +298,11 @@ async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
   const isBackgroundVoiceCheck =
     textToSend === '__WAKE_WORD_CHECK__' || textToSend === '__VAD_AUDIO_ONLY__';
 
-  // Só bloqueia duplicidade se for envio manual de texto; voz nunca trava o teclado!
-  if (!isBackgroundVoiceCheck) {
+  if (isBackgroundVoiceCheck) {
+    // Impede empilhamento de requisições de áudio enquanto o backend ou o TTS ainda está ativo
+    if (isVoiceRequestInFlight || isProcessing.value || isJarvisSpeaking.value) return;
+    isVoiceRequestInFlight = true;
+  } else {
     if (isProcessing.value) return;
     isProcessing.value = true;
     if (!overrideText) promptText.value = '';
@@ -333,9 +339,11 @@ async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
     const json = await res.json().catch(() => ({}));
     const payload = json.data || json;
 
-    // Se foi apenas conversa alheia ou ruído sem a palavra "Jarvis", ignora em silêncio!
+    // Se foi apenas conversa alheia ou ruído sem a palavra "Jarvis", ignora em silêncio
     if (payload?.silentIgnore || json?.silentIgnore || payload?.ignored) {
-      voiceStatusText.value = '🟢 Vigília Ativa: Diga "Jarvis"...';
+      if (!isJarvisAwake.value) {
+        voiceStatusText.value = '🟢 Vigília Ativa: Diga "Jarvis"...';
+      }
       return;
     }
 
@@ -355,19 +363,25 @@ async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
       executionTimeMs: payload?.executionTimeMs || json?.executionTimeMs || 0
     };
 
-    speakJarvisResponse(replyText);
+    const shouldKeepAwake = Boolean(
+      payload?.keepAwake || json?.keepAwake || isBackgroundVoiceCheck
+    );
+
+    speakJarvisResponse(replyText, shouldKeepAwake);
     await loadEcosystemData();
   } catch (err: any) {
     if (!isBackgroundVoiceCheck) {
       console.error('Falha no envio do comando:', err);
       const msg = 'Erro de comunicação com o núcleo do JARVIS.';
       lastResponse.value = { agent: 'JARVIS', text: msg, executionTimeMs: 0 };
-      speakJarvisResponse(msg);
+      speakJarvisResponse(msg, false);
     } else {
       voiceStatusText.value = '🟢 Vigília Ativa: Diga "Jarvis"...';
     }
   } finally {
-    if (!isBackgroundVoiceCheck) {
+    if (isBackgroundVoiceCheck) {
+      isVoiceRequestInFlight = false;
+    } else {
       isProcessing.value = false;
     }
   }
