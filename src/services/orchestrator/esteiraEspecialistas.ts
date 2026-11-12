@@ -266,6 +266,26 @@ export async function executarEsteiraEspecialistas(
                   params: {
                     type: 'object',
                     description: 'Objeto com parâmetros extras para envio de e-mail, agenda, WhatsApp ou API.'
+                  },
+                  number: {
+                    type: 'string',
+                    description: 'Número de telefone com DDI e DDD para envio de WhatsApp (ex: 556791289607).'
+                  },
+                  text: {
+                    type: 'string',
+                    description: 'Texto completo da mensagem a ser enviada via WhatsApp.'
+                  },
+                  endpoint: {
+                    type: 'string',
+                    description: 'URL completa customizada para rotas específicas de API (ex: Finnhub /stock/metric ou /company-news).'
+                  },
+                  collectionName: {
+                    type: 'string',
+                    description: 'Nome da coleção no PostgreSQL em minúsculas e underscore (ex: ativo_aapl, ativo_petr4).'
+                  },
+                  documentData: {
+                    type: 'object',
+                    description: 'Objeto JSON com os dados estruturados do ativo para salvar no banco.'
                   }
                 }
               }
@@ -316,8 +336,8 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
         }
       ];
 
-      // Loop Multi-Turno (até 3 turnos) para permitir: Consultar Sensor -> Executar Ação -> Auditar Estado
-      const MAX_TOOL_TURNS = 3;
+      // Loop Multi-Turno (até 5 turnos) para permitir: Consultar Sensor -> Executar Ação -> Auditar Estado
+      const MAX_TOOL_TURNS = 5;
       let turnoAtual = 0;
       let respostaTextualEspecialista = '';
 
