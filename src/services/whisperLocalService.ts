@@ -14,10 +14,13 @@ export interface WhisperTranscriptionResult {
   error?: string;
 }
 
+let cachedGroqKey = '';
+let cachedGroqKeyTimestamp = 0;
+let isLocalPythonWhisperBusy = false;
+
 function cleanGroqKey(raw: any): string {
   if (typeof raw !== 'string') return '';
   const cleaned = raw.replace(/[•*]/g, '').replace(/^Bearer\s+/i, '').trim();
-  // Suporta letras, números, sublinhados (_) e traços (-) da chave Groq
   return /^gsk_[a-zA-Z0-9_\-]{15,}/i.test(cleaned) ? cleaned : '';
 }
 
@@ -25,8 +28,12 @@ async function getGroqApiKey(): Promise<string> {
   const envKey = cleanGroqKey(process.env.GROQ_API_KEY) || cleanGroqKey(process.env.LLM_API_KEY);
   if (envKey) return envKey;
 
+  if (cachedGroqKey && Date.now() - cachedGroqKeyTimestamp < 60000) {
+    return cachedGroqKey;
+  }
+
   try {
-    const res = await pool.query("SELECT value FROM system_configs;");
+    const res = await pool.query('SELECT value FROM system_configs;');
     for (const row of res.rows) {
       const val = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
       const candidates = [
@@ -37,16 +44,24 @@ async function getGroqApiKey(): Promise<string> {
       ];
       for (const c of candidates) {
         const k = cleanGroqKey(c);
-        if (k) return k;
+        if (k) {
+          cachedGroqKey = k;
+          cachedGroqKeyTimestamp = Date.now();
+          return k;
+        }
       }
     }
   } catch {}
 
   try {
-    const agRes = await pool.query("SELECT api_key FROM ai_agents WHERE api_key IS NOT NULL;");
+    const agRes = await pool.query('SELECT api_key FROM ai_agents WHERE api_key IS NOT NULL;');
     for (const row of agRes.rows) {
       const k = cleanGroqKey(row.api_key);
-      if (k) return k;
+      if (k) {
+        cachedGroqKey = k;
+        cachedGroqKeyTimestamp = Date.now();
+        return k;
+      }
     }
   } catch {}
 
@@ -63,7 +78,6 @@ export async function transcribeWithLocalWhisper(
     return { success: false, error: 'Áudio Base64 vazio ou insuficiente.' };
   }
 
-  // Extrai apenas a base64 caso venha combinada com metadados biométricos
   let cleanBase64 = audioBase64;
   if (cleanBase64.includes('|DATA:')) {
     cleanBase64 = cleanBase64.split('|DATA:')[1] || cleanBase64;
@@ -77,12 +91,74 @@ export async function transcribeWithLocalWhisper(
     return { success: false, error: 'Falha ao decodificar Base64 de áudio.' };
   }
 
-  if (audioBuffer.length < 400) {
-    return { success: false, error: 'Buffer de áudio muito curto.' };
+  if (audioBuffer.length < 800) {
+    return { success: true, text: '', engine: 'skip-short-buffer', durationMs: 0 };
   }
 
-  // Detecta o cabeçalho RIFF do WAV nativo enviado pelo frontend
   const isWavInput = audioBuffer.length >= 4 && audioBuffer.toString('utf8', 0, 4) === 'RIFF';
+
+  // =========================================================================
+  // MOTOR 1: Groq Whisper Large V3 Turbo direto da RAM (Zero Disco / Zero CPU)
+  // =========================================================================
+  const groqKey = await getGroqApiKey();
+  if (groqKey) {
+    try {
+      const formData = new FormData();
+      const blob = new Blob([audioBuffer], { type: isWavInput ? 'audio/wav' : 'audio/webm' });
+      formData.append('file', blob, isWavInput ? 'speech.wav' : 'speech.webm');
+      formData.append('model', 'whisper-large-v3-turbo');
+      formData.append('language', 'pt');
+      formData.append('prompt', 'Jarvis. Oi Jarvis. Olá Jarvis. Comandos de voz em português.');
+      formData.append('response_format', 'json');
+      formData.append('temperature', '0.0');
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+
+      const resp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${groqKey}` },
+        body: formData,
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+
+      if (resp.ok) {
+        const data: any = await resp.json();
+        const transcribed = (data?.text || '').trim();
+        if (transcribed.length > 0) {
+          console.log(`⚡ [Groq Whisper Turbo] (${Date.now() - startTime}ms): "${transcribed}"`);
+        }
+        // IMPORTANTE: Retorna imediatamente mesmo se transcribed for "" (silêncio/ruído),
+        // impedindo que ruídos de fundo acionem o Python local na CPU!
+        return {
+          success: true,
+          text: transcribed,
+          engine: 'groq-whisper-large-v3-turbo',
+          model: 'whisper-large-v3-turbo',
+          durationMs: Date.now() - startTime
+        };
+      } else {
+        const errBody = await resp.text().catch(() => '');
+        console.warn(`⚠️ [Groq Whisper HTTP ${resp.status}]:`, errBody);
+      }
+    } catch (e: any) {
+      console.warn('⚠️ [Groq Whisper Erro]:', e?.message);
+    }
+  }
+
+  // =========================================================================
+  // MOTOR 2: Fallback Faster-Whisper Local Python (Com Trava de Concorrência)
+  // =========================================================================
+  if (isLocalPythonWhisperBusy) {
+    return {
+      success: false,
+      text: '',
+      error: 'Motor Whisper local já está processando outra requisição.'
+    };
+  }
+
+  isLocalPythonWhisperBusy = true;
   const ext = isWavInput ? '.wav' : '.webm';
   const tempInputPath = path.join(os.tmpdir(), `jarvis_voice_${Date.now()}${ext}`);
   const tempConvertedWavPath = `${tempInputPath}.converted.wav`;
@@ -94,10 +170,8 @@ export async function transcribeWithLocalWhisper(
 
   try {
     await fs.promises.writeFile(tempInputPath, audioBuffer);
-
     let finalAudioPath = tempInputPath;
 
-    // Se NÃO for WAV nativo (ex: WebM legado), converte via FFmpeg usando a variável correta
     if (!isWavInput) {
       await new Promise<void>((resolve) => {
         const ff = spawn('ffmpeg', [
@@ -105,8 +179,9 @@ export async function transcribeWithLocalWhisper(
           '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
           tempConvertedWavPath
         ]);
-        ff.on('close', () => resolve());
-        ff.on('error', () => resolve());
+        const killTimer = setTimeout(() => { try { ff.kill(); } catch {} resolve(); }, 4000);
+        ff.on('close', () => { clearTimeout(killTimer); resolve(); });
+        ff.on('error', () => { clearTimeout(killTimer); resolve(); });
       });
 
       if (fs.existsSync(tempConvertedWavPath) && fs.statSync(tempConvertedWavPath).size > 600) {
@@ -114,56 +189,6 @@ export async function transcribeWithLocalWhisper(
       }
     }
 
-    // =========================================================================
-    // MOTOR 1: Groq Whisper Large V3 Turbo (~200ms)
-    // =========================================================================
-    const groqKey = await getGroqApiKey();
-    if (groqKey) {
-      try {
-        const fileBytes = await fs.promises.readFile(finalAudioPath);
-        const formData = new FormData();
-        const isWav = finalAudioPath.endsWith('.wav');
-        const blob = new Blob([fileBytes], { type: isWav ? 'audio/wav' : 'audio/webm' });
-        formData.append('file', blob, isWav ? 'speech.wav' : 'speech.webm');
-        formData.append('model', 'whisper-large-v3-turbo');
-        formData.append('language', 'pt');
-        formData.append('prompt', 'Jarvis. Oi Jarvis. Olá Jarvis. Comandos de voz em português.');
-        formData.append('response_format', 'json');
-        formData.append('temperature', '0.0');
-
-        const resp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${groqKey}` },
-          body: formData
-        });
-
-        if (resp.ok) {
-          const data: any = await resp.json();
-          const transcribed = (data?.text || '').trim();
-          await cleanupFiles();
-
-          if (transcribed.length > 0) {
-            console.log(`⚡ [Groq Whisper Turbo] (${Date.now() - startTime}ms): "${transcribed}"`);
-            return {
-              success: true,
-              text: transcribed,
-              engine: 'groq-whisper-large-v3-turbo',
-              model: 'whisper-large-v3-turbo',
-              durationMs: Date.now() - startTime
-            };
-          }
-        } else {
-          const errBody = await resp.text().catch(() => '');
-          console.warn(`⚠️ [Groq Whisper HTTP ${resp.status}]:`, errBody);
-        }
-      } catch (e: any) {
-        console.warn('⚠️ [Groq Whisper Erro]:', e?.message);
-      }
-    }
-
-    // =========================================================================
-    // MOTOR 2: Fallback Faster-Whisper Local Python
-    // =========================================================================
     const scriptPath = path.resolve(process.cwd(), 'scripts', 'whisper_transcribe.py');
     const venvPython = path.resolve(process.cwd(), 'whisper-env', 'bin', 'python3');
     const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
@@ -176,10 +201,16 @@ export async function transcribeWithLocalWhisper(
       let stdoutData = '';
       let stderrData = '';
 
+      const timeoutTimer = setTimeout(() => {
+        try { pyProcess.kill('SIGKILL'); } catch {}
+      }, 10000);
+
       pyProcess.stdout.on('data', (chunk) => { stdoutData += chunk.toString('utf8'); });
       pyProcess.stderr.on('data', (chunk) => { stderrData += chunk.toString('utf8'); });
 
       pyProcess.on('close', async () => {
+        clearTimeout(timeoutTimer);
+        isLocalPythonWhisperBusy = false;
         await cleanupFiles();
         const durationMs = Date.now() - startTime;
         try {
@@ -197,11 +228,14 @@ export async function transcribeWithLocalWhisper(
       });
 
       pyProcess.on('error', async (err) => {
+        clearTimeout(timeoutTimer);
+        isLocalPythonWhisperBusy = false;
         await cleanupFiles();
         resolve({ success: false, error: err.message });
       });
     });
   } catch (error: any) {
+    isLocalPythonWhisperBusy = false;
     await cleanupFiles();
     return { success: false, error: error.message };
   }
