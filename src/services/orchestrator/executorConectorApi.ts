@@ -21,10 +21,10 @@ export async function executarConectorApiUniversal(
   if (typeof connectorSlugOrAgent === 'object' && connectorSlugOrAgent !== null) {
     connectorName = connectorSlugOrAgent.name || connectorSlugOrAgent.slug || 'custom_connector';
     endpointUrl =
-      connectorSlugOrAgent.endpoint_url ||
-      connectorSlugOrAgent.config?.endpoint_url ||
       taskArgs?.url ||
       taskArgs?.endpoint ||
+      connectorSlugOrAgent.endpoint_url ||
+      connectorSlugOrAgent.config?.endpoint_url ||
       '';
     httpMethod = (
       taskArgs?.method ||
@@ -188,7 +188,10 @@ export async function executarConectorApiUniversal(
       headers['x-api-key'] = tokenLimpo;
     }
     const jaTemTokenNaUrl = /[?&](token|apikey|api_key|key)=/i.test(urlFinal);
-    const deveAnexarTokenNaQuery = authType === 'query_token' || urlFinal.includes('brapi.dev');
+    const deveAnexarTokenNaQuery =
+      authType === 'query_token' ||
+      urlFinal.includes('brapi.dev') ||
+      urlFinal.includes('finnhub.io');
     if (!jaTemTokenNaUrl && deveAnexarTokenNaQuery) {
       const sep = urlFinal.includes('?') ? '&' : '?';
       urlFinal = `${urlFinal}${sep}${encodeURIComponent(queryParamKey)}=${encodeURIComponent(
