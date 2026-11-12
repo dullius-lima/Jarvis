@@ -1,9 +1,8 @@
-// src/services/whisperLocalService.ts
-import { spawn } from 'child_process';
+import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { pool } from '../config/database.js';
+import readline from 'readline';
 
 export interface WhisperTranscriptionResult {
   success: boolean;
@@ -14,63 +13,66 @@ export interface WhisperTranscriptionResult {
   error?: string;
 }
 
-let cachedGroqKey = '';
-let cachedGroqKeyTimestamp = 0;
-let isLocalPythonWhisperBusy = false;
+let pyWorker: ChildProcessWithoutNullStreams | null = null;
+let pyWorkerReady = false;
+let pendingWorkerResolvers: Array<(res: any) => void> = [];
 
-function cleanGroqKey(raw: any): string {
-  if (typeof raw !== 'string') return '';
-  const cleaned = raw.replace(/[•*]/g, '').replace(/^Bearer\s+/i, '').trim();
-  return /^gsk_[a-zA-Z0-9_\-]{15,}/i.test(cleaned) ? cleaned : '';
-}
+function startPersistentWhisperWorker() {
+  if (pyWorker) return;
+  const scriptPath = path.resolve(process.cwd(), 'scripts', 'whisper_worker.py');
+  if (!fs.existsSync(scriptPath)) return;
 
-async function getGroqApiKey(): Promise<string> {
-  const envKey = cleanGroqKey(process.env.GROQ_API_KEY) || cleanGroqKey(process.env.LLM_API_KEY);
-  if (envKey) return envKey;
-
-  if (cachedGroqKey && Date.now() - cachedGroqKeyTimestamp < 60000) {
-    return cachedGroqKey;
-  }
+  const venvPython = path.resolve(process.cwd(), 'whisper-env', 'bin', 'python3');
+  const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
+  const modelSize = process.env.WHISPER_MODEL_SIZE || 'base';
 
   try {
-    const res = await pool.query('SELECT value FROM system_configs;');
-    for (const row of res.rows) {
-      const val = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
-      const candidates = [
-        val?.saved_keys?.groq,
-        val?.api_key,
-        val?.groq_api_key,
-        ...(val?.saved_keys ? Object.values(val.saved_keys) : [])
-      ];
-      for (const c of candidates) {
-        const k = cleanGroqKey(c);
-        if (k) {
-          cachedGroqKey = k;
-          cachedGroqKeyTimestamp = Date.now();
-          return k;
+    pyWorker = spawn(pythonCmd, [scriptPath, modelSize], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    const rl = readline.createInterface({ input: pyWorker.stdout });
+    rl.on('line', (line) => {
+      try {
+        const data = JSON.parse(line.trim());
+        if (typeof data.ready === 'boolean') {
+          pyWorkerReady = data.ready;
+          if (pyWorkerReady) {
+            console.log(`🧠 [Whisper RAM Worker] Modelo '${modelSize}' aquecido e pronto em RAM (100% Offline / Zero Tokens).`);
+          } else {
+            console.error(`❌ [Whisper RAM Worker] Erro ao iniciar modelo:`, data.error);
+          }
+          return;
         }
-      }
-    }
-  } catch {}
+        const nextResolver = pendingWorkerResolvers.shift();
+        if (nextResolver) nextResolver(data);
+      } catch {}
+    });
 
-  try {
-    const agRes = await pool.query('SELECT api_key FROM ai_agents WHERE api_key IS NOT NULL;');
-    for (const row of agRes.rows) {
-      const k = cleanGroqKey(row.api_key);
-      if (k) {
-        cachedGroqKey = k;
-        cachedGroqKeyTimestamp = Date.now();
-        return k;
-      }
-    }
-  } catch {}
+    pyWorker.stderr.on('data', (d) => {
+      const msg = d.toString().trim();
+      if (msg) console.warn(`⚠️ [Whisper Worker Stderr]: ${msg}`);
+    });
 
-  return '';
+    pyWorker.on('close', () => {
+      pyWorker = null;
+      pyWorkerReady = false;
+      while (pendingWorkerResolvers.length > 0) {
+        const r = pendingWorkerResolvers.shift();
+        if (r) r({ success: false, text: '', error: 'Worker reiniciando' });
+      }
+    });
+  } catch {
+    pyWorker = null;
+  }
 }
+
+startPersistentWhisperWorker();
 
 export async function transcribeWithLocalWhisper(
   audioBase64: string,
-  modelSize: string = process.env.WHISPER_MODEL_SIZE || 'base'
+  modelSize: string = process.env.WHISPER_MODEL_SIZE || 'base',
+  _allowLocalFallbackOnEmpty = true
 ): Promise<WhisperTranscriptionResult> {
   const startTime = Date.now();
 
@@ -95,148 +97,54 @@ export async function transcribeWithLocalWhisper(
     return { success: true, text: '', engine: 'skip-short-buffer', durationMs: 0 };
   }
 
+  startPersistentWhisperWorker();
   const isWavInput = audioBuffer.length >= 4 && audioBuffer.toString('utf8', 0, 4) === 'RIFF';
-
-  // =========================================================================
-  // MOTOR 1: Groq Whisper Large V3 Turbo direto da RAM (Zero Disco / Zero CPU)
-  // =========================================================================
-  const groqKey = await getGroqApiKey();
-  if (groqKey) {
-    try {
-      const formData = new FormData();
-      const blob = new Blob([audioBuffer], { type: isWavInput ? 'audio/wav' : 'audio/webm' });
-      formData.append('file', blob, isWavInput ? 'speech.wav' : 'speech.webm');
-      formData.append('model', 'whisper-large-v3-turbo');
-      formData.append('language', 'pt');
-      formData.append('prompt', 'Jarvis. Oi Jarvis. Olá Jarvis. Comandos de voz em português.');
-      formData.append('response_format', 'json');
-      formData.append('temperature', '0.0');
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8000);
-
-      const resp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${groqKey}` },
-        body: formData,
-        signal: controller.signal
-      });
-      clearTimeout(timer);
-
-      if (resp.ok) {
-        const data: any = await resp.json();
-        const transcribed = (data?.text || '').trim();
-        if (transcribed.length > 0) {
-          console.log(`⚡ [Groq Whisper Turbo] (${Date.now() - startTime}ms): "${transcribed}"`);
-        }
-        // IMPORTANTE: Retorna imediatamente mesmo se transcribed for "" (silêncio/ruído),
-        // impedindo que ruídos de fundo acionem o Python local na CPU!
-        return {
-          success: true,
-          text: transcribed,
-          engine: 'groq-whisper-large-v3-turbo',
-          model: 'whisper-large-v3-turbo',
-          durationMs: Date.now() - startTime
-        };
-      } else {
-        const errBody = await resp.text().catch(() => '');
-        console.warn(`⚠️ [Groq Whisper HTTP ${resp.status}]:`, errBody);
-      }
-    } catch (e: any) {
-      console.warn('⚠️ [Groq Whisper Erro]:', e?.message);
-    }
-  }
-
-  // =========================================================================
-  // MOTOR 2: Fallback Faster-Whisper Local Python (Com Trava de Concorrência)
-  // =========================================================================
-  if (isLocalPythonWhisperBusy) {
-    return {
-      success: false,
-      text: '',
-      error: 'Motor Whisper local já está processando outra requisição.'
-    };
-  }
-
-  isLocalPythonWhisperBusy = true;
   const ext = isWavInput ? '.wav' : '.webm';
-  const tempInputPath = path.join(os.tmpdir(), `jarvis_voice_${Date.now()}${ext}`);
-  const tempConvertedWavPath = `${tempInputPath}.converted.wav`;
+  const tempInputPath = path.join(os.tmpdir(), `jarvis_voice_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${ext}`);
 
-  const cleanupFiles = async () => {
+  const cleanupFile = async () => {
     try { if (fs.existsSync(tempInputPath)) await fs.promises.unlink(tempInputPath); } catch {}
-    try { if (fs.existsSync(tempConvertedWavPath)) await fs.promises.unlink(tempConvertedWavPath); } catch {}
   };
 
   try {
     await fs.promises.writeFile(tempInputPath, audioBuffer);
-    let finalAudioPath = tempInputPath;
 
-    if (!isWavInput) {
-      await new Promise<void>((resolve) => {
-        const ff = spawn('ffmpeg', [
-          '-y', '-i', tempInputPath,
-          '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
-          tempConvertedWavPath
-        ]);
-        const killTimer = setTimeout(() => { try { ff.kill(); } catch {} resolve(); }, 4000);
-        ff.on('close', () => { clearTimeout(killTimer); resolve(); });
-        ff.on('error', () => { clearTimeout(killTimer); resolve(); });
+    if (pyWorker && pyWorker.stdin.writable) {
+      const workerResult: any = await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          resolve({ success: false, text: '', error: 'Timeout no Whisper Worker (12s)' });
+        }, 12000);
+
+        pendingWorkerResolvers.push((res) => {
+          clearTimeout(timer);
+          resolve(res);
+        });
+
+        pyWorker!.stdin.write(tempInputPath + '\n');
       });
 
-      if (fs.existsSync(tempConvertedWavPath) && fs.statSync(tempConvertedWavPath).size > 600) {
-        finalAudioPath = tempConvertedWavPath;
+      await cleanupFile();
+      const durationMs = Date.now() - startTime;
+      if (workerResult?.error) {
+        console.warn(`⚠️ [Whisper RAM Worker Erro] (${durationMs}ms): ${workerResult.error}`);
+      } else {
+        console.log(`🐍 [Whisper RAM Worker] (${durationMs}ms | Pico: ${workerResult?.peak ?? '?'} | Bytes: ${audioBuffer.length}): "${workerResult?.text || ''}"`);
       }
+
+      return {
+        success: Boolean(workerResult?.success),
+        text: (workerResult?.text || '').trim(),
+        engine: 'faster-whisper-local-ram',
+        model: modelSize,
+        durationMs,
+        error: workerResult?.error
+      };
     }
 
-    const scriptPath = path.resolve(process.cwd(), 'scripts', 'whisper_transcribe.py');
-    const venvPython = path.resolve(process.cwd(), 'whisper-env', 'bin', 'python3');
-    const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
-
-    return await new Promise<WhisperTranscriptionResult>((resolve) => {
-      const pyProcess = spawn(pythonCmd, [scriptPath, finalAudioPath, modelSize], {
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-
-      let stdoutData = '';
-      let stderrData = '';
-
-      const timeoutTimer = setTimeout(() => {
-        try { pyProcess.kill('SIGKILL'); } catch {}
-      }, 10000);
-
-      pyProcess.stdout.on('data', (chunk) => { stdoutData += chunk.toString('utf8'); });
-      pyProcess.stderr.on('data', (chunk) => { stderrData += chunk.toString('utf8'); });
-
-      pyProcess.on('close', async () => {
-        clearTimeout(timeoutTimer);
-        isLocalPythonWhisperBusy = false;
-        await cleanupFiles();
-        const durationMs = Date.now() - startTime;
-        try {
-          const lines = stdoutData.trim().split('\n');
-          const lastJsonLine = lines[lines.length - 1] || '{}';
-          const parsed = JSON.parse(lastJsonLine);
-          resolve({ ...parsed, durationMs });
-        } catch {
-          resolve({
-            success: false,
-            durationMs,
-            error: `Falha na saída do Whisper: ${stderrData || stdoutData}`
-          });
-        }
-      });
-
-      pyProcess.on('error', async (err) => {
-        clearTimeout(timeoutTimer);
-        isLocalPythonWhisperBusy = false;
-        await cleanupFiles();
-        resolve({ success: false, error: err.message });
-      });
-    });
+    await cleanupFile();
+    return { success: false, text: '', error: 'Worker Python ainda iniciando.' };
   } catch (error: any) {
-    isLocalPythonWhisperBusy = false;
-    await cleanupFiles();
-    return { success: false, error: error.message };
+    await cleanupFile();
+    return { success: false, text: '', error: error.message };
   }
 }

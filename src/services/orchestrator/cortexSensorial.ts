@@ -59,7 +59,7 @@ export async function processarBiometriaESaudacao(
   // 2. Transcrição de áudio via Whisper (Groq Turbo 200ms ou Faster-Whisper Local)
   if (needsTranscription && audioDataOnly && audioDataOnly.length > 150 && audioDataOnly !== 'SPEECH_SAMPLE') {
     try {
-      const whisperRes: any = await transcribeWithLocalWhisper(audioDataOnly);
+      const whisperRes: any = await transcribeWithLocalWhisper(audioDataOnly, "base", isDirectMicClick);
       const texto = typeof whisperRes === 'string' ? whisperRes.trim() : (whisperRes?.text || '').trim();
 
       const ehRuido = /^(obrigad[oa]|legendas|amara\.org|inscreva-se|tchau|até logo|silêncio|\.+|\s*)$/i.test(

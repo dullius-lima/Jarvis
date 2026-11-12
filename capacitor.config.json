@@ -1,0 +1,10 @@
+{
+  "appId": "com.matheus.jarvis",
+  "appName": "JARVIS Core",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "url": "http://163.176.111.18",
+    "cleartext": true
+  }
+}
