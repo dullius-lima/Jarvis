@@ -242,8 +242,10 @@ const {
   ensureCameraAndCaptureFrame, toggleWebcam, toggleScreenShare, stopAllMedia
 } = useMediaStream();
 
+// Desestruturação de highlightedToolSlugs de useMemoryOrbs
 const {
   lastTelemetry, highlightedAgentSlug, highlightedStatusColor,
+  highlightedToolSlugs,
   fetchSessionMemoryOrbs, registerAgentExecution, drawMemoryOrbsOnCanvas
 } = useMemoryOrbs();
 
@@ -255,6 +257,7 @@ const {
   sendCommand(spokenText, audioBase64);
 });
 
+// Repasse de highlightedToolSlugs para useNeuralCanvas
 const {
   cameraZoom, resetView, startNeuralCanvasLoop, stopAnimationLoop,
   onMouseDown, onMouseMove, onMouseUp, onWheel, onTouchStart, onTouchMove, onTouchEnd
@@ -267,6 +270,7 @@ const {
   drawMemoryOrbsOnCanvas,
   highlightedAgentSlug,
   highlightedStatusColor,
+  highlightedToolSlugs,
   isJarvisAwake,
   isJarvisSpeaking,
   isProcessing,
@@ -283,7 +287,6 @@ function resetViewAndSelection() {
   resetView();
 }
 
-// 4. Envio de Comandos Unificado
 // 4. Envio de Comandos Unificado (Texto e Voz Desacoplados para Nunca Travar a UI)
 async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
   const textToSend = (typeof overrideText === 'string' ? overrideText : promptText.value).trim();
