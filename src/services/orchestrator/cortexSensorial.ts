@@ -30,6 +30,10 @@ export async function processarBiometriaESaudacao(
   let isVoiceIdentified = false;
   let promptEfetivo = (userPrompt || '').trim();
 
+  const sessionKey = (sessionId || 'sess_main_admin').toLowerCase();
+  const lastWakeTime = activeWakeSessions.get(sessionKey) || 0;
+  const estaEmJanelaDeConversaAtiva = Date.now() - lastWakeTime < 30000;
+
   const isStrictWakeWordCheck = promptEfetivo === '__WAKE_WORD_CHECK__';
   const isDirectMicClick = promptEfetivo === '__VAD_AUDIO_ONLY__';
   const needsTranscription = isStrictWakeWordCheck || isDirectMicClick || promptEfetivo === '';
@@ -76,9 +80,8 @@ export async function processarBiometriaESaudacao(
 
   // 3. Tratamento quando não há fala identificável
   if (!promptEfetivo || promptEfetivo === '__VAD_AUDIO_ONLY__' || promptEfetivo === '__WAKE_WORD_CHECK__') {
-    // Se o usuário clicou no botão do microfone para falar e nada foi captado, informa com voz
     if (isDirectMicClick) {
-      const msgNaoOuvi = `Não consegui captar o áudio com clareza, ${activeSpeakerName}. Toque no microfone e repita o comando.`;
+      const msgNaoOuvi = `Não consegui captar o áudio com clareza, ${activeSpeakerName}. Pode repetir o comando?`;
       return {
         interceptado: true,
         promptTranscrito: '',
@@ -88,6 +91,7 @@ export async function processarBiometriaESaudacao(
         respostaPronta: {
           success: true,
           triggeredSuccess: true,
+          keepAwake: estaEmJanelaDeConversaAtiva,
           agent: 'JARVIS',
           agentId: 'jarvis_core',
           nodeType: 'core',
@@ -99,7 +103,6 @@ export async function processarBiometriaESaudacao(
       };
     }
 
-    // Se for da vigília de fundo automática, descarta em absoluto silêncio
     return {
       interceptado: true,
       promptTranscrito: '',
@@ -110,6 +113,7 @@ export async function processarBiometriaESaudacao(
         success: true,
         ignored: true,
         silentIgnore: true,
+        keepAwake: estaEmJanelaDeConversaAtiva,
         agent: 'JARVIS',
         agentId: 'jarvis_core',
         response: '',
@@ -119,8 +123,6 @@ export async function processarBiometriaESaudacao(
   }
 
   // 4. Normalização Fonética Ampla para detecção da Wake Word ("Jarvis")
-  // Transforma siglas como "J.A.R.V.I.S." em "jarvis" e remove acentos
-  // 4. Reconhecimento Fonético Abrangente de "Jarvis"
   const promptNormalizado = promptEfetivo
     .toLowerCase()
     .replace(/\bj\s*\.?\s*a\s*\.?\s*r\s*\.?\s*v\s*\.?\s*i\s*\.?\s*s\b/gi, 'jarvis')
@@ -131,9 +133,6 @@ export async function processarBiometriaESaudacao(
     /(?:^|\s|\b)(jarvis|javis|jarves|javes|iarvis|yarvis|darvis|charvis|jarbas|chaves|ja\s+vi|ja\s+viu|ja\s+fiz)(?:\b|\s|[!.,?]|$)/i;
 
   const falouJarvisAgora = regexContemJarvis.test(promptNormalizado);
-  const sessionKey = (sessionId || 'sess_main_admin').toLowerCase();
-  const lastWakeTime = activeWakeSessions.get(sessionKey) || 0;
-  const estaEmJanelaDeConversaAtiva = Date.now() - lastWakeTime < 30000;
 
   // Se veio da Vigília Automática e a pessoa NÃO disse "Jarvis" e NÃO está em conversa ativa -> IGNORA EM SILÊNCIO
   if (isStrictWakeWordCheck && !falouJarvisAgora && !estaEmJanelaDeConversaAtiva) {
@@ -147,6 +146,7 @@ export async function processarBiometriaESaudacao(
         success: true,
         ignored: true,
         silentIgnore: true,
+        keepAwake: false,
         agent: 'JARVIS',
         agentId: 'jarvis_core',
         response: '',
@@ -158,7 +158,6 @@ export async function processarBiometriaESaudacao(
   // Renova janela de conversa ativa por 30 segundos
   activeWakeSessions.set(sessionKey, Date.now());
 
-   // 5. Biometria Vocal e Treinamento Voice Match
   // 5. Biometria Vocal e Treinamento Voice Match
   if (rawAudioInput && typeof rawAudioInput === 'string' && rawAudioInput.length > 12) {
     try {
@@ -173,11 +172,11 @@ export async function processarBiometriaESaudacao(
 
         let respostaCadastro = '';
         if (enrolled.samplesCount === 1) {
-          respostaCadastro = `Perfeito, ${nomeDetectado}! Gravei a 1ª amostra da sua voz. Diga a segunda frase para calibrar.`;
+          respostaCadastro = `Perfeito, ${nomeDetectado}! Gravei a primeira amostra da sua voz. Diga mais uma frase para calibrar.`;
         } else if (enrolled.samplesCount === 2) {
-          respostaCadastro = `Excelente, ${nomeDetectado}! 2ª amostra calibrada. Diga mais uma frase para finalizar.`;
+          respostaCadastro = `Excelente, ${nomeDetectado}! Segunda amostra calibrada. Diga uma última frase para finalizar.`;
         } else {
-          respostaCadastro = `Treinamento Voice Match concluído para ${nomeDetectado}! Já reconheço sua voz automaticamente.`;
+          respostaCadastro = `Treinamento de voz concluído para ${nomeDetectado}! Já reconheço sua voz automaticamente.`;
         }
 
         appendShortTermMemory(sessionId, 'user', promptEfetivo);
@@ -197,6 +196,7 @@ export async function processarBiometriaESaudacao(
           respostaPronta: {
             success: true,
             triggeredSuccess: true,
+            keepAwake: true,
             agent: 'JARVIS (Voice Match)',
             agentId: 'jarvis_core',
             nodeType: 'core',
@@ -208,7 +208,6 @@ export async function processarBiometriaESaudacao(
         };
       }
 
-      // Identifica o locutor pelo pacote acústico completo
       const checagemVoz = await identifySpeaker(rawAudioInput);
       if (checagemVoz && checagemVoz.identified) {
         activeSpeakerName = checagemVoz.name;
@@ -243,6 +242,7 @@ export async function processarBiometriaESaudacao(
       respostaPronta: {
         success: true,
         triggeredSuccess: true,
+        keepAwake: true,
         agent: 'JARVIS',
         agentId: 'jarvis_core',
         nodeType: 'core',
