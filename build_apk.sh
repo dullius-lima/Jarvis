@@ -1,28 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
-
-export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac))))
-export ANDROID_HOME=$HOME/android-sdk
-export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-
-echo "☕ Java ativo para compilação:"
-java -version
-
-echo "🚀 1. Compilando Frontend Vue..."
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export ANDROID_HOME=/home/ubuntu/android-sdk
+echo "sdk.dir=/home/ubuntu/android-sdk" > android/local.properties
+rm -rf public/download dist/public/download android/app/src/main/assets/public
 npm run build:frontend
-
-echo "🔄 2. Sincronizando com o projeto Android..."
 npx cap sync android
-
-echo "📦 3. Compilando o APK com Gradle..."
-cd android
-chmod +x gradlew
-./gradlew assembleDebug
-
-echo "🚚 4. Movendo APK para a rota pública de download..."
-cd ..
-mkdir -p dist/public/download
-cp android/app/build/outputs/apk/debug/app-debug.apk dist/public/download/jarvis.apk
-
-echo "✅ Sucesso! APK compilado e pronto para download:"
-echo "👉 https://163.176.111.18/download/jarvis.apk"
+cd android && ./gradlew assembleDebug
+mkdir -p /home/ubuntu/jarvis_releases
+cp -f app/build/outputs/apk/debug/app-debug.apk /home/ubuntu/jarvis_releases/jarvis.apk
+chmod 644 /home/ubuntu/jarvis_releases/jarvis.apk
+ls -lh /home/ubuntu/jarvis_releases/jarvis.apk

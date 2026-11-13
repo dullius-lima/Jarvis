@@ -114,6 +114,8 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // 1. Módulos Principais de Rotas API
+
+app.get('/download/jarvis.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis.apk', 'jarvis.apk'));
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/agents', agentRoutes);
 app.use('/api/v1/rag', ragRoutes);
@@ -220,6 +222,28 @@ app.delete('/api/v1/voice-profiles/:id', async (req: Request, res: Response) => 
 
 // 6. Áudio & Voz do JARVIS
 // Gravação de áudio de referência para voz
+
+app.get('/api/v1/audio/voice-settings', async (_req: Request, res: Response) => {
+  const d = { voice: 'pt-BR-AntonioNeural', rate: '+8%', pitch: '-4Hz', mode: 'edge' };
+  try {
+    const cp = path.join(process.cwd(), 'assets', 'voices', 'voice_config.json');
+    const sp = path.join(process.cwd(), 'assets', 'voices', 'jarvis_reference.wav');
+    const cur = fs.existsSync(cp) ? { ...d, ...JSON.parse(fs.readFileSync(cp, 'utf8')) } : d;
+    return res.status(200).json({ success: true, data: { ...cur, hasClonedSample: fs.existsSync(sp) } });
+  } catch { return res.status(200).json({ success: true, data: { ...d, hasClonedSample: false } }); }
+});
+
+app.post('/api/v1/audio/voice-settings', async (req: Request, res: Response) => {
+  try {
+    const { voice = 'pt-BR-AntonioNeural', rate = '+8%', pitch = '-4Hz', mode = 'edge' } = req.body || {};
+    const dir = path.join(process.cwd(), 'assets', 'voices');
+    await fs.promises.mkdir(dir, { recursive: true });
+    const payload = { voice, rate, pitch, mode };
+    await fs.promises.writeFile(path.join(dir, 'voice_config.json'), JSON.stringify(payload, null, 2));
+    return res.status(200).json({ success: true, data: payload });
+  } catch (err: any) { return res.status(500).json({ success: false, error: err.message }); }
+});
+
 app.post('/api/v1/audio/voice-sample', async (req: Request, res: Response) => {
   try {
     const { audioBase64 } = req.body || {};
@@ -244,7 +268,7 @@ app.post('/api/v1/audio/voice-sample', async (req: Request, res: Response) => {
 // Síntese de fala offline / TTS
 app.post('/api/v1/audio/speak', async (req: Request, res: Response) => {
   try {
-    const { text, mode = 'auto' } = req.body || {};
+    const { text, mode = 'auto', voice = '', rate = '', pitch = '' } = req.body || {};
     if (!text) return res.status(400).json({ success: false, error: 'Texto obrigatório.' });
 
     const cleanText = String(text)
@@ -256,7 +280,7 @@ app.post('/api/v1/audio/speak', async (req: Request, res: Response) => {
     const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
     const scriptPath = path.join(process.cwd(), 'scripts', 'jarvis_tts.py');
 
-    const py = spawn(pythonCmd, [scriptPath, cleanText, mode]);
+    const py = spawn(pythonCmd, [scriptPath, cleanText, String(mode), String(voice), String(rate), String(pitch)]);
     let out = '';
     py.stdout.on('data', (d) => (out += d.toString()));
     py.on('close', () => {

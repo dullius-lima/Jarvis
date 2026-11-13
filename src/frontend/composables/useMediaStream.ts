@@ -1,5 +1,3 @@
-// Webcam inteligente, captura de tela e frames Base64
-
 import { ref } from 'vue';
 
 export function useMediaStream() {
@@ -11,16 +9,27 @@ export function useMediaStream() {
   function requiresCameraActivation(text: string): boolean {
     const lower = (text || '').toLowerCase();
     return (
-      lower.includes('ative a câmera') || lower.includes('ativar a câmera') ||
-      lower.includes('ativa a câmera') || lower.includes('ligue a câmera') ||
-      lower.includes('ligar a câmera') || lower.includes('abra a câmera') ||
+      lower.includes('ative a câmera') || lower.includes('ative a camera') ||
+      lower.includes('ativar a câmera') || lower.includes('ativar a camera') ||
+      lower.includes('ativa a câmera') || lower.includes('ativa a camera') ||
+      lower.includes('ligue a câmera') || lower.includes('ligue a camera') ||
+      lower.includes('ligar a câmera') || lower.includes('ligar a camera') ||
+      lower.includes('abra a câmera') || lower.includes('abra a camera') ||
+      lower.includes('câmera traseira') || lower.includes('camera traseira') ||
+      lower.includes('câmera frontal') || lower.includes('camera frontal') ||
       lower.includes('está me vendo') || lower.includes('esta me vendo') ||
       lower.includes('tá me vendo') || lower.includes('ta me vendo') ||
       lower.includes('consegue me ver') || lower.includes('você me vê') ||
       lower.includes('voce me ve') || lower.includes('olhe para mim') ||
-      lower.includes('olha pra mim') || lower.includes('como eu estou') ||
+      lower.includes('olha pra mim') || lower.includes('olha isso') ||
+      lower.includes('o que é isso') || lower.includes('como eu estou') ||
       lower.includes('quem sou eu')
     );
+  }
+
+  function wantsRearCamera(text: string): boolean {
+    const lower = (text || '').toLowerCase();
+    return lower.includes('traseira') || lower.includes('de trás') || lower.includes('de tras');
   }
 
   function captureCurrentVideoFrame(): string | null {
@@ -38,11 +47,18 @@ export function useMediaStream() {
     }
   }
 
-  async function ensureCameraAndCaptureFrame(): Promise<string | null> {
+  async function ensureCameraAndCaptureFrame(preferRear = false): Promise<string | null> {
     try {
+      if (preferRear && isCameraActive.value) {
+        stopAllMedia();
+      }
       if (!activeMediaStream || !activeMediaStream.active || !isCameraActive.value) {
         activeMediaStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: 'user' },
+          video: {
+            width: 640,
+            height: 480,
+            facingMode: preferRear ? { ideal: 'environment' } : 'user'
+          },
           audio: false
         });
         if (videoElement.value) {
@@ -50,7 +66,7 @@ export function useMediaStream() {
           await videoElement.value.play().catch(() => {});
         }
         isCameraActive.value = true;
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((r) => setTimeout(r, 450));
       }
       return captureCurrentVideoFrame();
     } catch (err) {
@@ -109,6 +125,7 @@ export function useMediaStream() {
     isCameraActive,
     isScreenActive,
     requiresCameraActivation,
+    wantsRearCamera,
     captureCurrentVideoFrame,
     ensureCameraAndCaptureFrame,
     toggleWebcam,

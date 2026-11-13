@@ -7,7 +7,8 @@ export const AGENT_PALETTE = [
   '#8b5cf6', '#ec4899', '#14b8a6', '#f43f5e'
 ];
 
-export function useEcosystem(sessionId: string) {
+export function useEcosystem(sid: string) {
+  let sessionId = sid;
   const dynamicAgents = ref<any[]>([]);
   const savedConnectionsCatalog = ref<any[]>([]);
   const memoryDots = ref<any[]>([]);
@@ -20,7 +21,7 @@ export function useEcosystem(sessionId: string) {
         ag.tools.forEach((t: string) => used.add(String(t).toLowerCase()));
       }
     });
-    return used.size;
+    return used.size || savedConnectionsCatalog.value.length;
   });
 
   function getConnectionMeta(toolId: string) {
@@ -52,6 +53,7 @@ export function useEcosystem(sessionId: string) {
 
   async function loadEcosystemData() {
     try {
+      try { const sr = await fetch('/api/v1/memory/sessions'); const sj = await sr.json(); const ss = sj.data || sj.sessions || []; if (ss[0]?.session_id) sessionId = ss[0].session_id; } catch {}
       const [agentsRes, connRes, memRes] = await Promise.all([
         fetch('/api/v1/agents').catch(() => null),
         fetch('/api/v1/connectors').catch(() => null),

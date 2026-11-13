@@ -5,7 +5,7 @@
     <div v-if="!isAuthenticated" class="auth-overlay">
       <div class="auth-card">
         <div class="auth-core-ring"><div class="auth-core-inner"></div></div>
-        <h1 class="auth-title">JARVIS NEURAL CORE</h1>
+        <h1 class="auth-title">JARVIS CORE</h1>
         <p class="auth-subtitle">Acesso Restrito ao Ecossistema Neural</p>
 
         <form @submit.prevent="handleLogin" class="auth-form">
@@ -294,6 +294,7 @@ let isVoiceRequestInFlight = false;
 async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
   const textToSend = (typeof overrideText === 'string' ? overrideText : promptText.value).trim();
   if (!textToSend) return;
+  try { const jd = (window as any)?.Capacitor?.Plugins?.JarvisDevice; if (jd?.executeScreenCommand) { const r = await jd.executeScreenCommand({ command: textToSend }); if (r?.handled && r?.reply) { lastResponse.value = { agent: 'JARVIS', text: r.reply, executionTimeMs: 40 }; speakJarvisResponse(r.reply); return; } } } catch {}
 
   const isBackgroundVoiceCheck =
     textToSend === '__WAKE_WORD_CHECK__' || textToSend === '__VAD_AUDIO_ONLY__';
@@ -368,7 +369,8 @@ async function sendCommand(overrideText?: string, audioSnippetBase64?: string) {
     );
 
     speakJarvisResponse(replyText, shouldKeepAwake);
-    await loadEcosystemData();
+    await loadEcosystemData(); sessionId.value=localStorage.getItem("jarvis_active_session_id")||sessionId.value;
+  sessionId.value = localStorage.getItem('jarvis_active_session_id') || sessionId.value;
   } catch (err: any) {
     if (!isBackgroundVoiceCheck) {
       console.error('Falha no envio do comando:', err);
@@ -397,7 +399,8 @@ function stopAllEngines() {
 }
 
 async function bootAuthenticatedUniverse() {
-  await loadEcosystemData();
+  await loadEcosystemData(); sessionId.value=localStorage.getItem("jarvis_active_session_id")||sessionId.value;
+  sessionId.value = localStorage.getItem('jarvis_active_session_id') || sessionId.value;
   await fetchSessionMemoryOrbs(sessionId.value);
   startNeuralCanvasLoop();
 
@@ -423,7 +426,8 @@ onUnmounted(() => { stopAllEngines(); });
   overflow: hidden; user-select: none;
 }
 
-.minimal-top-bar {
+.minimal-top-bar { padding-top: 26px;
+  padding-top: 26px;
   position: fixed; top: 0; left: 0; right: 0; z-index: 45;
   padding: max(env(safe-area-inset-top, 16px), 32px) 14px 8px;
   display: flex; justify-content: space-between; align-items: center;
