@@ -186,91 +186,60 @@ export async function chamarLLMCompativelOpenAI(options: {
     apiKey: apiKey || 'ollama',
     baseURL: creds.baseURL,
     timeout: 30000,
-    defaultHeaders:
-      provider === 'openrouter'
-        ? { 'HTTP-Referer': 'https://jarvis.local', 'X-Title': 'JARVIS Neural Core' }
-        : undefined
+    defaultHeaders: provider === 'openrouter' ? { 'HTTP-Referer': 'https://jarvis.local', 'X-Title': 'JARVIS Neural Core' } : undefined
   });
 
   const modeloFinal = creds.model || options.model;
 
-  const higienizarMensagensTextoPuro = (msgs: any[]) => {
-    const limpas = msgs
-      .filter((m: any) => m.role !== 'tool')
-      .map((m: any) => {
-        if (m.role === 'system' && typeof m.content === 'string') {
-          return {
-            role: 'system',
-            content: m.content
-              .replace(/REGRA CRÍTICA DE EXECUÇÃO:[\s\S]*?\n\n/g, '')
-              .replace(/\[REGRA IMPERATIVA[\s\S]*?\n\n/g, '')
-          };
+  const limparParaTexto = (msgs: any[]) => [
+    ...msgs
+      .filter((msg: any) => msg.role !== 'tool')
+      .map((msg: any) => {
+        if (msg.role === 'system' && typeof msg.content === 'string') {
+          return { role: 'system', content: msg.content.replace(/REGRA CRÍTICA DE EXECUÇÃO:[\s\S]*?\n\n/g, '') };
         }
-        if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
-          return { role: 'assistant', content: m.content || 'Executando consulta...' };
+        if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
+          return { role: 'assistant', content: msg.content || 'A processar...' };
         }
-        return { role: m.role, content: m.content };
-      });
-
-    limpas.push({
-      role: 'system',
-      content:
-        'MODO RESPOSTA TEXTUAL: Nenhuma ferramenta está ativa neste turno. Responda exclusivamente em texto natural em português, sem tentar chamar funções ou emitir tags <function>.'
-    });
-    return limpas;
-  };
+        return { role: msg.role, content: msg.content };
+      }),
+    { role: 'system', content: 'Responda apenas em texto natural em português, sem chamar funções ou emitir tags <function>.' }
+  ];
 
   const payload: any = {
     model: modeloFinal,
-    messages: temTools ? options.messages : higienizarMensagensTextoPuro(options.messages),
+    messages: temTools ? options.messages : limparParaTexto(options.messages),
     temperature: options.temperature ?? 0.2
   };
 
   if (temTools) {
     payload.tools = options.tools;
     payload.tool_choice = 'auto';
-    if (provider === 'groq') {
-      payload.parallel_tool_calls = false;
-    }
+    if (provider === 'groq') payload.parallel_tool_calls = false;
   }
 
   try {
     return await client.chat.completions.create(payload);
   } catch (err: any) {
-    const errRaw = JSON.stringify(err?.error || err?.message || err || '');
-    const failedGen = String(err?.error?.failed_generation || errRaw);
-
-    // Recupera chamadas de função emitidas no formato XML pelos modelos da Groq (Llama 3.3, 3.1 8B, Llama 4, Qwen)
+    const failedGen = String(err?.error?.failed_generation || err?.message || '');
     if (temTools && failedGen.includes('<function=')) {
       const fnMatch = failedGen.match(/<function=([a-zA-Z0-9_.-]+)[>\s]*([\s\S]*?)<\/function>/);
       if (fnMatch) {
-        const fnName = fnMatch[1].trim();
-        let rawArgs = (fnMatch[2] || '{}').trim();
-        if (!rawArgs.startsWith('{')) rawArgs = '{}';
+        const rawArgs = (fnMatch[2] || '{}').trim();
         return {
-          choices: [
-            {
-              message: {
-                role: 'assistant',
-                content: '',
-                tool_calls: [
-                  {
-                    id: `call_${Date.now()}`,
-                    type: 'function',
-                    function: { name: fnName, arguments: rawArgs }
-                  }
-                ]
-              }
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{ id: `call_${Date.now()}`, type: 'function', function: { name: fnMatch[1].trim(), arguments: rawArgs.startsWith('{') ? rawArgs : '{}' } }]
             }
-          ]
+          }]
         };
       }
     }
-
-    // Fallback seguro em texto puro sem gatilhos de ferramentas
     return await client.chat.completions.create({
       model: modeloFinal,
-      messages: higienizarMensagensTextoPuro(options.messages),
+      messages: limparParaTexto(options.messages),
       temperature: options.temperature ?? 0.2
     });
   }
