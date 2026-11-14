@@ -119,7 +119,12 @@ export async function chamarLLMCompativelOpenAI(options: {
               .map((t: any) => ({
                 name: t.function.name,
                 description: t.function.description || `Ferramenta ${t.function.name}`,
-                parameters: t.function.parameters || { type: 'OBJECT', properties: {} }
+                parameters: (() => {
+              const p = JSON.parse(JSON.stringify(t.function.parameters || { type: 'object', properties: {} }));
+              delete p.additionalProperties;
+              delete p.$schema;
+              return p;
+            })()
               }))
           }
         ]
@@ -189,64 +194,85 @@ export async function chamarLLMCompativelOpenAI(options: {
 
   const modeloFinal = creds.model || options.model;
 
+  const higienizarMensagensTextoPuro = (msgs: any[]) => {
+    const limpas = msgs
+      .filter((m: any) => m.role !== 'tool')
+      .map((m: any) => {
+        if (m.role === 'system' && typeof m.content === 'string') {
+          return {
+            role: 'system',
+            content: m.content
+              .replace(/REGRA CRÍTICA DE EXECUÇÃO:[\s\S]*?\n\n/g, '')
+              .replace(/\[REGRA IMPERATIVA[\s\S]*?\n\n/g, '')
+          };
+        }
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+          return { role: 'assistant', content: m.content || 'Executando consulta...' };
+        }
+        return { role: m.role, content: m.content };
+      });
+
+    limpas.push({
+      role: 'system',
+      content:
+        'MODO RESPOSTA TEXTUAL: Nenhuma ferramenta está ativa neste turno. Responda exclusivamente em texto natural em português, sem tentar chamar funções ou emitir tags <function>.'
+    });
+    return limpas;
+  };
+
   const payload: any = {
     model: modeloFinal,
-    messages: options.messages,
+    messages: temTools ? options.messages : higienizarMensagensTextoPuro(options.messages),
     temperature: options.temperature ?? 0.2
   };
 
   if (temTools) {
     payload.tools = options.tools;
     payload.tool_choice = 'auto';
-  } else {
-    payload.messages = [
-      ...options.messages,
-      {
-        role: 'system',
-        content: 'MODO DE TEXTO PURO: Nenhuma ferramenta está disponível neste turno. NÃO chame funções nem emita tags <function>. Responda apenas em texto natural.'
-      }
-    ];
+    if (provider === 'groq') {
+      payload.parallel_tool_calls = false;
+    }
   }
 
   try {
     return await client.chat.completions.create(payload);
   } catch (err: any) {
-    const errMsg = String(err?.message || '');
-    const failedGen = String(err?.error?.failed_generation || errMsg);
+    const errRaw = JSON.stringify(err?.error || err?.message || err || '');
+    const failedGen = String(err?.error?.failed_generation || errRaw);
 
+    // Recupera chamadas de função emitidas no formato XML pelos modelos da Groq (Llama 3.3, 3.1 8B, Llama 4, Qwen)
     if (temTools && failedGen.includes('<function=')) {
-      const m = failedGen.match(/<function=([a-zA-Z0-9_-]+)>([\s\S]*?)<\/function>/);
-      if (m) {
+      const fnMatch = failedGen.match(/<function=([a-zA-Z0-9_.-]+)[>\s]*([\s\S]*?)<\/function>/);
+      if (fnMatch) {
+        const fnName = fnMatch[1].trim();
+        let rawArgs = (fnMatch[2] || '{}').trim();
+        if (!rawArgs.startsWith('{')) rawArgs = '{}';
         return {
-          choices: [{
-            message: {
-              role: 'assistant',
-              content: '',
-              tool_calls: [{
-                id: `call_${Date.now()}`,
-                type: 'function',
-                function: { name: m[1], arguments: m[2].trim() || '{}' }
-              }]
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: `call_${Date.now()}`,
+                    type: 'function',
+                    function: { name: fnName, arguments: rawArgs }
+                  }
+                ]
+              }
             }
-          }]
+          ]
         };
       }
     }
 
-    delete payload.tools;
-    delete payload.tool_choice;
-    payload.messages = [
-      ...options.messages.map((msg: any) =>
-        msg.role === 'system' && typeof msg.content === 'string'
-          ? { ...msg, content: msg.content.replace(/REGRA CRÍTICA DE EXECUÇÃO:[\s\S]*?\n\n/, '') }
-          : msg
-      ),
-      {
-        role: 'system',
-        content: 'Responda exclusivamente em texto natural em português, sem chamar ferramentas ou funções.'
-      }
-    ];
-    return await client.chat.completions.create(payload);
+    // Fallback seguro em texto puro sem gatilhos de ferramentas
+    return await client.chat.completions.create({
+      model: modeloFinal,
+      messages: higienizarMensagensTextoPuro(options.messages),
+      temperature: options.temperature ?? 0.2
+    });
   }
 }
 

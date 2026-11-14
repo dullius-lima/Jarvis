@@ -252,41 +252,47 @@ export function resolveProviderCredentials(
     else apiKey = cleanKey(process.env.LLM_API_KEY || process.env.GROQ_API_KEY);
   }
 
-  // Identificação automática por prefixo de chave caso o provedor esteja inconsistente
+  // Identificação automática por prefixo apenas se a chave enviada realmente pertencer a outro provedor
   if (apiKey) {
-    if (apiKey.startsWith('gsk_') && p !== 'groq') p = 'groq';
-    else if (apiKey.startsWith('AIza') && p !== 'gemini') p = 'gemini';
-    else if (apiKey.startsWith('sk-or-') && p !== 'openrouter') p = 'openrouter';
+    if (apiKey.startsWith('gsk_')) p = 'groq';
+    else if (apiKey.startsWith('AIza')) p = 'gemini';
+    else if (apiKey.startsWith('sk-or-')) p = 'openrouter';
   }
 
   const endpoints = { ...DEFAULT_KNOWN_ENDPOINTS, ...(KNOWN_ENDPOINTS || {}) };
   let baseURL = (customUrl && customUrl.trim()) || endpoints[p] || endpoints.groq;
-  if (p === 'groq' && !baseURL.includes('groq.com')) {
-    baseURL = DEFAULT_KNOWN_ENDPOINTS.groq;
-  } else if (p === 'gemini' && !baseURL.includes('googleapis.com')) {
-    baseURL = DEFAULT_KNOWN_ENDPOINTS.gemini;
-  }
+  if (p === 'groq' && !baseURL.includes('groq.com')) baseURL = DEFAULT_KNOWN_ENDPOINTS.groq;
+  else if (p === 'gemini' && !baseURL.includes('googleapis.com')) baseURL = DEFAULT_KNOWN_ENDPOINTS.gemini;
+  else if (p === 'openrouter' && !baseURL.includes('openrouter.ai')) baseURL = DEFAULT_KNOWN_ENDPOINTS.openrouter;
+  else if (p === 'deepseek' && !baseURL.includes('deepseek.com')) baseURL = DEFAULT_KNOWN_ENDPOINTS.deepseek;
+  else if (p === 'openai' && !baseURL.includes('openai.com')) baseURL = DEFAULT_KNOWN_ENDPOINTS.openai;
   baseURL = baseURL.replace(/\/+$/, '');
 
-  // Preserva estritamente o modelo escolhido pelo usuário (inclusive openai/gpt-oss-120b)
+  const defaultByProvider: Record<string, string> = {
+    groq: 'llama-3.3-70b-versatile',
+    gemini: 'gemini-2.5-flash',
+    openrouter: 'openrouter/free',
+    deepseek: 'deepseek-chat',
+    openai: 'gpt-4o-mini',
+    ollama: 'llama3.1:8b'
+  };
+
   let model =
     customModel && customModel.trim() && customModel !== 'CUSTOM_INPUT'
       ? customModel.trim()
-      : p === 'groq'
-      ? 'openai/gpt-oss-120b'
-      : p === 'gemini'
-      ? 'gemini-2.5-flash'
-      : 'gpt-4o-mini';
+      : defaultByProvider[p] || 'llama-3.3-70b-versatile';
 
-  // Higieniza apenas modelos experimentais inválidos do Gemini
-  if (p === 'gemini') {
-    if (
-      !model.startsWith('gemini') ||
-      model.includes('argon') ||
-      model.includes('3.8')
-    ) {
-      model = 'gemini-2.5-flash';
-    }
+  // Impede que um modelo de outro provedor (ex: gpt-oss-120b ou llama) quebre Gemini, DeepSeek, OpenAI ou OpenRouter
+  if (p === 'gemini' && (!model.startsWith('gemini') || model.includes('argon') || model.includes('3.8'))) {
+    model = 'gemini-2.5-flash';
+  } else if (p === 'deepseek' && !model.startsWith('deepseek')) {
+    model = 'deepseek-chat';
+  } else if (p === 'openrouter' && !model.includes('/') && model !== 'openrouter/free') {
+    model = 'openrouter/free';
+  } else if (p === 'openai' && (model.includes('llama') || model.includes('gpt-oss') || model.includes('gemini') || model.includes('deepseek'))) {
+    model = 'gpt-4o-mini';
+  } else if (p === 'groq' && (model.startsWith('gemini') || model.startsWith('gpt-4') || model.startsWith('claude'))) {
+    model = 'llama-3.3-70b-versatile';
   }
 
   return { provider: p, apiKey: apiKey || (p === 'ollama' ? 'ollama' : ''), baseURL, model };
@@ -325,15 +331,30 @@ export async function getCentralBrainConfig() {
         }
 
         const vaultKey = savedKeys[activeProv] || '';
-        const mainKey = cleanKey(parsed.api_key);
-        const envKey =
-          activeProv === 'groq'
-            ? cleanKey(process.env.GROQ_API_KEY || process.env.LLM_API_KEY)
-            : activeProv === 'gemini'
-            ? cleanKey(process.env.GEMINI_API_KEY || process.env.LLM_API_KEY)
-            : cleanKey(process.env.LLM_API_KEY);
+      const rawMainKey = cleanKey(parsed.api_key);
+      // Só usa mainKey se ela não for de outro provedor (evita que gsk_ antiga sequestre Gemini/OpenRouter/DeepSeek)
+      const isMainKeyFromOtherProvider =
+        (activeProv !== 'groq' && rawMainKey.startsWith('gsk_')) ||
+        (activeProv !== 'gemini' && rawMainKey.startsWith('AIza')) ||
+        (activeProv !== 'openrouter' && rawMainKey.startsWith('sk-or-'));
+      const mainKey = isMainKeyFromOtherProvider ? '' : rawMainKey;
 
-        const effectiveKey = vaultKey || mainKey || envKey;
+      const envByProvider: Record<string, string> = {
+        groq: cleanKey(process.env.GROQ_API_KEY),
+        gemini: cleanKey(process.env.GEMINI_API_KEY),
+        openrouter: cleanKey(process.env.OPENROUTER_API_KEY),
+        deepseek: cleanKey(process.env.DEEPSEEK_API_KEY),
+        openai: cleanKey(process.env.OPENAI_API_KEY),
+        ollama: 'ollama'
+      };
+      const genericEnv = cleanKey(process.env.LLM_API_KEY);
+      const isGenericFromOther =
+        (activeProv !== 'groq' && genericEnv.startsWith('gsk_')) ||
+        (activeProv !== 'gemini' && genericEnv.startsWith('AIza')) ||
+        (activeProv !== 'openrouter' && genericEnv.startsWith('sk-or-'));
+
+      const envKey = envByProvider[activeProv] || (!isGenericFromOther ? genericEnv : '');
+      const effectiveKey = vaultKey || mainKey || envKey;
 
         const creds = resolveProviderCredentials(
           activeProv,
