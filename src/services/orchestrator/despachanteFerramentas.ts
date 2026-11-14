@@ -333,7 +333,7 @@ export async function processarChamadasDeFerramentas(params: {
     const mensagensSemTravaDePrimeiraPassada = [
       {
         role: 'system',
-        content: `${configuracaoCerebro.system_prompt || 'Você é o JARVIS.'}\n${contextoTemporal}\n
+        content: `${String(configuracaoCerebro.system_prompt || 'Você é o JARVIS.').replace(/REGRA CRÍTICA DE EXECUÇÃO:[\s\S]*?\n\n/, '')}\n${contextoTemporal}\n
 [DIRETRIZ DE SÍNTESE PÓS-EXECUÇÃO]:
 1. O subagente ou ferramenta (${triggeredAgentName}) JÁ FOI ACIONADO e retornou os dados reais abaixo.
 2. Agora você está AUTORIZADO e DEVE responder diretamente ao usuário (${activeSpeakerName}) em português natural, fluido, inteligente e objetivo.

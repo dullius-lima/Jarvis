@@ -198,17 +198,55 @@ export async function chamarLLMCompativelOpenAI(options: {
   if (temTools) {
     payload.tools = options.tools;
     payload.tool_choice = 'auto';
+  } else {
+    payload.messages = [
+      ...options.messages,
+      {
+        role: 'system',
+        content: 'MODO DE TEXTO PURO: Nenhuma ferramenta está disponível neste turno. NÃO chame funções nem emita tags <function>. Responda apenas em texto natural.'
+      }
+    ];
   }
 
   try {
     return await client.chat.completions.create(payload);
   } catch (err: any) {
-    if (payload.tools) {
-      delete payload.tools;
-      delete payload.tool_choice;
-      return await client.chat.completions.create(payload);
+    const errMsg = String(err?.message || '');
+    const failedGen = String(err?.error?.failed_generation || errMsg);
+
+    if (temTools && failedGen.includes('<function=')) {
+      const m = failedGen.match(/<function=([a-zA-Z0-9_-]+)>([\s\S]*?)<\/function>/);
+      if (m) {
+        return {
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: `call_${Date.now()}`,
+                type: 'function',
+                function: { name: m[1], arguments: m[2].trim() || '{}' }
+              }]
+            }
+          }]
+        };
+      }
     }
-    throw err;
+
+    delete payload.tools;
+    delete payload.tool_choice;
+    payload.messages = [
+      ...options.messages.map((msg: any) =>
+        msg.role === 'system' && typeof msg.content === 'string'
+          ? { ...msg, content: msg.content.replace(/REGRA CRÍTICA DE EXECUÇÃO:[\s\S]*?\n\n/, '') }
+          : msg
+      ),
+      {
+        role: 'system',
+        content: 'Responda exclusivamente em texto natural em português, sem chamar ferramentas ou funções.'
+      }
+    ];
+    return await client.chat.completions.create(payload);
   }
 }
 
