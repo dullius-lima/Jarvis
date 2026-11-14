@@ -234,6 +234,34 @@ export async function processarChamadasDeFerramentas(params: {
       // [NOVO] Extrai todas as tools executadas em todos os elos da cadeia e acumula
       const toolsDaCadeia = resultadoCadeia.flatMap((elo: any) => elo.executedTools || []);
       toolsUsadas.push(...toolsDaCadeia);
+      // __TRACE_BLOCO3_SYNC__
+      for (const elo of resultadoCadeia) {
+        if (Array.isArray(elo.traceSteps) && elo.traceSteps.length > 0) {
+          for (const st of elo.traceSteps) {
+            trilhaExecucao.push({ ...st, step: trilhaExecucao.length + 1 });
+          }
+        } else {
+          trilhaExecucao.push({
+            step: trilhaExecucao.length + 1,
+            kind: 'agent',
+            slug: elo.agentSlug || agenteCorrespondente.slug,
+            name: elo.agentName || agenteCorrespondente.name,
+            nodeType: elo.agentType || agenteCorrespondente.agent_type || 'llm',
+            parentSlug: 'jarvis_core',
+            status: 'ok'
+          });
+          for (const tSlug of elo.executedTools || []) {
+            trilhaExecucao.push({
+              step: trilhaExecucao.length + 1,
+              kind: 'tool',
+              slug: tSlug,
+              name: tSlug,
+              parentSlug: elo.agentSlug || agenteCorrespondente.slug,
+              status: 'ok'
+            });
+          }
+        }
+      }
 
       const ultimaSaida = ultimoElo?.output;
       const ehTextoLimpo =

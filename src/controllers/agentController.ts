@@ -754,12 +754,26 @@ export async function updateAgent(req: Request, res: Response) {
 
 export async function deleteAgent(req: Request, res: Response) {
   try {
-    const identifier = req.params.id || req.params.slug;
-    await pool.query(
-      `DELETE FROM ai_agents WHERE id::text = $1 OR slug = $1;`,
-      [String(identifier)]
+    const identifier = String(req.params.id || req.params.slug);
+    const found = await pool.query(
+      'SELECT id, slug FROM ai_agents WHERE id::text = $1 OR slug = $1 LIMIT 1;',
+      [identifier]
     );
-    return res.status(200).json({ success: true, message: 'Agente removido com sucesso.' });
+    if (found.rows.length > 0) {
+      const removedSlug = found.rows[0].slug;
+      await pool.query('DELETE FROM ai_agents WHERE id = $1;', [found.rows[0].id]);
+      await pool.query(
+        `UPDATE ai_agents
+         SET next_agent_slug = CASE WHEN next_agent_slug = $1 THEN NULL ELSE next_agent_slug END,
+             next_agent_slugs = COALESCE(
+               (SELECT jsonb_agg(elem) FROM jsonb_array_elements_text(COALESCE(next_agent_slugs, '[]'::jsonb)) elem WHERE elem <> $1),
+               '[]'::jsonb
+             )
+         WHERE next_agent_slug = $1 OR next_agent_slugs::text ILIKE $2;`,
+        [removedSlug, `%"${removedSlug}"%`]
+      ).catch(() => {});
+    }
+    return res.status(200).json({ success: true, message: 'Agente removido e cadeias atualizadas com sucesso.' });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
