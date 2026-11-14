@@ -1,0 +1,8 @@
+{
+  "f0_hz": 240.0,
+  "centroid_hz": 883.8,
+  "base_voice": "pt-BR-ThalitaNeural",
+  "pitch_delta_hz": -6,
+  "formant_ratio": 0.96,
+  "bright_gain_db": -2.19
+}

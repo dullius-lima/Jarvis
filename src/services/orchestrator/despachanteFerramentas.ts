@@ -30,6 +30,7 @@ export async function processarChamadasDeFerramentas(params: {
   userPrompt: string;
   mensagensBase: any[];
 }) {
+  const trilhaExecucao: any[] = [];
   const {
     toolCalls,
     configuracaoCerebro,
@@ -278,6 +279,8 @@ export async function processarChamadasDeFerramentas(params: {
         connectorsMap,
         configuracaoCerebro.server_base_url
       );
+      // __DIRECT_TOOL_HOOK__
+      trilhaExecucao.push({ step: trilhaExecucao.length + 1, kind: 'tool', slug: slugConectorFinal, name: triggeredAgentName, parentSlug: 'jarvis_core', status: 'ok' });
 
       // [NOVO] Registra a execução direta do conector
       toolsUsadas.push(slugConectorFinal);
@@ -338,6 +341,7 @@ export async function processarChamadasDeFerramentas(params: {
     triggeredAgentName,
     triggeredAgentId,
     triggeredNodeType,
-    executedTools: Array.from(new Set(toolsUsadas)) // Retorna a lista desduplicada
+    executedTools: Array.from(new Set(toolsUsadas)),
+    executionTrace: trilhaExecucao // Retorna a lista desduplicada
   };
 }

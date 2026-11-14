@@ -1,4 +1,5 @@
 package com.matheus.jarvis;
+
 import android.accessibilityservice.AccessibilityService;
 import android.content.Intent;
 import android.os.Bundle;
@@ -8,10 +9,24 @@ import java.util.List;
 
 public class JarvisAccessibilityService extends AccessibilityService {
     public static JarvisAccessibilityService instance;
-    @Override public void onServiceConnected() { super.onServiceConnected(); instance = this; }
-    @Override public void onAccessibilityEvent(AccessibilityEvent e) {}
-    @Override public void onInterrupt() {}
-    @Override public void onDestroy() { instance = null; super.onDestroy(); }
+
+    @Override
+    public void onServiceConnected() {
+        super.onServiceConnected();
+        instance = this;
+    }
+
+    @Override
+    public void onAccessibilityEvent(AccessibilityEvent e) {}
+
+    @Override
+    public void onInterrupt() {}
+
+    @Override
+    public void onDestroy() {
+        instance = null;
+        super.onDestroy();
+    }
 
     public boolean clickByText(String target) {
         AccessibilityNodeInfo root = getRootInActiveWindow();
@@ -39,6 +54,30 @@ public class JarvisAccessibilityService extends AccessibilityService {
         return false;
     }
 
+    public boolean typeInFocused(String txt) {
+        return inputText(txt);
+    }
+
+    public boolean scrollScreen(String direction) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return false;
+        int action = "up".equalsIgnoreCase(direction)
+                ? AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                : AccessibilityNodeInfo.ACTION_SCROLL_FORWARD;
+        return scrollNode(root, action);
+    }
+
+    private boolean scrollNode(AccessibilityNodeInfo node, int action) {
+        if (node == null) return false;
+        if (node.isScrollable() && node.performAction(action)) {
+            return true;
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            if (scrollNode(node.getChild(i), action)) return true;
+        }
+        return false;
+    }
+
     public String readScreenText() {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return "";
@@ -62,7 +101,11 @@ public class JarvisAccessibilityService extends AccessibilityService {
             String label = ri.loadLabel(getPackageManager()).toString().toLowerCase();
             if (label.contains(q) || ri.activityInfo.packageName.toLowerCase().contains(q)) {
                 Intent li = getPackageManager().getLaunchIntentForPackage(ri.activityInfo.packageName);
-                if (li != null) { li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(li); return true; }
+                if (li != null) {
+                    li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(li);
+                    return true;
+                }
             }
         }
         return false;

@@ -4,6 +4,7 @@ whisper-env/
 .env
 .env.local
 backups/
+.backup_*
 *.enc
 *.log
 .DS_Store

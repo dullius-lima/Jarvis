@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac))))
 export ANDROID_HOME=/home/ubuntu/android-sdk
 echo "sdk.dir=/home/ubuntu/android-sdk" > android/local.properties
 rm -rf public/download dist/public/download android/app/src/main/assets/public

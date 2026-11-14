@@ -1,3 +1,4 @@
+
 // src/services/orchestrator/esteiraEspecialistas.ts
 import { pool } from '../../config/database.js';
 import OpenAI from 'openai';
@@ -64,7 +65,19 @@ export async function executarEsteiraEspecialistas(
 
   const map = connectorsMap || new Map<string, any>();
 
+  const trilhaCadeiaGlobal: any[] = [];
+  let eloAnteriorSlug = 'jarvis_core';
+
   while (currentAgent && hopCount < MAX_HOPS) {
+    trilhaCadeiaGlobal.push({
+      step: trilhaCadeiaGlobal.length + 1,
+      kind: 'agent',
+      slug: currentAgent.slug,
+      name: currentAgent.name,
+      nodeType: currentAgent.agent_type || 'llm',
+      parentSlug: eloAnteriorSlug,
+      status: 'ok'
+    });
     hopCount++;
 
     try {
@@ -155,9 +168,7 @@ export async function executarEsteiraEspecialistas(
             [sessionId, currentAgent.slug]
           )
           .catch(() => ({ rows: [] as any[] })),
-        pool
-          .query(`SELECT nome, telefone, apelidos FROM contatos_agenda ORDER BY nome ASC;`)
-          .catch(() => ({ rows: [] as any[] }))
+        Promise.resolve({ rows: [] as any[] })
       ]);
 
       const resumoContatosSubagente = agendaRes.rows
@@ -315,7 +326,12 @@ export async function executarEsteiraEspecialistas(
         modeloAgente
       );
 
-      const mensagensEspecialista: any[] = [
+      // __CADEIA_ACUMULADA_V2__
+    const contextoEtapasAnteriores = Array.isArray(currentPayload?.etapasAnteriores) && currentPayload.etapasAnteriores.length > 0
+      ? '\n\n[DADOS JÁ COLETADOS PELOS AGENTES ANTERIORES NESTA CADEIA]:\n' +
+        currentPayload.etapasAnteriores.map((e: any, i: number) => `${i + 1}. ${e.especialista}: ${typeof e.resultado === 'string' ? e.resultado : JSON.stringify(e.resultado)}`).join('\n')
+      : '';
+    const mensagensEspecialista: any[] = [
         {
           role: 'system',
           content: `${contextoEnriquecidoSubagente}
@@ -400,8 +416,20 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
               map,
               serverBaseUrl
             );
+          trilhaCadeiaGlobal.push({
+            step: trilhaCadeiaGlobal.length + 1,
+            kind: 'tool',
+            slug: fnName,
+            name: fnName,
+            parentSlug: currentAgent.slug,
+            status: (resultadoTool?.error || resultadoTool?.success === false) ? 'error' : 'ok'
+          });
 
-            resultadosBrutosFerramentas.push({
+            // __TOOL_TRACE_HOOK__
+          if (!trilhaCadeiaGlobal.some((x: any) => x.kind === 'tool' && x.slug === fnName && x.parentSlug === currentAgent.slug)) {
+            trilhaCadeiaGlobal.push({ step: trilhaCadeiaGlobal.length + 1, kind: 'tool', slug: fnName, name: fnName, parentSlug: currentAgent.slug, status: 'ok' });
+          }
+          resultadosBrutosFerramentas.push({
               tool: fnName,
               args: fnArgs,
               result: resultadoTool
@@ -448,7 +476,11 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
               map,
               serverBaseUrl
             );
-            resultadosBrutosFerramentas.push({
+            // __TOOL_TRACE_HOOK__
+          if (!trilhaCadeiaGlobal.some((x: any) => x.kind === 'tool' && x.slug === fnName && x.parentSlug === currentAgent.slug)) {
+            trilhaCadeiaGlobal.push({ step: trilhaCadeiaGlobal.length + 1, kind: 'tool', slug: fnName, name: fnName, parentSlug: currentAgent.slug, status: 'ok' });
+          }
+          resultadosBrutosFerramentas.push({
               tool: toolAlvo,
               args: argsBloco,
               result: resFallback
@@ -509,7 +541,9 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
     // [NOVO] Extrai a lista única das ferramentas que foram efetivamente executadas neste ciclo
     const executedTools = Array.from(new Set(resultadosBrutosFerramentas.map((r) => r.tool)));
 
+    eloAnteriorSlug = currentAgent.slug;
     cadeiaExecucao.push({
+      traceSteps: [...trilhaCadeiaGlobal],
       agentSlug: currentAgent.slug,
       agentName: currentAgent.name,
       agentType: currentAgent.agent_type || 'llm',

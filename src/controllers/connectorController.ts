@@ -504,7 +504,7 @@ export async function testExternalConnector(req: Request, res: Response) {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${cleanToken}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'
         },
         signal: AbortSignal.timeout(10000)
       });
@@ -575,7 +575,7 @@ export async function testExternalConnector(req: Request, res: Response) {
       const evoRes = await fetch(fullEndpoint, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream',
           'apikey': evoApiKey
         },
         body: JSON.stringify({
@@ -615,6 +615,63 @@ export async function testExternalConnector(req: Request, res: Response) {
     }
 
     // 3.3 Teste Universal para qualquer API REST / Webhook / MCP
+        // [MCP_TEST_BLOCK_START]
+    {
+      const b = req.body || {};
+      const pKey = String(b.provider_key || b.provider || b.slug || "").toLowerCase();
+      const cfg = b.config || {};
+      const targetMcpUrl = String(b.endpoint_url || b.url || b.base_url || cfg.endpoint_url || cfg.url || cfg.base_url || "").trim();
+
+      if (pKey.includes("mcp") || targetMcpUrl.toLowerCase().includes("/mcp")) {
+        const finalUrl = targetMcpUrl || "http://localhost:8010/mcp";
+        const mcpHeaders: Record<string, string> = {
+          "Content-Type": "application/json",
+          "Accept": "application/json, text/event-stream"
+        };
+        const tokenVal = String(b.auth_token || b.api_key || b.token || "").trim();
+        if (tokenVal && !tokenVal.includes("••")) {
+          mcpHeaders["Authorization"] = tokenVal.startsWith("Bearer ") ? tokenVal : `Bearer ${tokenVal}`;
+        }
+
+        const mcpRes = await fetch(finalUrl, {
+          method: "POST",
+          headers: mcpHeaders,
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: Date.now(),
+            method: "tools/list",
+            params: {}
+          }),
+          signal: AbortSignal.timeout(10000)
+        });
+
+        const rawBody = await mcpRes.text();
+        let parsed: any = null;
+        try {
+          const sseLine = rawBody.split("\n").find(l => l.startsWith("data: "))?.replace(/^data:\s*/, "") || rawBody;
+          parsed = JSON.parse(sseLine);
+        } catch {
+          parsed = { raw: rawBody };
+        }
+
+        if (!mcpRes.ok || parsed?.error) {
+          return res.status(200).json({
+            success: false,
+            error: `Erro MCP (HTTP ${mcpRes.status}): ${parsed?.error?.message || rawBody.slice(0, 180)}`
+          });
+        }
+
+        const tools = parsed?.result?.tools || [];
+        const toolNames = tools.map((t: any) => t.name).join(", ");
+        return res.status(200).json({
+          success: true,
+          status: mcpRes.status,
+          message: `🟢 Servidor MCP online! ${tools.length} tool(s) detectada(s)${toolNames ? ": " + toolNames : "."}`,
+          data: parsed?.result || parsed
+        });
+      }
+    }
+    // [MCP_TEST_BLOCK_END]
     if (!rawUrl) {
       return res.status(200).json({
         success: false,
@@ -630,7 +687,7 @@ export async function testExternalConnector(req: Request, res: Response) {
     const method = String(cfg.http_method || body.http_method || 'GET').toUpperCase();
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'
     };
 
     if (apiKey) {

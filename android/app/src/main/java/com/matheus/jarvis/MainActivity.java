@@ -1,13 +1,16 @@
 package com.matheus.jarvis;
 
 import android.Manifest;
+import android.app.role.RoleManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
-import android.app.role.RoleManager;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.webkit.PermissionRequest;
@@ -26,7 +29,10 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(JarvisDevicePlugin.class);
         super.onCreate(savedInstanceState);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) { setShowWhenLocked(true); setTurnScreenOn(true); }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        }
         requestAllPermissionsAndStart();
     }
 
@@ -52,14 +58,7 @@ public class MainActivity extends BridgeActivity {
         } else {
             startVoiceSentinelService();
             requestBatteryExemption();
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                RoleManager rm = (RoleManager) getSystemService(ROLE_MANAGER_SERVICE);
-                if (rm != null && rm.isRoleAvailable(RoleManager.ROLE_ASSISTANT) && !rm.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
-                    startActivityForResult(rm.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT), 2002);
-                }
-            }
-        } catch (Exception ignored) {}
+            requestAssistantRoleDelayed();
         }
     }
 
@@ -69,18 +68,11 @@ public class MainActivity extends BridgeActivity {
         if (requestCode == 1001) {
             startVoiceSentinelService();
             requestBatteryExemption();
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                RoleManager rm = (RoleManager) getSystemService(ROLE_MANAGER_SERVICE);
-                if (rm != null && rm.isRoleAvailable(RoleManager.ROLE_ASSISTANT) && !rm.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
-                    startActivityForResult(rm.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT), 2002);
-                }
-            }
-        } catch (Exception ignored) {}
+            requestAssistantRoleDelayed();
         }
     }
 
-    private void startVoiceSentinelService() {
+    public void startVoiceSentinelService() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return;
         try {
             Intent si = new Intent(this, JarvisVoiceService.class);
@@ -100,6 +92,19 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         } catch (Exception ignored) {}
+    }
+
+    private void requestAssistantRoleDelayed() {
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    RoleManager rm = (RoleManager) getSystemService(Context.ROLE_SERVICE);
+                    if (rm != null && rm.isRoleAvailable(RoleManager.ROLE_ASSISTANT) && !rm.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
+                        startActivityForResult(rm.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT), 2002);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }, 1200);
     }
 
     @Override

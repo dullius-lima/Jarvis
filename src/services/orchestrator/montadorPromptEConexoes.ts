@@ -27,12 +27,8 @@ export async function montarContextoEConexoes(
       .query(`SELECT role, content FROM jarvis_chat_memory WHERE session_id = $1 ORDER BY id DESC LIMIT 15;`, [sessionId])
       .catch(() => ({ rows: [] as any[] })),
     searchVectorDocuments(userPrompt, 6).catch(() => []),
-    pool
-      .query(`SELECT nome, telefone, apelidos FROM contatos_agenda ORDER BY nome ASC;`)
-      .catch(() => ({ rows: [] as any[] })),
-    pool
-      .query(`SELECT categoria, titulo, conteudo FROM jarvis_episodic_memory WHERE expires_at > NOW() ORDER BY created_at DESC LIMIT 15;`)
-      .catch(() => ({ rows: [] as any[] })),
+    Promise.resolve({ rows: [] as any[] }),
+    Promise.resolve({ rows: [] as any[] }),
     pool.query(`SELECT * FROM ai_agents ORDER BY is_active DESC, id ASC;`).catch(() => ({ rows: [] as any[] })),
     getDynamicToolsCatalog()
   ]);
@@ -220,22 +216,6 @@ export async function montarContextoEConexoes(
     {
       type: 'function',
       function: {
-        name: 'save_to_database',
-        description: 'Salva dados em formato estruturado no PostgreSQL.',
-        parameters: {
-          type: 'object',
-          properties: {
-            collectionName: { type: 'string' },
-            documentData: { type: 'object' },
-            decisionReasoning: { type: 'string' }
-          },
-          required: ['collectionName', 'documentData']
-        }
-      }
-    },
-    {
-      type: 'function',
-      function: {
         name: 'execute_external_integration',
         description: 'Dispara comandos diretos em Google Calendar, Gmail, WhatsApp ou Home Assistant.',
         parameters: {
@@ -279,9 +259,11 @@ ${resumoAgentesAtivos}
 ${resumoAgentesInativos}
 
 [DIRETRIZES FUNDAMENTAIS DO ORQUESTRADOR CENTRAL]:
-1. DELEGAÇÃO OBRIGATÓRIA A SUBAGENTES:
- - Se o usuário solicitar cotação, dados da B3, agenda, automação residencial, segurança ou qualquer domínio atendido pelos Especialistas listados acima, você está ESTRITAMENTE PROIBIDO de responder em texto como JARVIS.
- - Você DEVE acionar a TOOL CALL NATIVA do respectivo especialista.
+1. DELEGAÇÃO OBRIGATÓRIA A SUBAGENTES (INCLUINDO BANCO DE DADOS):
+   - Você NÃO tem acesso direto ao banco de dados PostgreSQL, contatos, tabelas ou registros.
+   - Se o usuário solicitar consulta ao banco de dados, tabelas, registros, contatos, cotação, agenda, automação residencial ou qualquer domínio atendido pelos Especialistas listados acima, você está ESTRITAMENTE PROIBIDO de responder em texto como JARVIS.
+   - Você DEVE acionar a TOOL CALL NATIVA do respectivo especialista (ex: o especialista que controla "mcp_postgres").
+
 2. PROIBIÇÃO DE COMANDOS CRUS EM TEXTO:
  - NUNCA escreva comandos como "consultar_mercado_de_valores query=...", "google_calendar ..." ou "home_detector_de_sensores...".
  - As ferramentas técnicas pertencem aos especialistas. Acione o Especialista correto via function call.

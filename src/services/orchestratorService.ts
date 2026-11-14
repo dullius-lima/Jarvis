@@ -114,6 +114,9 @@ export async function processarExecucaoWorkflow(
   sessionId = `sess_${Date.now()}`,
   sensoryInput?: SensorPayload | SensoryAttachments | any
 ) {
+  const trilhaGlobalTurno: any[] = [];
+  let passosRotaFinal: any[] = [];
+  let rotaCompletaTexto = '🧠 JARVIS';
   const inicioExecucao = Date.now();
 
   try {
@@ -296,6 +299,20 @@ export async function processarExecucaoWorkflow(
           userPrompt,
           mensagensBase
         });
+      if (Array.isArray(resultadoDespacho?.executionTrace) && resultadoDespacho.executionTrace.length > 0) {
+        for (const st of resultadoDespacho.executionTrace) {
+          trilhaGlobalTurno.push({ ...st, step: trilhaGlobalTurno.length + 1 });
+        }
+      } else if (resultadoDespacho?.triggeredAgentId && resultadoDespacho.triggeredAgentId !== 'jarvis_core') {
+        trilhaGlobalTurno.push({
+          step: trilhaGlobalTurno.length + 1,
+          kind: 'agent',
+          slug: resultadoDespacho.triggeredAgentId,
+          name: resultadoDespacho.triggeredAgentName || resultadoDespacho.triggeredAgentId,
+          parentSlug: 'jarvis_core',
+          status: 'ok'
+        });
+      }
 
         textoRespostaFinal = resultadoDespacho.textoFinal;
         triggeredAgentName = resultadoDespacho.triggeredAgentName;
@@ -501,6 +518,13 @@ export async function processarExecucaoWorkflow(
     const tempoExecucaoMs = Date.now() - inicioExecucao;
 
     // 9. Persistência e Emissão Sináptica
+    passosRotaFinal = trilhaGlobalTurno.length > 0
+      ? trilhaGlobalTurno
+      : (typeof triggeredAgentId !== 'undefined' && triggeredAgentId && triggeredAgentId !== 'jarvis_core'
+          ? [{ step: 1, kind: 'agent', slug: triggeredAgentId, name: (typeof triggeredAgentName !== 'undefined' ? triggeredAgentName : triggeredAgentId), parentSlug: 'jarvis_core', status: 'ok' }]
+          : []);
+    rotaCompletaTexto = ['🧠 JARVIS', ...passosRotaFinal.map((p: any) => `${p.kind === 'tool' ? '🔧' : '🤖'} ${p.name || p.slug}`)].join(' ➔ ');
+    console.log('[ROTA COMPLETA]', rotaCompletaTexto);
     Promise.allSettled([
       pool.query(
         `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'user', $2), ($1, 'assistant', $3);`,
@@ -513,7 +537,8 @@ export async function processarExecucaoWorkflow(
           sessionId,
           triggeredAgentName,
           JSON.stringify({ prompt: userPrompt, identityToken: activeSpeakerName, speakerRole }),
-          JSON.stringify({ response: textoRespostaFinal }),
+          JSON.stringify({ response: textoRespostaFinal, rota_completa: rotaCompletaTexto, executionTrace: passosRotaFinal,
+      rotaCompleta: rotaCompletaTexto}),
           tempoExecucaoMs
         ]
       ),

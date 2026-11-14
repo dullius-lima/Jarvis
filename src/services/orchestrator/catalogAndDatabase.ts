@@ -13,14 +13,7 @@ import {
 // FERRAMENTAS NATIVAS FIXAS DO ECOSSISTEMA
 // ============================================================================
 export const CORE_BUILT_IN_TOOLS: DynamicToolCatalogItem[] = [
-  {
-    slug: 'dynamicdatabasetool',
-    name: 'DynamicDatabaseTool',
-    category: 'SQL',
-    method: 'SQL',
-    endpoint: '',
-    description: 'Grava registros, logs e documentos JSON estruturados no PostgreSQL.'
-  },
+  
   {
     slug: 'consultar_base_rag',
     name: 'Consultar Base RAG',

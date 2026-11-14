@@ -9,6 +9,104 @@ export async function executarConectorApiUniversal(
   userPrompt: string,
   serverBaseUrl: string
 ) {
+// [MCP_EXEC_BRIDGE_START]
+  {
+    const _arg0 = arguments[0];
+    const _arg1 = arguments[1];
+    const _ctx = typeof _arg0 === "object" && _arg0 !== null ? _arg0 : { slug: _arg0, payload: _arg1 };
+    const _slug = String(_ctx.slug || _ctx.toolKey || _ctx.connectorKey || _ctx.provider_key || "").toLowerCase();
+    const _cfg = (_ctx.config && typeof _ctx.config === "object") ? _ctx.config : {};
+    const _url = String(_ctx.endpointUrl || _ctx.endpoint_url || _ctx.url || _cfg.endpoint_url || _cfg.url || "").trim();
+    const _token = String(_ctx.authToken || _ctx.auth_token || _ctx.apiKey || _ctx.api_key || "").trim();
+
+    if (_slug.includes("mcp") || _url.toLowerCase().includes("/mcp") || _url.toLowerCase().includes("/rpc")) {
+      const targetUrl = _url || "http://localhost:8010/mcp";
+      const mcpHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream"
+      };
+      if (_token && !_token.includes("••")) {
+        mcpHeaders["Authorization"] = _token.startsWith("Bearer ") ? _token : `Bearer ${_token}`;
+      }
+
+      const parseMcpResponse = async (res: Response) => {
+        const rawText = await res.text();
+        const sseLine = rawText.split("\n").find(l => l.startsWith("data: "))?.replace(/^data:\s*/, "") || rawText;
+        try {
+          return JSON.parse(sseLine);
+        } catch {
+          return { raw: rawText };
+        }
+      };
+
+      const rawPayload = _ctx.payload || _ctx.args || _ctx.params || _arg1 || {};
+      const argsObj = typeof rawPayload === "object" && rawPayload !== null ? rawPayload : { query: String(rawPayload || "") };
+
+      let toolName = argsObj.tool_name || argsObj.tool || argsObj.method || "";
+      let toolArgs = argsObj.arguments || argsObj.params || null;
+
+      // Auto-descoberta dinâmica via tools/list para qualquer servidor MCP
+      if (!toolName || !toolArgs) {
+        try {
+          const listRes = await fetch(targetUrl, {
+            method: "POST",
+            headers: mcpHeaders,
+            body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/list", params: {} }),
+            signal: AbortSignal.timeout(8000)
+          });
+          const listData = await parseMcpResponse(listRes);
+          const availableTools = listData?.result?.tools || [];
+
+          if (!toolName && availableTools.length > 0) {
+            const preferred = availableTools.find((t: any) => ["query", "list_directory", "search", "get"].includes(t.name)) || availableTools[0];
+            toolName = preferred.name;
+          }
+
+          if (!toolArgs) {
+            const matchedTool = availableTools.find((t: any) => t.name === toolName);
+            const props = matchedTool?.inputSchema?.properties || {};
+            const requiredKeys = matchedTool?.inputSchema?.required || Object.keys(props);
+            const primaryParam = requiredKeys[0];
+
+            const { tool_name, tool, method, arguments: _a, params: _p, ...cleanRest } = argsObj;
+            if (Object.keys(cleanRest).length > 0 && (!primaryParam || cleanRest[primaryParam] !== undefined)) {
+              toolArgs = cleanRest;
+            } else if (primaryParam) {
+              const fallbackVal = argsObj[primaryParam] || argsObj.sql || argsObj.path || argsObj.query || argsObj.prompt || "";
+              toolArgs = fallbackVal ? { [primaryParam]: fallbackVal } : {};
+            } else {
+              toolArgs = cleanRest;
+            }
+          }
+        } catch {
+          toolName = toolName || "list_directory";
+          toolArgs = toolArgs || {};
+        }
+      }
+
+      const mcpRes = await fetch(targetUrl, {
+        method: "POST",
+        headers: mcpHeaders,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: Date.now(),
+          method: "tools/call",
+          params: {
+            name: toolName,
+            arguments: toolArgs
+          }
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+
+      const parsed = await parseMcpResponse(mcpRes);
+      return parsed?.result || parsed;
+    }
+  }
+  // [MCP_EXEC_BRIDGE_END]
+
+
+
   let endpointUrl = '';
   let httpMethod = 'GET';
   let authToken = '';

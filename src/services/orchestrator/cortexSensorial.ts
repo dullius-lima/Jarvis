@@ -60,7 +60,7 @@ export async function processarBiometriaESaudacao(
   if (needsTranscription && audioDataOnly && audioDataOnly.length > 150 && audioDataOnly !== 'SPEECH_SAMPLE') {
     try {
       const whisperRes: any = await transcribeWithLocalWhisper(audioDataOnly, "base", isDirectMicClick);
-      const texto = typeof whisperRes === 'string' ? whisperRes.trim() : (whisperRes?.text || '').trim();
+      const texto = typeof whisperRes === 'string' ? (whisperRes.text || '').trim() : (whisperRes?.text || '').trim();
 
       const ehRuido = /^(obrigad[oa]|legendas|amara\.org|inscreva-se|tchau|até logo|silêncio|\.+|\s*)$/i.test(
         texto.replace(/[!.,?]/g, '').trim()
