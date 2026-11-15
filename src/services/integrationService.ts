@@ -1,3 +1,90 @@
+
+function extrairDataHoraCampoGrande(parametros: any, promptFallback = ''): { startIso: string; endIso: string; dataFormatada: string; tituloExtraido?: string } {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const agoraCg = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Campo_Grande' }));
+  let ano = agoraCg.getFullYear();
+  let mes = agoraCg.getMonth() + 1;
+  let dia = agoraCg.getDate();
+  let hora = 9;
+  let min = 0;
+
+  const textoCompleto = [
+    parametros?.startTime,
+    parametros?.start,
+    parametros?.start_time,
+    parametros?.data_hora,
+    parametros?.data,
+    parametros?.date,
+    parametros?.horario,
+    parametros?.time,
+    parametros?.hora,
+    parametros?.task_details,
+    parametros?.query,
+    parametros?.userPrompt,
+    promptFallback
+  ].filter(Boolean).join(' | ');
+
+  // 1. Tenta extrair ISO YYYY-MM-DDTHH:mm
+  const isoMatch = textoCompleto.match(/(\d{4})-(\d{2})-(\d{2})[T\s]+(\d{1,2}):(\d{2})/);
+  if (isoMatch) {
+    ano = Number(isoMatch[1]);
+    mes = Number(isoMatch[2]);
+    dia = Number(isoMatch[3]);
+    hora = Number(isoMatch[4]);
+    min = Number(isoMatch[5]);
+  } else {
+    // 2. Tenta extrair data YYYY-MM-DD ou DD/MM/YYYY ou DD/MM
+    const ymd = textoCompleto.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+    const dmy = textoCompleto.match(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/);
+    if (ymd) {
+      ano = Number(ymd[1]);
+      mes = Number(ymd[2]);
+      dia = Number(ymd[3]);
+    } else if (dmy) {
+      dia = Number(dmy[1]);
+      mes = Number(dmy[2]);
+      if (dmy[3]) {
+        ano = dmy[3].length === 2 ? 2000 + Number(dmy[3]) : Number(dmy[3]);
+      }
+    } else if (/\bamanh[aã]\b/i.test(textoCompleto)) {
+      const am = new Date(agoraCg.getTime() + 86400000);
+      ano = am.getFullYear();
+      mes = am.getMonth() + 1;
+      dia = am.getDate();
+    }
+
+    // 3. Extrai horário (ex: "às 19h", "19:00", "19h30", "as 19 horas")
+    const hmExplicit = String(parametros?.horario || parametros?.hora || parametros?.time || '').match(/(\d{1,2})(?::(\d{2}))?/);
+    const hmTexto = textoCompleto.match(/(?:[aà]s\s*|horario\s*|hora\s*)(\d{1,2})(?:[:h](\d{2}))?\s*(?:h|hs|horas)?/i)
+      || textoCompleto.match(/\b(\d{1,2})[:h](\d{2})\b/i)
+      || textoCompleto.match(/\b(\d{1,2})\s*(?:h|hs|horas)\b/i);
+
+    if (hmExplicit && Number(hmExplicit[1]) <= 23) {
+      hora = Number(hmExplicit[1]);
+      min = Number(hmExplicit[2] || 0);
+    } else if (hmTexto && Number(hmTexto[1]) <= 23) {
+      hora = Number(hmTexto[1]);
+      min = Number(hmTexto[2] || 0);
+    }
+  }
+
+  const startIso = `${ano}-${pad(mes)}-${pad(dia)}T${pad(hora)}:${pad(min)}:00-04:00`;
+  let endHora = hora + 1;
+  let endDia = dia;
+  let endMes = mes;
+  let endAno = ano;
+  if (endHora >= 24) {
+    endHora -= 24;
+    const dNext = new Date(ano, mes - 1, dia + 1);
+    endAno = dNext.getFullYear();
+    endMes = dNext.getMonth() + 1;
+    endDia = dNext.getDate();
+  }
+  const endIso = `${endAno}-${pad(endMes)}-${pad(endDia)}T${pad(endHora)}:${pad(min)}:00-04:00`;
+  const dataFormatada = `${pad(dia)}/${pad(mes)}/${ano} às ${pad(hora)}:${pad(min)}`;
+  return { startIso, endIso, dataFormatada };
+}
+
 // src/services/integrationService.ts
 import { pool } from '../config/database.js';
 import { executeMcpToolCall } from './mcpHfService.js';
@@ -856,25 +943,29 @@ export async function executarConectorExterno({
 
         const { startIso, endIso, ano, mes, dia, hora, minuto } = montarDatasIso(parametros);
 
-        const corpoEvento: any = {
-          summary: titulo,
-          description: descricao,
-          start: {
-            dateTime: startIso,
-            timeZone: fuso
-          },
-          end: {
-            dateTime: endIso,
-            timeZone: fuso
-          },
-          reminders: {
-            useDefault: false,
-            overrides: [
-              { method: 'popup', minutes: 30 },
-              { method: 'popup', minutes: 10 }
-            ]
-          }
-        };
+        const parsedCg = extrairDataHoraCampoGrande(parametros, String(payload?.userPrompt || payload?.query || ''));
+      const tituloLimpo = (parametros.summary || parametros.title || parametros.assunto || parametros.nome || parametros.compromisso || 'Reunião')
+        .replace(/^(?:agende|agendar|marque|marcar|crie|criar)\s+(?:uma?\s+)?/i, '')
+        .trim() || 'Reunião';
+      const corpoEvento: any = {
+        summary: tituloLimpo,
+        description: descricao,
+        start: {
+          dateTime: parsedCg.startIso,
+          timeZone: 'America/Campo_Grande'
+        },
+        end: {
+          dateTime: parsedCg.endIso,
+          timeZone: 'America/Campo_Grande'
+        },
+        reminders: {
+          useDefault: false,
+          overrides: [
+            { method: 'popup', minutes: 30 },
+            { method: 'popup', minutes: 10 }
+          ]
+        }
+      };
 
         if (parametros.location || parametros.local || parametros.endereco) {
           corpoEvento.location = parametros.location || parametros.local || parametros.endereco;

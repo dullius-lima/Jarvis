@@ -523,6 +523,33 @@ export async function processarExecucaoWorkflow(
       : (typeof triggeredAgentId !== 'undefined' && triggeredAgentId && triggeredAgentId !== 'jarvis_core'
           ? [{ step: 1, kind: 'agent', slug: triggeredAgentId, name: (typeof triggeredAgentName !== 'undefined' ? triggeredAgentName : triggeredAgentId), parentSlug: 'jarvis_core', status: 'ok' }]
           : []);
+    // __DEDUP_TRACE_PREFIX__
+    {
+      const semConsecutivos: any[] = [];
+      for (const it of passosRotaFinal) {
+        const prev = semConsecutivos[semConsecutivos.length - 1];
+        if (prev && prev.kind === it.kind && prev.slug === it.slug) continue;
+        semConsecutivos.push(it);
+      }
+      const trilhaLimpa: any[] = [];
+      const agentesVistos = new Set<string>();
+      let ignorarToolsRepetidas = false;
+      for (const it of semConsecutivos) {
+        if (it.kind === 'agent') {
+          if (agentesVistos.has(it.slug)) {
+            ignorarToolsRepetidas = true;
+            continue;
+          }
+          agentesVistos.add(it.slug);
+          ignorarToolsRepetidas = false;
+          trilhaLimpa.push(it);
+        } else {
+          if (ignorarToolsRepetidas) continue;
+          trilhaLimpa.push(it);
+        }
+      }
+      passosRotaFinal = trilhaLimpa.map((it, idx) => ({ ...it, step: idx + 1 }));
+    }
     rotaCompletaTexto = ['🧠 JARVIS', ...passosRotaFinal.map((p: any) => `${p.kind === 'tool' ? '🔧' : '🤖'} ${p.name || p.slug}`)].join(' ➔ ');
     console.log('[ROTA COMPLETA]', rotaCompletaTexto);
     Promise.allSettled([

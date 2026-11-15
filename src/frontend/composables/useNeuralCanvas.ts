@@ -366,6 +366,112 @@ export function useNeuralCanvas(opts: CanvasOptions) {
       // ======================================================================
       // 3. AGENTES (DESTAQUE CÊNICO MASSIVO NO AGENTE ACIONADO)
       // ======================================================================
+      
+      // __DIRECTIONAL_TRACE_3D_V2__
+      if (typeof traceList3D !== 'undefined' && Array.isArray(traceList3D) && traceList3D.length > 0 && currentTraceIdx3D >= 0) {
+        const resolveNodeCoords3D = (stepItem: any) => {
+          if (!stepItem) return { x: cx, y: cy };
+          const targetNorm = normKey3D(stepItem.slug);
+          const nameNorm = normKey3D(stepItem.name || '');
+          if (stepItem.kind === 'agent') {
+            for (const { ag, proj } of agentPositionsMap.values()) {
+              const sN = normKey3D(ag.slug);
+              const nN = normKey3D(ag.name);
+              if (sN === targetNorm || nN === targetNorm || (nameNorm && nN === nameNorm) || (sN.length >= 4 && targetNorm.includes(sN))) {
+                return { x: proj.x, y: proj.y };
+              }
+            }
+          } else {
+            for (const [k, pos] of toolPositionsMap3D.entries()) {
+              if (k === targetNorm || k.includes(targetNorm) || targetNorm.includes(k)) {
+                return { x: pos.x, y: pos.y };
+              }
+            }
+            if (stepItem.parentSlug) {
+              const pNorm = normKey3D(stepItem.parentSlug);
+              for (const { ag, proj } of agentPositionsMap.values()) {
+                if (normKey3D(ag.slug) === pNorm) {
+                  return { x: proj.x + 28, y: proj.y - 26 };
+                }
+              }
+            }
+          }
+          return null;
+        };
+
+        const maxIdx = Math.min(currentTraceIdx3D, traceList3D.length - 1);
+        for (let i = 0; i <= maxIdx; i++) {
+          const currStep = traceList3D[i];
+          const prevStep = i > 0 ? traceList3D[i - 1] : null;
+          const fromPt = prevStep ? (resolveNodeCoords3D(prevStep) || { x: cx, y: cy }) : { x: cx, y: cy };
+          const toPt = resolveNodeCoords3D(currStep);
+          if (!toPt) continue;
+
+          const isCurrent = i === currentTraceIdx3D;
+          const segColor = currStep.status === 'error' ? '#ef4444' : currStep.kind === 'tool' ? '#fbbf24' : '#34d399';
+
+          ctx.save();
+          ctx.strokeStyle = segColor;
+          ctx.lineWidth = isCurrent ? 3.2 : 2.0;
+          ctx.globalAlpha = isCurrent ? 1.0 : 0.78;
+          ctx.shadowColor = segColor;
+          ctx.shadowBlur = isCurrent ? 16 : 6;
+          ctx.setLineDash([]);
+
+          ctx.beginPath();
+          ctx.moveTo(fromPt.x, fromPt.y);
+          ctx.lineTo(toPt.x, toPt.y);
+          ctx.stroke();
+
+          // Seta direcional no centro da linha
+          const midX = (fromPt.x + toPt.x) * 0.5;
+          const midY = (fromPt.y + toPt.y) * 0.5;
+          const angle = Math.atan2(toPt.y - fromPt.y, toPt.x - fromPt.x);
+          const arrowLen = isCurrent ? 9 : 6.5;
+
+          ctx.fillStyle = segColor;
+          ctx.beginPath();
+          ctx.moveTo(midX + Math.cos(angle) * arrowLen, midY + Math.sin(angle) * arrowLen);
+          ctx.lineTo(midX + Math.cos(angle + 2.5) * arrowLen, midY + Math.sin(angle + 2.5) * arrowLen);
+          ctx.lineTo(midX + Math.cos(angle - 2.5) * arrowLen, midY + Math.sin(angle - 2.5) * arrowLen);
+          ctx.closePath();
+          ctx.fill();
+
+          if (isCurrent) {
+            const travelT = (time * 1.5) % 1;
+            const px = fromPt.x + (toPt.x - fromPt.x) * travelT;
+            const py = fromPt.y + (toPt.y - fromPt.y) * travelT;
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(px, py, 4.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+
+        // Banner HUD no topo do Canvas 3D mostrando o trajeto completo em tempo real
+        const resumoCaminho = ['🧠 JARVIS', ...traceList3D.slice(0, maxIdx + 1).map((s: any) => `${s.step}.${s.kind === 'tool' ? '🔧' : '🤖'}${s.name}`)].join(' ➔ ');
+        ctx.save();
+        ctx.font = `600 ${isMobile ? 10 : 11.5}px system-ui, sans-serif`;
+        const textW = Math.min(width - 24, ctx.measureText(resumoCaminho).width + 24);
+        const boxX = (width - textW) * 0.5;
+        const boxY = isMobile ? 64 : 72;
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.84)';
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.roundRect(boxX, boxY, textW, 26, 13);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#e0f2fe';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const textoExibido = resumoCaminho.length > (isMobile ? 48 : 85) ? '…' + resumoCaminho.slice(-(isMobile ? 47 : 84)) : resumoCaminho;
+        ctx.fillText(textoExibido, width * 0.5, boxY + 13);
+        ctx.restore();
+      }
+
       Array.from(agentPositionsMap.values()).forEach(({ ag, proj, color }) => {
         const isHighlighted = opts.highlightedAgentSlug.value === ag.slug;
         const statusColor = opts.highlightedStatusColor.value || '#22c55e';

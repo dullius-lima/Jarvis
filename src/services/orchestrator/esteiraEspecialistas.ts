@@ -262,6 +262,13 @@ export async function executarEsteiraEspecialistas(
                     type: 'string',
                     description: 'Filtro de busca, comando ou parâmetro textual.'
                   },
+                  action: { type: 'string', description: 'Ação da ferramenta (ex: create_event, list_events, delete_event, send_message, read_inbox).' },
+                  summary: { type: 'string', description: 'Título ou assunto do compromisso/evento.' },
+                  startTime: { type: 'string', description: 'Data e hora de início em ISO 8601 com fuso -04:00 (ex: 2026-11-20T19:00:00-04:00).' },
+                  endTime: { type: 'string', description: 'Data e hora de término em ISO 8601 com fuso -04:00 (ex: 2026-11-20T20:00:00-04:00).' },
+                  data: { type: 'string', description: 'Data do evento no formato YYYY-MM-DD ou DD/MM/YYYY.' },
+                  horario: { type: 'string', description: 'Horário do evento no formato HH:mm (ex: 19:00).' },
+                  description: { type: 'string', description: 'Descrição ou detalhes adicionais.' },
                   symbol: {
                     type: 'string',
                     description: 'Ticker de ativo financeiro quando aplicável (ex: PETR4, VALE3).'

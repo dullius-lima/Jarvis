@@ -104,7 +104,29 @@ export function useMemoryOrbs() {
 
     highlightedToolSlugs.value = new Set(normalizedTools);
 
+    const rawTrace = Array.isArray(payload.executionTrace)
+      ? payload.executionTrace
+      : Array.isArray(apiResponse?.executionTrace)
+      ? apiResponse.executionTrace
+      : [];
+    const fallbackTrace = rawTrace.length > 0
+      ? rawTrace
+      : (slug && slug !== 'jarvis_core'
+          ? [
+              { step: 1, kind: 'agent', slug, name, parentSlug: 'jarvis_core', status: ok ? 'ok' : 'error' },
+              ...rawTools.map((t: string, idx: number) => ({
+                step: idx + 2,
+                kind: 'tool',
+                slug: t,
+                name: t,
+                parentSlug: slug,
+                status: ok ? 'ok' : 'error'
+              }))
+            ]
+          : []);
+
     lastTelemetry.value = {
+      
       agentName: name,
       agentSlug: slug,
       nodeType: payload.nodeType || 'llm',
@@ -113,6 +135,9 @@ export function useMemoryOrbs() {
       memoryStored: payload.memoryStored !== false,
       memoryCount: Number(payload.memoryCount || memoryOrbs.value.length + 1),
       timestamp: new Date().toLocaleTimeString()
+    ,
+      executionTrace: fallbackTrace,
+      rotaCompleta: payload.rotaCompleta || apiResponse?.rotaCompleta || ''
     };
 
     if (payload.memoryStored !== false) {
