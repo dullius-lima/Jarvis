@@ -350,10 +350,17 @@ export async function executarFerramentaVinculada(
   }
 
   // 2. BANCO DE DADOS DINÂMICO (GRAVAÇÃO DEDICADA EM contatos_agenda E dynamic_collections)
-  if (chaveLimpa === 'save_to_database' || chaveLimpa === 'dynamicdatabasetool') {
+  if (chaveLimpa === 'salvar_contato_agenda' || chaveLimpa === 'save_to_database' || chaveLimpa === 'dynamicdatabasetool') {
     const dados = args?.documentData || args;
-    const nomeIdentificado = dados?.nome || dados?.contato || dados?.name;
-    const foneIdentificado = dados?.telefone || dados?.number || dados?.phone;
+    const textoBrutoContato = String(dados?.task_details || dados?.query || userPrompt || '');
+    const foneExtraidoTexto = (textoBrutoContato.match(/(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/)?.[0] || '').replace(/\D/g, '');
+    const nomeExtraidoTexto = textoBrutoContato
+      .replace(/(?:jarvis|salve|cadastre|adicione|registre|inserir|contato|numero|telefone|com|o|a|do|da|de|na|agenda|por favor)/gi, ' ')
+      .replace(/\d+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const nomeIdentificado = dados?.nome || dados?.contato || dados?.name || nomeExtraidoTexto;
+    const foneIdentificado = dados?.telefone || dados?.number || dados?.phone || foneExtraidoTexto;
 
     if (foneIdentificado || args?.collectionName === 'contatos_agenda') {
       try {

@@ -150,6 +150,22 @@ export async function montarContextoEConexoes(
     {
       type: 'function',
       function: {
+        name: 'salvar_contato_agenda',
+        description: 'Salva ou atualiza um contato telefônico (nome, telefone com DDI 55 e apelidos) na agenda permanente do PostgreSQL.',
+        parameters: {
+          type: 'object',
+          properties: {
+            nome: { type: 'string', description: 'Nome completo ou principal do contato (ex: Ronny Fisioterapeuta).' },
+            telefone: { type: 'string', description: 'Número de telefone com DDI 55 e DDD (ex: 556798074004).' },
+            apelidos: { type: 'array', items: { type: 'string' }, description: 'Apelidos ou profissão para busca futura.' }
+          },
+          required: ['nome', 'telefone']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
         name: 'create_or_update_tool_connector',
         description: 'Cria ou atualiza uma Conexão (HTTP, MCP, Code, SSH) no catálogo.',
         parameters: {

@@ -13,6 +13,14 @@ import {
 // FERRAMENTAS NATIVAS FIXAS DO ECOSSISTEMA
 // ============================================================================
 export const CORE_BUILT_IN_TOOLS: DynamicToolCatalogItem[] = [
+  {
+    slug: "salvar_contato_agenda",
+    name: "Salvar Contato na Agenda",
+    category: "SQL",
+    method: "SQL",
+    endpoint: "",
+    description: "Salva ou atualiza contatos (nome, telefone com DDI 55 e apelidos) diretamente na agenda permanente do PostgreSQL."
+  },
   
   {
     slug: 'consultar_base_rag',
