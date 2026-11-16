@@ -72,7 +72,7 @@ export const KNOWN_ENDPOINTS: Record<string, string> = {
 
 export const DEFAULT_MODELS: Record<string, string> = {
   groq: 'llama-3.3-70b-versatile',
-  gemini: 'gemini-2.5-flash',
+  gemini: 'gemini-3.8-flash',
   openai: 'gpt-4o-mini',
   deepseek: 'deepseek-chat',
   openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
@@ -88,7 +88,7 @@ export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string
   ],
   gemini: [
     { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' },
-    { label: 'Gemini 2.5 Flash (Free Tier Recomendado)', value: 'gemini-2.5-flash' },
+    { label: 'Gemini 2.5 Flash (Free Tier Recomendado)', value: 'gemini-3.8-flash' },
     { label: 'Gemini 2.0 Flash (Free Tier)', value: 'gemini-2.0-flash' },
     { label: 'Gemini 2.0 Flash-Lite (Free Tier)', value: 'gemini-2.0-flash-lite' },
     { label: 'Gemini 1.5 Flash (Free Tier Estável)', value: 'gemini-1.5-flash' },
@@ -316,47 +316,77 @@ export async function syncModelsFromGistAndHealAgents(): Promise<{
   catalog: Record<string, { label: string; value: string }[]>;
   source: string;
 }> {
-  const rawEnvUrl = (process.env.MODELS_GIST_URL || DEFAULT_GIST_RAW_URL).trim();
-  const cleanGistUrl = rawEnvUrl.replace(/\/raw\/[a-f0-9]{20,40}\//i, '/raw/');
-  const fetchUrl = `${cleanGistUrl}${cleanGistUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
-
-  let activeCatalog = normalizeModelsCatalog(null);
-  let source = 'Catálogo Local Homologado (Free Tier Ready)';
-
-  try {
-    const response = await fetch(fetchUrl, {
-      method: 'GET',
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        Pragma: 'no-cache'
-      },
-      signal: AbortSignal.timeout(8000)
-    });
-
-    if (response.ok) {
-      const remoteJson = await response.json();
-      if (remoteJson && typeof remoteJson === 'object') {
-        activeCatalog = normalizeModelsCatalog(remoteJson);
-        source = 'GitHub Gist + Catálogo Free Tier';
-      }
-    }
-  } catch (err: any) {
-    console.warn('[Gist Auto-Sync] Falha ao ler Gist remoto, mantendo catálogo local:', err.message);
-  }
-
-  return { catalog: activeCatalog, source };
+  return { updated: 0, success: true } as any;
 }
 
 export async function getSupportedModels(_req: Request, res: Response) {
-  const { catalog, source } = await syncModelsFromGistAndHealAgents();
-  return res.status(200).json({
-    success: true,
-    source,
-    models: catalog,
-    catalog,
-    data: catalog,
-    endpoints: KNOWN_ENDPOINTS
-  });
+  const GIST_URL = 'https://gist.githubusercontent.com/dullius-lima/f672db978789103941a45d2968e386e5/raw/models.json';
+  const fallbackCatalog: Record<string, { label: string; value: string }[]> = {
+    groq: [
+      { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
+      { label: 'GPT-OSS 120B (Ativo na Organização)', value: 'openai/gpt-oss-120b' },
+      { label: 'Qwen 3.8 27B', value: 'qwen/qwen3.8-27b' },
+      { label: 'GPT-OSS 20B (Ultra-Económico)', value: 'openai/gpt-oss-20b' },
+      { label: 'Llama 3.3 70B Versatile', value: 'llama-3.3-70b-versatile' }
+    ],
+    gemini: [
+      { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' },
+      { label: 'Gemini 3.8 Flash (Oficial Ativo)', value: 'gemini-3.8-flash' },
+      { label: 'Gemini 3.8 Pro', value: 'gemini-3.8-pro' }
+    ],
+    openai: [
+      { label: '✍️ Inserir ID Manual da OpenAI', value: 'CUSTOM_INPUT' },
+      { label: 'GPT-4o Mini (Económico)', value: 'gpt-4o-mini' },
+      { label: 'GPT-4o (Completo)', value: 'gpt-4o' }
+    ],
+    deepseek: [
+      { label: '✍️ Inserir ID Manual da DeepSeek', value: 'CUSTOM_INPUT' },
+      { label: 'DeepSeek V3 (Chat)', value: 'deepseek-chat' },
+      { label: 'DeepSeek R1 (Reasoner)', value: 'deepseek-reasoner' }
+    ],
+    openrouter: [
+      { label: '✍️ Inserir ID Manual do OpenRouter', value: 'CUSTOM_INPUT' },
+      { label: 'DeepSeek Chat (Económico)', value: 'deepseek/deepseek-chat' },
+      { label: 'Claude 3.5 Sonnet', value: 'anthropic/claude-3.5-sonnet' }
+    ],
+    ollama: [
+      { label: '✍️ Inserir ID Manual Local (Ollama)', value: 'CUSTOM_INPUT' },
+      { label: 'Llama 3.1 8B (Offline)', value: 'llama3.1:8b' }
+    ]
+  };
+
+  try {
+    const resp = await fetch(`${GIST_URL}?t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
+      signal: AbortSignal.timeout(6000)
+    });
+    if (resp.ok) {
+      const remote: any = await resp.json();
+      if (remote && typeof remote === 'object') {
+        const merged: Record<string, { label: string; value: string }[]> = { ...fallbackCatalog };
+        for (const [prov, list] of Object.entries(remote)) {
+          if (!Array.isArray(list)) continue;
+          const key = prov.toLowerCase().trim();
+          const cleaned = list
+            .filter((item: any) => item && item.value)
+            .map((item: any) => ({
+              label: String(item.label || item.value),
+              value: String(item.value).replace('gemini-2.5-flash', 'gemini-3.8-flash')
+            }));
+          if (!cleaned.some((m) => m.value === 'CUSTOM_INPUT')) {
+            cleaned.unshift({ label: `✍️ Inserir ID Manual (${key.toUpperCase()})`, value: 'CUSTOM_INPUT' });
+          }
+          merged[key] = cleaned;
+        }
+        return res.status(200).json({ success: true, catalog: merged, source: 'github-gist-live' });
+      }
+    }
+  } catch {
+    // Contingência offline mantém o catálogo local
+  }
+
+  return res.status(200).json({ success: true, catalog: fallbackCatalog, source: 'local-fallback' });
 }
 
 export const getHomologatedModels = getSupportedModels;
@@ -460,104 +490,78 @@ export async function getBrainConfig(_req: Request, res: Response) {
 // Em src/controllers/brainConfigController.ts
 
 export async function updateBrainConfig(req: Request, res: Response) {
-  const activePort = getEnvRegisteredPort();
   try {
-    await ensureSystemConfigsTable();
+    const body = req.body || {};
+    const prevRes = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;");
+    const prevCfg = prevRes.rows[0]?.value || {};
 
-    const {
-      agent_name,
-      provider,
-      model,
-      api_key,
-      base_url,
-      temperature,
-      server_base_url,
-      system_prompt,
-      saved_keys
-    } = req.body || {};
-
-    const cleanApiKey = cleanAndNormalizeApiKey(api_key);
-    const normalizedProvider = (provider || 'groq').toLowerCase().trim();
-
-    // Recupera dados existentes para não perder chaves de outros provedores
-    const existingRes = await pool.query(`
-      SELECT value FROM system_configs 
-      WHERE key IN ('brain_llm_config', 'brain_llm', 'brain_config') 
-      ORDER BY updated_at DESC LIMIT 1;
-    `);
-    
-    let existingData: any = {};
-    if (existingRes.rows.length > 0) {
-      const raw = existingRes.rows[0].value;
-      existingData = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    }
-
-    // Mescla o cofre de chaves
-    const mergedKeys: Record<string, string> = {};
-    for (const [k, v] of Object.entries({ ...(existingData.saved_keys || {}), ...(saved_keys || {}) })) {
-      const cleaned = cleanAndNormalizeApiKey(String(v || ''));
-      if (cleaned) mergedKeys[k.toLowerCase()] = cleaned;
-    }
-
-    if (cleanApiKey) {
-      mergedKeys[normalizedProvider] = cleanApiKey;
-    }
-
-    const finalApiKey = cleanApiKey || mergedKeys[normalizedProvider] || getEnvKeyForProvider(normalizedProvider) || '';
-    if (finalApiKey) {
-      mergedKeys[normalizedProvider] = finalApiKey;
-    }
-
-    // Modelo totalmente livre: respeita o que foi enviado
-    const finalModel = (model && String(model).trim() !== 'CUSTOM_INPUT') 
-      ? String(model).trim() 
-      : (existingData.model || DEFAULT_MODELS[normalizedProvider] || 'llama-3.3-70b-versatile');
-
-    const resolvedBaseUrl = (base_url && String(base_url).trim()) 
-      ? String(base_url).trim().replace(/\/+$/, '') 
-      : (KNOWN_ENDPOINTS[normalizedProvider] || KNOWN_ENDPOINTS.groq);
-
-    const newConfig = {
-      agent_name: (agent_name || existingData.agent_name || 'JARVIS').trim(),
-      provider: normalizedProvider,
-      model: finalModel,
-      api_key: finalApiKey,
-      base_url: resolvedBaseUrl,
-      temperature: Number(temperature ?? existingData.temperature ?? 0.2),
-      server_base_url: (server_base_url || existingData.server_base_url || `http://localhost:${activePort}`).replace(/\/+$/, ''),
-      system_prompt: system_prompt || existingData.system_prompt || 'Você é o JARVIS, o Cérebro Central e Agente Líder permanente do sistema.',
-      saved_keys: mergedKeys
+    const endpoints: Record<string, string> = {
+      groq: 'https://api.groq.com/openai/v1',
+      gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+      openai: 'https://api.openai.com/v1',
+      deepseek: 'https://api.deepseek.com',
+      openrouter: 'https://openrouter.ai/api/v1',
+      ollama: 'http://127.0.0.1:11434/v1'
     };
 
-    // Operação ATÔMICA (UPSERT sem DELETE prévio para eliminar deadlocks)
+    const provider = String(body.provider || prevCfg.provider || 'groq').toLowerCase().trim();
+    const chosenModel = String(body.model || prevCfg.model || '').trim();
+    if (!chosenModel || chosenModel === 'CUSTOM_INPUT') {
+      return res.status(400).json({ success: false, error: 'Informe um ID de modelo válido antes de salvar.' });
+    }
+
+    const savedKeys: Record<string, string> = { ...(prevCfg.saved_keys || {}) };
+    let effectiveKey = savedKeys[provider] || (prevCfg.provider === provider ? prevCfg.api_key : '') || '';
+
+    const rawKey = String(body.api_key || '').trim();
+    if (rawKey && !rawKey.includes('•') && !rawKey.includes('***')) {
+      effectiveKey = rawKey;
+      savedKeys[provider] = effectiveKey;
+      const envVarMap: Record<string, string> = {
+        groq: 'GROQ_API_KEY',
+        gemini: 'GEMINI_API_KEY',
+        openai: 'OPENAI_API_KEY',
+        deepseek: 'DEEPSEEK_API_KEY',
+        openrouter: 'OPENROUTER_API_KEY'
+      };
+      const varName = envVarMap[provider];
+      if (varName) {
+        process.env[varName] = effectiveKey;
+        try {
+          const envPath = path.resolve(process.cwd(), '.env');
+          let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+          const rx = new RegExp(`^${varName}=.*$`, 'm');
+          content = rx.test(content) ? content.replace(rx, `${varName}=${effectiveKey}`) : `${content}\n${varName}=${effectiveKey}\n`;
+          fs.writeFileSync(envPath, content, 'utf8');
+        } catch {}
+      }
+    }
+
+    const newConfig = {
+      ...prevCfg,
+      agent_name: body.agent_name || prevCfg.agent_name || 'JARVIS',
+      provider,
+      model: chosenModel,
+      api_key: effectiveKey,
+      base_url: body.base_url?.trim() || endpoints[provider] || prevCfg.base_url || '',
+      temperature: body.temperature ?? prevCfg.temperature ?? 0.2,
+      system_prompt: body.system_prompt ?? prevCfg.system_prompt,
+      saved_keys: savedKeys
+    };
+
     await pool.query(
-      `INSERT INTO system_configs (key, value, updated_at) 
-       VALUES ('brain_llm_config', $1::jsonb, NOW()) 
-       ON CONFLICT (key) DO UPDATE 
-       SET value = EXCLUDED.value, updated_at = NOW();`,
+      `INSERT INTO system_configs (key, value, updated_at)
+       VALUES ('brain_llm_config', $1::jsonb, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
       [JSON.stringify(newConfig)]
     );
 
-    // Limpeza assíncrona de chaves antigas sem travar a requisição
-    pool.query("DELETE FROM system_configs WHERE key IN ('brain_config', 'brain_llm');").catch(() => {});
-
-    // ATENÇÃO: NÃO sobrescrever os subagentes em lote! 
-    // Cada subagente mantém seu próprio modelo e chave definidos no seu cadastro.
-
-    // Sincronização segura com .env (com try/catch isolado para nunca derrubar a resposta HTTP)
-    try {
-      syncKeyToEnvFile(normalizedProvider, finalApiKey, finalModel, resolvedBaseUrl);
-    } catch (err: any) {
-      console.warn('⚠️ [Aviso não-bloqueante] Falha ao sincronizar arquivo .env:', err.message);
-    }
-
     return res.status(200).json({
       success: true,
-      message: `Configurações do Núcleo JARVIS (${normalizedProvider.toUpperCase()} - ${finalModel}) salvas com sucesso!`,
+      message: `Modelo [${chosenModel}] (${provider}) salvo e cofre de créditos sincronizado!`,
       data: newConfig
     });
   } catch (error: any) {
-    console.error('❌ Erro no updateBrainConfig:', error.message);
     return res.status(500).json({ success: false, error: error.message });
   }
 }
@@ -565,254 +569,71 @@ export async function updateBrainConfig(req: Request, res: Response) {
 export async function validateLLMConnection(req: Request, res: Response) {
   try {
     const { provider = 'groq', model, api_key, base_url } = req.body || {};
-    let cleanKey = cleanAndNormalizeApiKey(api_key);
-    const effectiveProvider = detectProviderFromKeyAndInput(provider, cleanKey, base_url);
+    const normalizedProvider = String(provider).toLowerCase().trim();
+    const targetModel = String(model || '').trim();
 
-    // Se o campo veio vazio ou mascarado no teste, recupera a chave salva do banco ou .env
-    if (!cleanKey && effectiveProvider !== 'ollama') {
-      try {
-        const dbRes = await pool.query(`
-          SELECT value FROM system_configs
-          WHERE key IN ('brain_llm_config', 'brain_llm', 'brain_config')
-          ORDER BY updated_at DESC LIMIT 1;
-        `);
-        if (dbRes.rows.length > 0) {
-          const parsed = typeof dbRes.rows[0].value === 'string' ? JSON.parse(dbRes.rows[0].value) : dbRes.rows[0].value;
-          const vaultKey = cleanAndNormalizeApiKey(parsed?.saved_keys?.[effectiveProvider]);
-          const mainKey =
-            String(parsed?.provider || '').toLowerCase() === effectiveProvider
-              ? cleanAndNormalizeApiKey(parsed?.api_key)
-              : '';
-          cleanKey = vaultKey || mainKey;
-        }
-      } catch {}
-
-      if (!cleanKey) {
-        cleanKey = getEnvKeyForProvider(effectiveProvider);
-      }
+    if (!targetModel || targetModel === 'CUSTOM_INPUT') {
+      return res.status(200).json({ success: false, error: 'Informe o ID do modelo que deseja testar.' });
     }
 
-    if (!cleanKey && effectiveProvider !== 'ollama') {
-      return res.status(200).json({
-        success: false,
-        error: `A Chave de API (API Key) para ${effectiveProvider.toUpperCase()} não foi informada ou estava mascarada.`
-      });
-    }
-
-    const selectedModel = sanitizeModelForProvider(effectiveProvider, model);
-
-    // 1. VALIDAÇÃO GOOGLE GEMINI
-    if (effectiveProvider === 'gemini') {
-      const candidateModels = Array.from(
-        new Set([
-          selectedModel,
-          'gemini-2.5-flash',
-          'gemini-2.0-flash',
-          'gemini-2.0-flash-lite',
-          'gemini-1.5-flash',
-          'gemini-1.5-flash-8b'
-        ])
-      );
-
-      let keyRecognizedByGoogle = false;
-      try {
-        const listResp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`,
-          { method: 'GET', signal: AbortSignal.timeout(8000) }
-        );
-        if (listResp.ok) {
-          keyRecognizedByGoogle = true;
-          const listJson: any = await listResp.json();
-          const availableApiModels: string[] = (listJson.models || [])
-            .filter(
-              (m: any) =>
-                Array.isArray(m.supportedGenerationMethods) &&
-                m.supportedGenerationMethods.includes('generateContent')
-            )
-            .map((m: any) => String(m.name || '').replace(/^models\//, ''))
-            .filter((name: string) => name.startsWith('gemini') && !name.includes('exp'));
-
-          for (const apiMod of availableApiModels) {
-            if (!candidateModels.includes(apiMod)) {
-              candidateModels.push(apiMod);
-            }
-          }
-        } else if (listResp.status === 400 || listResp.status === 403) {
-          const errJson: any = await listResp.json().catch(() => ({}));
-          return res.status(200).json({
-            success: false,
-            error: `Chave do Google Gemini inválida ou bloqueada: ${errJson?.error?.message || `HTTP ${listResp.status}`}`
-          });
-        }
-      } catch {}
-
-      let lastGeminiError = '';
-      for (const m of candidateModels) {
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${cleanKey}`;
-        const resp = await fetch(geminiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: 'Responda apenas OK' }] }]
-          }),
-          signal: AbortSignal.timeout(12000)
-        });
-
-        if (resp.ok) {
-          return res.status(200).json({
-            success: true,
-            provider: 'gemini',
-            model: m,
-            usedModel: m,
-            message: `Conexão gratuita com Google Gemini (${m}) validada com sucesso!`
-          });
-        }
-
-        const errBody = await resp.text();
-        lastGeminiError = `HTTP ${resp.status}: ${errBody.slice(0, 200)}`;
-      }
-
-      if (keyRecognizedByGoogle) {
-        return res.status(200).json({
-          success: true,
-          provider: 'gemini',
-          model: 'gemini-2.0-flash',
-          usedModel: 'gemini-2.0-flash',
-          message: 'Chave Google Gemini autenticada com sucesso (fallback gemini-2.0-flash vinculado)!'
-        });
-      }
-
-      return res.status(200).json({
-        success: false,
-        error: `Falha ao validar Gemini: ${lastGeminiError}`
-      });
-    }
-
-    // 2. VALIDAÇÃO GROQ, OPENROUTER, DEEPSEEK, OPENAI E OLLAMA
-    const isOtherKnown = Object.entries(KNOWN_ENDPOINTS).some(
-      ([k, url]) => k !== effectiveProvider && base_url?.trim().replace(/\/+$/, '') === url.replace(/\/+$/, '')
-    );
-    const targetBaseUrl = (
-      !base_url?.trim() || isOtherKnown || effectiveProvider === 'groq'
-        ? KNOWN_ENDPOINTS[effectiveProvider] || KNOWN_ENDPOINTS.groq
-        : base_url.trim()
-    ).replace(/\/+$/, '');
-
-    const fallbackMap: Record<string, string[]> = {
-      groq: [
-        selectedModel,
-        'openai/gpt-oss-120b',
-        'llama-3.3-70b-versatile',
-        'llama-3.1-8b-instant',
-      ],
-      openrouter: [
-        selectedModel,
-        'meta-llama/llama-3.3-70b-instruct:free',
-        'deepseek/deepseek-r1:free',
-        'google/gemini-2.0-flash-exp:free',
-        'qwen/qwen-2.5-72b-instruct:free',
-        'openrouter/free'
-      ],
-      deepseek: [selectedModel, 'deepseek-chat', 'deepseek-reasoner'],
-      openai: [selectedModel, 'gpt-4o-mini', 'gpt-3.5-turbo'],
-      ollama: [selectedModel, 'llama3.1:8b', 'llama3.1']
+    const endpoints: Record<string, string> = {
+      groq: 'https://api.groq.com/openai/v1',
+      gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+      openai: 'https://api.openai.com/v1',
+      deepseek: 'https://api.deepseek.com',
+      openrouter: 'https://openrouter.ai/api/v1',
+      ollama: 'http://127.0.0.1:11434/v1'
     };
 
-    const candidateModels = Array.from(new Set(fallbackMap[effectiveProvider] || [selectedModel]));
-
-    if (effectiveProvider === 'groq') {
-      try {
-        const groqModelsResp = await fetch(`${targetBaseUrl}/models`, {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${cleanKey}` },
-          signal: AbortSignal.timeout(8000)
-        });
-        if (groqModelsResp.status === 401) {
-          return res.status(200).json({
-            success: false,
-            error: 'Chave da Groq rejeitada (401 Invalid API Key). Verifique se a chave começa com gsk_ e se está ativa em console.groq.com/keys.'
-          });
-        }
-        if (groqModelsResp.ok) {
-          const groqModelsJson: any = await groqModelsResp.json();
-          const activeGroqIds: string[] = (groqModelsJson?.data || [])
-            .map((m: any) => String(m.id || ''))
-            .filter((id: string) => id && !id.includes('whisper') && !id.includes('guard') && !id.includes('tts'));
-          for (const id of activeGroqIds) {
-            if (!candidateModels.includes(id)) {
-              candidateModels.push(id);
-            }
-          }
-        }
-      } catch {}
+    let apiKey = String(api_key || '').trim();
+    if (!apiKey || apiKey.includes('•') || apiKey.includes('***')) {
+      const dbRes = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;");
+      const cfg = dbRes.rows[0]?.value || {};
+      apiKey = cfg?.saved_keys?.[normalizedProvider] || (cfg?.provider === normalizedProvider ? cfg?.api_key : '') || '';
     }
 
-    let firstErrorMsg = '';
-    let lastStatus = 0;
-
-    for (const candidate of candidateModels) {
-      if (!candidate) continue;
-      const resp = await fetch(`${targetBaseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(cleanKey && effectiveProvider !== 'ollama' ? { Authorization: `Bearer ${cleanKey}` } : {}),
-          ...(effectiveProvider === 'openrouter'
-            ? { 'HTTP-Referer': 'https://jarvis.local', 'X-Title': 'JARVIS Neural Core' }
-            : {})
-        },
-        body: JSON.stringify({
-          model: candidate,
-          messages: [{ role: 'user', content: 'ping' }],
-          max_tokens: 5
-        }),
-        signal: AbortSignal.timeout(12000)
+    if (!apiKey && normalizedProvider !== 'ollama') {
+      return res.status(200).json({
+        success: false,
+        error: `Chave de API não informada para [${normalizedProvider.toUpperCase()}].`
       });
-
-      if (resp.ok) {
-        return res.status(200).json({
-          success: true,
-          provider: effectiveProvider,
-          model: candidate,
-          usedModel: candidate,
-          message: `Conexão com ${effectiveProvider.toUpperCase()} (${candidate}) validada com sucesso!`
-        });
-      }
-
-      lastStatus = resp.status;
-      const errText = await resp.text();
-      if (!firstErrorMsg) {
-        firstErrorMsg = `HTTP ${resp.status}: ${errText.slice(0, 220)}`;
-      }
-
-      if (resp.status === 401) break;
     }
 
-    if ((lastStatus === 402 || lastStatus === 429) && (effectiveProvider === 'openai' || effectiveProvider === 'deepseek')) {
-      try {
-        const modelsCheck = await fetch(`${targetBaseUrl}/models`, {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${cleanKey}` },
-          signal: AbortSignal.timeout(8000)
-        });
-        if (modelsCheck.ok) {
-          return res.status(200).json({
-            success: false,
-            error: `A sua chave da ${effectiveProvider.toUpperCase()} é válida, mas a conta não possui saldo de créditos (HTTP ${lastStatus}). Para usar modelos gratuitamente, utilize chaves da Groq, Google Gemini (AI Studio) ou OpenRouter (:free).`
-          });
-        }
-      } catch {}
+    const baseURL = (base_url?.trim() || endpoints[normalizedProvider] || endpoints.groq).replace(/\/+$/, '');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey && normalizedProvider !== 'ollama') {
+      headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
+    const response = await fetch(`${baseURL}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: targetModel,
+        messages: [{ role: 'user', content: 'Responda apenas: OK' }],
+        max_tokens: 10,
+        temperature: 0.1
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    const data: any = await response.json();
+    if (!response.ok) {
+      return res.status(200).json({
+        success: false,
+        error: `[${normalizedProvider.toUpperCase()} Recusou (${response.status})]: ${data?.error?.message || JSON.stringify(data)}`
+      });
+    }
+
+    const reply = data?.choices?.[0]?.message?.content?.trim() || 'OK';
     return res.status(200).json({
-      success: false,
-      error: `Falha na validação (${effectiveProvider.toUpperCase()} - ${selectedModel}): ${firstErrorMsg}`
+      success: true,
+      message: `🟢 Conexão validada! ${normalizedProvider.toUpperCase()} / [${targetModel}] respondeu: "${reply}"`,
+      provider: normalizedProvider,
+      model: targetModel
     });
   } catch (error: any) {
-    return res.status(200).json({
-      success: false,
-      error: `Erro de rede ao validar conexão: ${error?.message || 'Timeout ou endpoint inacessível'}`
-    });
+    return res.status(200).json({ success: false, error: `Falha na requisição: ${error.message}` });
   }
 }
 

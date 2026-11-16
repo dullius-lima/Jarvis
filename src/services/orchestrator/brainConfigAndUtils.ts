@@ -270,7 +270,7 @@ export function resolveProviderCredentials(
 
   const defaultByProvider: Record<string, string> = {
     groq: 'llama-3.3-70b-versatile',
-    gemini: 'gemini-2.5-flash',
+    gemini: 'gemini-3.8-flash',
     openrouter: 'openrouter/free',
     deepseek: 'deepseek-chat',
     openai: 'gpt-4o-mini',
@@ -284,7 +284,7 @@ export function resolveProviderCredentials(
 
   // Impede que um modelo de outro provedor (ex: gpt-oss-120b ou llama) quebre Gemini, DeepSeek, OpenAI ou OpenRouter
   if (p === 'gemini' && (!model.startsWith('gemini') || model.includes('argon') || model.includes('3.8'))) {
-    model = 'gemini-2.5-flash';
+    model = 'gemini-3.8-flash';
   } else if (p === 'deepseek' && !model.startsWith('deepseek')) {
     model = 'deepseek-chat';
   } else if (p === 'openrouter' && !model.includes('/') && model !== 'openrouter/free') {

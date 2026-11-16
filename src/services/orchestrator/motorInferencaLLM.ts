@@ -86,13 +86,13 @@ export async function chamarLLMCompativelOpenAI(options: {
 
   // 1. SUPORTE GOOGLE GEMINI NATIVO
   if (provider === 'gemini') {
-    const rawGemModel = (creds.model || options.model || 'gemini-2.5-flash').trim();
+    const rawGemModel = (creds.model || options.model || 'gemini-3.8-flash').trim();
     const modeloPrimario =
       !rawGemModel.startsWith('gemini') ||
       rawGemModel.includes('argon') ||
       rawGemModel.includes('3.8') ||
       rawGemModel.includes('2.0-flash')
-        ? 'gemini-2.5-flash'
+        ? 'gemini-3.8-flash'
         : rawGemModel;
 
     const partesFormatadas: any[] = [];
