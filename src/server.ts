@@ -120,34 +120,18 @@ app.get('/download/jarvis.apk', (_req, res) => res.download('/home/ubuntu/jarvis
 app.get('/download/jarvis-watch.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis-watch.apk', 'jarvis-watch.apk'));
 app.use('/api/v1/auth', authRoutes);
 
-// __SYNC_AGENT_SCHEDULE_FIELDS__ - Grava múltiplos disparos (schedules JSONB) e campos legados
+// __SYNC_AGENT_SCHEDULE_FIELDS__
 app.use('/api/v1/agents', (req: Request, res: Response, next: NextFunction) => {
   if ((req.method === 'POST' || req.method === 'PUT') && req.body && req.body.slug) {
     const b = req.body;
     const schedList = Array.isArray(b.schedules) ? b.schedules : [];
-    const activeList = schedList.filter((s: any) => s && s.enabled !== false);
-    const hasAnyActive = activeList.length > 0 || Boolean(b.schedule_enabled);
-    const primaryCron = activeList[0]?.cron_expression || (b.schedule_enabled ? b.cron_expression : null) || null;
-    const primaryPrompt = activeList[0]?.schedule_prompt || b.schedule_prompt || null;
-
+    const ativos = schedList.filter((s: any) => s && s.enabled !== false);
+    const hasAny = ativos.length > 0 || Boolean(b.schedule_enabled);
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         pool.query(
-          `UPDATE ai_agents
-           SET schedule_enabled = $1,
-               cron_expression = $2,
-               schedule_prompt = $3,
-               is_error_trigger = $4,
-               schedules = $5::jsonb
-           WHERE slug = $6;`,
-          [
-            hasAnyActive,
-            primaryCron,
-            primaryPrompt,
-            Boolean(b.is_error_trigger),
-            JSON.stringify(schedList),
-            b.slug
-          ]
+          `UPDATE ai_agents SET schedule_enabled = $1, cron_expression = $2, schedule_prompt = $3, is_error_trigger = $4, schedules = $5::jsonb WHERE slug = $6;`,
+          [hasAny, ativos[0]?.cron_expression || (b.schedule_enabled ? b.cron_expression : null) || null, ativos[0]?.schedule_prompt || b.schedule_prompt || null, Boolean(b.is_error_trigger), JSON.stringify(schedList), b.slug]
         ).catch(() => {});
       }
     });

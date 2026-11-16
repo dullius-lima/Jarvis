@@ -5,45 +5,24 @@
   <div style="background: linear-gradient(135deg, #0c192c, #0f172a); border: 1px solid #0284c7; border-radius: 12px; padding: 14px 16px; margin-bottom: 18px;">
     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
       <div>
-        <strong style="color: #38bdf8; font-size: 14px;">⏰ Disparos Automáticos Programados ({{ agentesAgendados.length }})</strong>
-        <div style="font-size: 11px; color: #94a3b8;">Fuso horário ativo: America/Campo_Grande (UTC-4)</div>
+        <strong style="color: #38bdf8; font-size: 14px;">⏰ Disparos Automáticos Programados ({{ todosDisparosAtivos.length }})</strong>
+        <div style="font-size: 11px; color: #94a3b8;">Fuso: America/Campo_Grande (UTC-4) • Múltiplos disparos por agente</div>
       </div>
-      <span v-if="agentesAgendados.length === 0" style="font-size: 12px; color: #64748b; background: #020617; padding: 5px 10px; border-radius: 6px; border: 1px solid #1e293b;">
-        Nenhum agente com disparo automático ativo. Clique em "✏️ Editar" num agente para agendar.
-      </span>
+      <span v-if="todosDisparosAtivos.length === 0" style="font-size: 12px; color: #64748b; background: #020617; padding: 5px 10px; border-radius: 6px;">Nenhum disparo ativo.</span>
     </div>
-
-    <div v-if="agentesAgendados.length > 0" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 10px;">
-      <div
-        v-for="ag in agentesAgendados"
-        :key="'sched_' + ag.slug"
-        style="background: #020617; border: 1px solid #1e3a5f; border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px;"
-      >
+    <div v-if="todosDisparosAtivos.length > 0" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px;">
+      <div v-for="item in todosDisparosAtivos" :key="item.uid" style="background: #020617; border: 1px solid #1e3a5f; border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px;">
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
-            <strong style="color: #f8fafc; font-size: 13px;">{{ ag.icon || '🤖' }} {{ ag.name }}</strong>
-            <span style="background: #0369a1; color: #e0f2fe; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;">
-              {{ descreverCronAmigavel(ag.cron_expression) }}
-            </span>
+            <strong style="color: #f8fafc; font-size: 13px;">{{ item.agent.icon || '🤖' }} {{ item.agent.name }}</strong>
+            <span style="background: #0369a1; color: #e0f2fe; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;">{{ descreverCronAmigavel(item.sched.cron_expression) }}</span>
           </div>
-          <div style="font-size: 11px; color: #cbd5e1; margin-top: 5px; background: #0f172a; padding: 5px 8px; border-radius: 5px;">
-            💬 <strong>Tarefa:</strong> {{ ag.schedule_prompt || 'Rotina padrão do especialista' }}
-          </div>
-          <div style="font-size: 10px; color: #64748b; margin-top: 4px;">
-            Último disparo: {{ ag.last_scheduled_run ? new Date(ag.last_scheduled_run).toLocaleString('pt-BR') : 'Aguardando próximo horário' }}
-          </div>
+          <div style="font-size: 11px; color: #38bdf8; font-weight: 600; margin-top: 3px;">📌 {{ item.sched.label || 'Rotina Programada' }}</div>
+          <div style="font-size: 11px; color: #cbd5e1; margin-top: 4px; background: #0f172a; padding: 5px 8px; border-radius: 5px;">💬 {{ item.sched.schedule_prompt || 'Rotina padrão' }}</div>
         </div>
-
         <div style="display: flex; gap: 6px; justify-content: flex-end;">
-          <button type="button" @click="dispararCronAgora(ag.slug)" style="background: #0284c7; color: #fff; border: none; padding: 4px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer;">
-            ▶ Disparar Agora
-          </button>
-          <button type="button" @click="abrirModalEditarAgente(ag)" style="background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;">
-            ✏️ Configurar
-          </button>
-          <button type="button" @click="pausarAgendamentoRapido(ag)" style="background: #3f1d24; color: #fda4af; border: 1px solid #881337; padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;">
-            ⏸️ Desativar
-          </button>
+          <button type="button" @click="dispararCronAgora(item.agent.slug, item.sched.schedule_prompt, item.sched.id)" style="background: #0284c7; color: #fff; border: none; padding: 4px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer;">▶ Disparar Agora</button>
+          <button type="button" @click="dispararCronAgora(item.agent)" style="background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;">✏️ Configurar</button>
         </div>
       </div>
     </div>
@@ -491,97 +470,74 @@
               
         <!-- CONSTRUTOR VISUAL DE AGENDAMENTO AUTOMÁTICO (DATA, HORÁRIO E FREQUÊNCIA) -->
         <div style="background: #020617; border: 1px solid #0284c7; border-radius: 10px; padding: 14px; margin-top: 12px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-            <label style="display: flex; align-items: center; gap: 8px; color: #38bdf8; font-weight: 700; font-size: 13px; cursor: pointer;">
-              <input type="checkbox" v-model="agenteEmEdicao.schedule_enabled" @change="aoAlternarAgendamentoModal" />
-              ⏰ Ativar Disparo Automático Programado
-            </label>
-            <button
-              v-if="agenteEmEdicao.slug"
-              type="button"
-              :disabled="executandoCronManual"
-              @click="dispararCronAgora(agenteEmEdicao.slug)"
-              style="background: #0284c7; color: #fff; border: none; padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer;"
-            >
-              {{ executandoCronManual ? '⏳ Executando...' : '▶ Testar Disparo Agora' }}
+          <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;">
+            <strong style="color: #38bdf8; font-size: 13px;">⏰ Disparos Automáticos deste Especialista ({{ getListaDisparosModal().length }})</strong>
+            <button type="button" @click="adicionarDisparoNoAgente" style="background: #0284c7; color: #fff; border: none; padding: 9px 14px; border-radius: 7px; font-size: 13px; font-weight: 700; cursor: pointer; width: 100%;">
+              ➕ Adicionar Novo Disparo
             </button>
           </div>
-
-          <div v-if="agenteEmEdicao.schedule_enabled" style="margin-top: 12px; display: flex; flex-direction: column; gap: 10px;">
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px;">
-              <div>
-                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">1. Frequência do Disparo</label>
-                <select v-model="agendaUi.modo" @change="recalcularCronVisual" style="width: 100%; background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 7px; border-radius: 6px; font-size: 12px;">
-                  <option value="diario">📅 Todos os dias (Horário fixo)</option>
-                  <option value="dias_uteis">💼 Segunda a Sexta (Dias úteis)</option>
-                  <option value="data_unica">🗓️ Data e Horário específicos</option>
-                  <option value="semanal">📆 Um dia da semana</option>
-                  <option value="intervalo">🔁 A cada X minutos / horas</option>
-                  <option value="custom">⚙️ Expressão Cron manual</option>
-                </select>
-              </div>
-
-              <div v-if="agendaUi.modo === 'intervalo'">
-                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">2. Intervalo</label>
-                <select v-model="agendaUi.intervalo" @change="recalcularCronVisual" style="width: 100%; background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 7px; border-radius: 6px; font-size: 12px;">
-                  <option value="*/5 * * * *">A cada 5 minutos</option>
-                  <option value="*/15 * * * *">A cada 15 minutos</option>
-                  <option value="*/30 * * * *">A cada 30 minutos</option>
-                  <option value="0 * * * *">A cada 1 hora</option>
-                  <option value="0 */2 * * *">A cada 2 horas</option>
-                  <option value="0 */6 * * *">A cada 6 horas</option>
-                  <option value="0 */12 * * *">A cada 12 horas</option>
-                </select>
-              </div>
-
-              <div v-if="agendaUi.modo === 'data_unica'">
-                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">2. Data do Disparo</label>
-                <input type="date" v-model="agendaUi.data" @change="recalcularCronVisual" style="width: 100%; background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 6px; border-radius: 6px; font-size: 12px;" />
-              </div>
-
-              <div v-if="agendaUi.modo === 'semanal'">
-                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">2. Dia da Semana</label>
-                <select v-model="agendaUi.diaSemana" @change="recalcularCronVisual" style="width: 100%; background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 7px; border-radius: 6px; font-size: 12px;">
-                  <option value="1">Segunda-feira</option>
-                  <option value="2">Terça-feira</option>
-                  <option value="3">Quarta-feira</option>
-                  <option value="4">Quinta-feira</option>
-                  <option value="5">Sexta-feira</option>
-                  <option value="6">Sábado</option>
-                  <option value="0">Domingo</option>
-                </select>
-              </div>
-
-              <div v-if="['diario', 'dias_uteis', 'data_unica', 'semanal'].includes(agendaUi.modo)">
-                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">3. Horário (Campo Grande)</label>
-                <input type="time" v-model="agendaUi.hora" @change="recalcularCronVisual" style="width: 100%; background: #0f172a; color: #38bdf8; border: 1px solid #334155; padding: 6px; border-radius: 6px; font-size: 12px; font-weight: 700;" />
-              </div>
-
-              <div v-if="agendaUi.modo === 'custom'">
-                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">Cron (min hora dia mês sem)</label>
-                <input v-model="agenteEmEdicao.cron_expression" placeholder="0 8 * * *" style="width: 100%; background: #0f172a; color: #38bdf8; border: 1px solid #334155; padding: 6px; border-radius: 6px; font-family: monospace; font-size: 12px;" />
-              </div>
-            </div>
-
-            <div style="background: #0f172a; border: 1px dashed #0284c7; padding: 7px 10px; border-radius: 6px; font-size: 12px; color: #7dd3fc; display: flex; justify-content: space-between; align-items: center;">
-              <span>📌 <strong>Programação:</strong> {{ descreverCronAmigavel(agenteEmEdicao.cron_expression) }}</span>
-              <code style="color: #94a3b8; font-size: 11px;">Cron: {{ agenteEmEdicao.cron_expression || 'não definido' }}</code>
-            </div>
-
-            <div>
-              <label style="display: block; font-size: 11px; color: #fbbf24; font-weight: 600; margin-bottom: 4px;">
-                4. Comando / Tarefa que este agente deve executar no horário (Obrigatório):
-              </label>
-              <textarea
-                v-model="agenteEmEdicao.schedule_prompt"
-                rows="2"
-                placeholder="Ex: Liste todos os meus compromissos de hoje no Google Calendar e envie um resumo organizado."
-                style="width: 100%; background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 8px; border-radius: 6px; font-size: 12px;"
-              ></textarea>
-            </div>
+          <div v-if="getListaDisparosModal().length === 0" style="background: #0f172a; border: 1px dashed #334155; padding: 10px; border-radius: 8px; font-size: 12px; color: #94a3b8; text-align: center;">
+            Nenhum disparo programado. Toque em <strong>➕ Adicionar Novo Disparo</strong> acima.
           </div>
-
-          <pre v-if="saidaCronManual" style="margin-top: 8px; background: #0f172a; color: #38bdf8; padding: 8px; border-radius: 6px; font-size: 11px; max-height: 110px; overflow: auto; white-space: pre-wrap;">{{ saidaCronManual }}</pre>
+          <div v-for="(sched, idx) in getListaDisparosModal()" :key="sched.id || idx" style="background: #0f172a; border: 1px solid #1e3a5f; border-radius: 8px; padding: 12px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+              <div style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 160px;">
+                <input type="checkbox" v-model="sched.enabled" @change="sincronizarCamposLegadosAgendamento" />
+                <input v-model="sched.label" placeholder="Nome do disparo" style="flex: 1; background: #020617; color: #f8fafc; border: 1px solid #334155; padding: 5px 8px; border-radius: 5px; font-size: 12px; font-weight: 600;" />
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <button v-if="agenteEmEdicao.slug" type="button" :disabled="executandoCronManual" @click="dispararCronAgora(agenteEmEdicao.slug, sched.schedule_prompt, sched.id)" style="background: #059669; color: #fff; border: none; padding: 5px 10px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer;">{{ executandoCronManual ? '⏳...' : '▶ Testar Este' }}</button>
+                <button type="button" @click="removerDisparoDoAgente(idx)" style="background: #7f1d1d; color: #fecaca; border: none; padding: 5px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;">🗑️</button>
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px;">
+              <div>
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 3px;">Frequência</label>
+                <select v-model="sched.modo" @change="recalcularItemCron(sched)" style="width: 100%; background: #020617; color: #f8fafc; border: 1px solid #334155; padding: 6px; border-radius: 6px; font-size: 12px;">
+                  <option value="diario">📅 Todos os dias</option>
+                  <option value="dias_uteis">💼 Segunda a Sexta</option>
+                  <option value="data_unica">🗓️ Data específica</option>
+                  <option value="semanal">📆 Dia da semana</option>
+                  <option value="intervalo">🔁 A cada X min/h</option>
+                  <option value="custom">⚙️ Cron manual</option>
+                </select>
+              </div>
+              <div v-if="sched.modo === 'intervalo'">
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 3px;">Intervalo</label>
+                <select v-model="sched.intervalo" @change="recalcularItemCron(sched)" style="width: 100%; background: #020617; color: #f8fafc; border: 1px solid #334155; padding: 6px; border-radius: 6px; font-size: 12px;">
+                  <option value="*/5 * * * *">A cada 5 min</option>
+                  <option value="*/15 * * * *">A cada 15 min</option>
+                  <option value="*/30 * * * *">A cada 30 min</option>
+                  <option value="0 * * * *">A cada 1 hora</option>
+                  <option value="0 */6 * * *">A cada 6 horas</option>
+                </select>
+              </div>
+              <div v-if="sched.modo === 'data_unica'">
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 3px;">Data</label>
+                <input type="date" v-model="sched.data" @change="recalcularItemCron(sched)" style="width: 100%; background: #020617; color: #f8fafc; border: 1px solid #334155; padding: 5px; border-radius: 6px; font-size: 12px;" />
+              </div>
+              <div v-if="sched.modo === 'semanal'">
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 3px;">Dia</label>
+                <select v-model="sched.diaSemana" @change="recalcularItemCron(sched)" style="width: 100%; background: #020617; color: #f8fafc; border: 1px solid #334155; padding: 6px; border-radius: 6px; font-size: 12px;">
+                  <option value="1">Segunda</option><option value="2">Terça</option><option value="3">Quarta</option><option value="4">Quinta</option><option value="5">Sexta</option><option value="6">Sábado</option><option value="0">Domingo</option>
+                </select>
+              </div>
+              <div v-if="['diario', 'dias_uteis', 'data_unica', 'semanal'].includes(sched.modo || 'diario')">
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 3px;">Horário</label>
+                <input type="time" v-model="sched.hora" @change="recalcularItemCron(sched)" style="width: 100%; background: #020617; color: #38bdf8; border: 1px solid #334155; padding: 5px; border-radius: 6px; font-size: 12px; font-weight: 700;" />
+              </div>
+              <div v-if="sched.modo === 'custom'">
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 3px;">Cron</label>
+                <input v-model="sched.cron_expression" @input="sincronizarCamposLegadosAgendamento" style="width: 100%; background: #020617; color: #38bdf8; border: 1px solid #334155; padding: 5px; border-radius: 6px; font-family: monospace; font-size: 12px;" />
+              </div>
+            </div>
+            <div style="font-size: 11px; color: #7dd3fc; display: flex; justify-content: space-between;">
+              <span>📌 {{ descreverCronAmigavel(sched.cron_expression) }}</span>
+              <code style="color: #64748b;">{{ sched.cron_expression }}</code>
+            </div>
+            <textarea v-model="sched.schedule_prompt" @input="sincronizarCamposLegadosAgendamento" rows="2" placeholder="Ordem que será executada neste horário..." style="width: 100%; background: #020617; color: #f8fafc; border: 1px solid #334155; padding: 7px; border-radius: 6px; font-size: 12px;"></textarea>
+          </div>
+          <pre v-if="saidaCronManual" style="margin-top: 8px; background: #0f172a; color: #38bdf8; padding: 8px; border-radius: 6px; font-size: 11px; max-height: 120px; overflow: auto; white-space: pre-wrap;">{{ saidaCronManual }}</pre>
         </div>
 
         <!-- CONSOLE OPERACIONAL DO AGENTE HACKER & ERROR TRIGGER -->
@@ -1246,68 +1202,84 @@ async function restaurarPromptVersao(id: number) {
 }
 
 
-const agentesAgendados = computed(() =>
-  (listaAgentes.value || []).filter((a: any) => Boolean(a.schedule_enabled))
-);
-
-const agendaUi = ref({
-  modo: 'diario',
-  hora: '08:00',
-  data: new Date().toISOString().slice(0, 10),
-  diaSemana: '1',
-  intervalo: '*/30 * * * *'
+const todosDisparosAtivos = computed(() => {
+  const saida: any[] = [];
+  for (const ag of (agentesAgendados.value || [])) {
+    const lista = Array.isArray(ag.schedules) && ag.schedules.length > 0
+      ? ag.schedules
+      : (ag.schedule_enabled && ag.cron_expression ? [{ id: 'legacy', label: 'Disparo Principal', enabled: true, cron_expression: ag.cron_expression, schedule_prompt: ag.schedule_prompt, last_run: ag.last_scheduled_run }] : []);
+    lista.forEach((s: any, i: number) => {
+      if (s && s.enabled !== false && s.cron_expression) saida.push({ uid: `${ag.slug}_${s.id || i}`, agent: ag, sched: s });
+    });
+  }
+  return saida;
 });
 
 function descreverCronAmigavel(cron?: string): string {
-  if (!cron) return 'Sem horário definido';
+  if (!cron) return 'Sem horário';
   const p = cron.trim().split(/\s+/);
   if (p.length !== 5) return cron;
   const [m, h, dom, mon, dow] = p;
-  if (m.startsWith('*/') && h === '*') return `A cada ${m.slice(2)} minutos`;
+  if (m.startsWith('*/') && h === '*') return `A cada ${m.slice(2)} min`;
   if (m === '0' && h === '*') return 'A cada 1 hora';
   if (m === '0' && h.startsWith('*/')) return `A cada ${h.slice(2)} horas`;
-  const hh = h.padStart(2, '0');
-  const mm = m.padStart(2, '0');
-  const diasMap: Record<string, string> = { '0': 'Domingo', '1': 'Segunda', '2': 'Terça', '3': 'Quarta', '4': 'Quinta', '5': 'Sexta', '6': 'Sábado', '1-5': 'Seg a Sex' };
+  const hh = h.padStart(2, '0'), mm = m.padStart(2, '0');
+  const dMap: Record<string, string> = { '0': 'Domingo', '1': 'Segunda', '2': 'Terça', '3': 'Quarta', '4': 'Quinta', '5': 'Sexta', '6': 'Sábado' };
   if (dom !== '*' && mon !== '*') return `Dia ${dom.padStart(2, '0')}/${mon.padStart(2, '0')} às ${hh}:${mm}`;
   if (dow === '1-5') return `Seg a Sex às ${hh}:${mm}`;
-  if (dow !== '*' && diasMap[dow]) return `Toda ${diasMap[dow]} às ${hh}:${mm}`;
+  if (dow !== '*' && dMap[dow]) return `Toda ${dMap[dow]} às ${hh}:${mm}`;
   if (dom === '*' && mon === '*' && dow === '*') return `Todo dia às ${hh}:${mm}`;
-  return `${cron}`;
+  return cron;
 }
 
-function recalcularCronVisual() {
-  if (!agenteEmEdicao.value) return;
-  const [hhStr, mmStr] = (agendaUi.value.hora || '08:00').split(':');
-  const hh = Number(hhStr || 8);
-  const mm = Number(mmStr || 0);
-  if (agendaUi.value.modo === 'intervalo') {
-    agenteEmEdicao.value.cron_expression = agendaUi.value.intervalo;
-  } else if (agendaUi.value.modo === 'diario') {
-    agenteEmEdicao.value.cron_expression = `${mm} ${hh} * * *`;
-  } else if (agendaUi.value.modo === 'dias_uteis') {
-    agenteEmEdicao.value.cron_expression = `${mm} ${hh} * * 1-5`;
-  } else if (agendaUi.value.modo === 'semanal') {
-    agenteEmEdicao.value.cron_expression = `${mm} ${hh} * * ${agendaUi.value.diaSemana}`;
-  } else if (agendaUi.value.modo === 'data_unica') {
-    const [, mesStr, diaStr] = (agendaUi.value.data || new Date().toISOString().slice(0, 10)).split('-');
-    agenteEmEdicao.value.cron_expression = `${mm} ${hh} ${Number(diaStr)} ${Number(mesStr)} *`;
+function extrairHoraDeCron(cron?: string): string {
+  const p = (cron || '').trim().split(/\s+/);
+  return (p.length === 5 && /^\d+$/.test(p[0]) && /^\d+$/.test(p[1])) ? `${p[1].padStart(2, '0')}:${p[0].padStart(2, '0')}` : '08:00';
+}
+
+function getListaDisparosModal(): any[] {
+  const ag = agenteEmEdicao.value;
+  if (!ag) return [];
+  if (!Array.isArray(ag.schedules)) {
+    ag.schedules = (ag.schedule_enabled && (ag.cron_expression || ag.schedule_prompt))
+      ? [{ id: 'sched_1', label: 'Disparo Principal', enabled: true, modo: 'diario', hora: extrairHoraDeCron(ag.cron_expression), data: new Date().toISOString().slice(0, 10), diaSemana: '1', intervalo: '*/30 * * * *', cron_expression: ag.cron_expression || '0 8 * * *', schedule_prompt: ag.schedule_prompt || '' }]
+      : [];
   }
+  return ag.schedules;
 }
 
-function aoAlternarAgendamentoModal() {
-  if (agenteEmEdicao.value?.schedule_enabled && !agenteEmEdicao.value?.cron_expression) {
-    recalcularCronVisual();
+function sincronizarCamposLegadosAgendamento() {
+  const ag = agenteEmEdicao.value;
+  if (!ag) return;
+  const ativos = getListaDisparosModal().filter((s: any) => s.enabled !== false);
+  ag.schedule_enabled = ativos.length > 0;
+  ag.cron_expression = ativos[0]?.cron_expression || null;
+  ag.schedule_prompt = ativos[0]?.schedule_prompt || '';
+}
+
+function recalcularItemCron(sched: any) {
+  const [hhStr, mmStr] = (sched.hora || '08:00').split(':');
+  const hh = Number(hhStr || 8), mm = Number(mmStr || 0);
+  if (sched.modo === 'intervalo') sched.cron_expression = sched.intervalo || '*/30 * * * *';
+  else if (sched.modo === 'diario') sched.cron_expression = `${mm} ${hh} * * *`;
+  else if (sched.modo === 'dias_uteis') sched.cron_expression = `${mm} ${hh} * * 1-5`;
+  else if (sched.modo === 'semanal') sched.cron_expression = `${mm} ${hh} * * ${sched.diaSemana || '1'}`;
+  else if (sched.modo === 'data_unica') {
+    const [, mes, dia] = (sched.data || new Date().toISOString().slice(0, 10)).split('-');
+    sched.cron_expression = `${mm} ${hh} ${Number(dia)} ${Number(mes)} *`;
   }
+  sincronizarCamposLegadosAgendamento();
 }
 
-async function pausarAgendamentoRapido(ag: any) {
-  await fetch(`/api/v1/agents/${ag.id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...ag, schedule_enabled: false })
-  });
-  ag.schedule_enabled = false;
+function adicionarDisparoNoAgente() {
+  const lista = getListaDisparosModal();
+  lista.push({ id: `sched_${Date.now()}`, label: `Disparo #${lista.length + 1}`, enabled: true, modo: 'diario', hora: '08:00', data: new Date().toISOString().slice(0, 10), diaSemana: '1', intervalo: '*/30 * * * *', cron_expression: '0 8 * * *', schedule_prompt: '' });
+  sincronizarCamposLegadosAgendamento();
+}
+
+function removerDisparoDoAgente(idx: number) {
+  getListaDisparosModal().splice(idx, 1);
+  sincronizarCamposLegadosAgendamento();
 }
 
 const executandoCronManual = ref(false);
@@ -1315,27 +1287,19 @@ const saidaCronManual = ref('');
 const rodandoHacker = ref(false);
 const relatorioHacker = ref('');
 
-async function dispararCronAgora(slug: string, customPrompt?: string) {
+async function dispararCronAgora(slug: string, customPrompt?: string, scheduleId?: string) {
   if (!slug) return;
   executandoCronManual.value = true;
   saidaCronManual.value = '⏳ Executando rotina e ferramentas encadeadas...';
   const promptEnviar = customPrompt ?? (agenteEmEdicao.value?.slug === slug ? agenteEmEdicao.value?.schedule_prompt : undefined);
   try {
     const r = await fetch(`/api/v1/triggers/schedule/run-now/${encodeURIComponent(slug)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ schedule_prompt: promptEnviar })
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schedule_prompt: promptEnviar, schedule_id: scheduleId })
     });
     const j = await r.json();
-    saidaCronManual.value = j.success
-      ? `✅ Concluído (${j.data?.executionTimeMs || 0}ms) | Rota: ${j.data?.rota || slug}
-${typeof j.data?.output === 'string' ? j.data.output : JSON.stringify(j.data?.output, null, 2)}`
-      : `❌ ${j.error}`;
-  } catch (e: any) {
-    saidaCronManual.value = `❌ ${e.message}`;
-  } finally {
-    executandoCronManual.value = false;
-  }
+    saidaCronManual.value = j.success ? `✅ Concluído (${j.data?.executionTimeMs || 0}ms) | Rota: ${j.data?.rota || slug}\n${typeof j.data?.output === 'string' ? j.data.output : JSON.stringify(j.data?.output, null, 2)}` : `❌ ${j.error}`;
+  } catch (e: any) { saidaCronManual.value = `❌ ${e.message}`; } finally { executandoCronManual.value = false; }
 }
 
 async function executarOperacaoHacker(mode: string, slug?: string) {
@@ -1345,20 +1309,11 @@ async function executarOperacaoHacker(mode: string, slug?: string) {
     const payload: any = { mode, target_slug: slug };
     if (mode === 'api_probe') payload.target_url = agenteEmEdicao.value?.endpoint_url || 'https://economia.awesomeapi.com.br/last/USD-BRL';
     if (mode === 'sandbox_code_test') payload.code_to_test = agenteEmEdicao.value?.code_snippet || 'return { status: "ok" };';
-    const r = await fetch('/api/v1/agents/hacker/audit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const r = await fetch('/api/v1/agents/hacker/audit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const j = await r.json();
     relatorioHacker.value = j.success ? JSON.stringify(j.data, null, 2) : `❌ ${j.error}`;
-  } catch (e: any) {
-    relatorioHacker.value = `❌ ${e.message}`;
-  } finally {
-    rodandoHacker.value = false;
-  }
+  } catch (e: any) { relatorioHacker.value = `❌ ${e.message}`; } finally { rodandoHacker.value = false; }
 }
-
 </script>
 
 <style scoped>
