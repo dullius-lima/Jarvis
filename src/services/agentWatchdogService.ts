@@ -20,7 +20,7 @@ export async function checkAgentsHealth() {
       const diffMs = now - lastExecutionTime;
 
       if (diffMs > AGENT_TIMEOUT_MS) {
-        console.warn(`⚠️ [Watchdog] O agente "${agentName}" está inativo há ${Math.round(diffMs / 60000)} minutos.`);
+        // silenciado: console.warn(`⚠️ [Watchdog] O agente "${agentName}" está inativo há ${Math.round(diffMs / 60000)} minutos.`);
         
         // Só tenta enviar se o token existir
         if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN.trim() !== '') {

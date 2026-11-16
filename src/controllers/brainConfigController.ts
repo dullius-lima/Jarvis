@@ -26,7 +26,7 @@ async function callGroqDirectly(systemPrompt: string, userPrompt: string): Promi
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-20b',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
@@ -71,7 +71,7 @@ export const KNOWN_ENDPOINTS: Record<string, string> = {
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  groq: 'llama-3.3-70b-versatile',
+  groq: 'openai/gpt-oss-20b',
   gemini: 'gemini-3.8-flash',
   openai: 'gpt-4o-mini',
   deepseek: 'deepseek-chat',
@@ -82,7 +82,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
 export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string }>> = {
   groq: [
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
-    { label: 'Llama 3.3 70B Versatile (Free Tier Recomendado)', value: 'llama-3.3-70b-versatile' },
+    { label: 'Llama 3.3 70B Versatile (Free Tier Recomendado)', value: 'openai/gpt-oss-20b' },
     { label: 'Llama 3.1 8B Instant (Free Tier Ultra-Rápido)', value: 'llama-3.1-8b-instant' },
     { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' }
   ],
@@ -204,7 +204,7 @@ function detectProviderFromKeyAndInput(rawProvider: string, apiKey: string, base
 function sanitizeModelForProvider(provider: string, rawModel?: string): string {
   const m = (rawModel || '').trim().replace(/^models\//, '');
   if (!m || m === 'CUSTOM_INPUT') {
-    return DEFAULT_MODELS[provider] || 'llama-3.3-70b-versatile';
+    return DEFAULT_MODELS[provider] || 'openai/gpt-oss-20b';
   }
 
   if (provider === 'gemini') {
@@ -327,7 +327,7 @@ export async function getSupportedModels(_req: Request, res: Response) {
       { label: 'GPT-OSS 120B (Ativo na Organização)', value: 'openai/gpt-oss-120b' },
       { label: 'Qwen 3.8 27B', value: 'qwen/qwen3.8-27b' },
       { label: 'GPT-OSS 20B (Ultra-Económico)', value: 'openai/gpt-oss-20b' },
-      { label: 'Llama 3.3 70B Versatile', value: 'llama-3.3-70b-versatile' }
+      { label: 'Llama 3.3 70B Versatile', value: 'openai/gpt-oss-20b' }
     ],
     gemini: [
       { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' },
@@ -374,10 +374,20 @@ export async function getSupportedModels(_req: Request, res: Response) {
               label: String(item.label || item.value),
               value: String(item.value).replace('gemini-2.5-flash', 'gemini-3.8-flash')
             }));
-          if (!cleaned.some((m) => m.value === 'CUSTOM_INPUT')) {
-            cleaned.unshift({ label: `✍️ Inserir ID Manual (${key.toUpperCase()})`, value: 'CUSTOM_INPUT' });
+          let finalList = cleaned;
+          if (key === 'groq') {
+            const blocked = new Set(['openai/gpt-oss-20b', 'llama-3.1-8b-instant', 'qwen/qwen3.6-27b', 'mixtral-8x7b-32768', 'gemma2-9b-it']);
+            finalList = cleaned.filter((m) => !blocked.has(m.value));
+            for (const reqModel of fallbackCatalog.groq) {
+              if (!finalList.some((m) => m.value === reqModel.value)) {
+                finalList.push(reqModel);
+              }
+            }
           }
-          merged[key] = cleaned;
+          if (!finalList.some((m) => m.value === 'CUSTOM_INPUT')) {
+            finalList.unshift({ label: `✍️ Inserir ID Manual (${key.toUpperCase()})`, value: 'CUSTOM_INPUT' });
+          }
+          merged[key] = finalList;
         }
         return res.status(200).json({ success: true, catalog: merged, source: 'github-gist-live' });
       }
@@ -475,7 +485,7 @@ export async function getBrainConfig(_req: Request, res: Response) {
       data: {
         agent_name: 'JARVIS',
         provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-20b',
         api_key: getEnvKeyForProvider('groq'),
         base_url: KNOWN_ENDPOINTS.groq,
         temperature: 0.2,

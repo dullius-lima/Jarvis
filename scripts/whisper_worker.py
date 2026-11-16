@@ -74,7 +74,7 @@ def main():
     model_size = sys.argv[1] if len(sys.argv) > 1 else "base"
     try:
         from faster_whisper import WhisperModel
-        model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=4)
+        model = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=4)
         dummy = np.zeros(8000, dtype=np.float32)
         list(model.transcribe(dummy, language="pt", beam_size=1, vad_filter=False)[0])
         sys.stdout.write(json.dumps({"ready": True, "model": model_size}) + "\n")

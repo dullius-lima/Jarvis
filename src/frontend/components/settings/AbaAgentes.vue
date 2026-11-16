@@ -135,7 +135,7 @@
 
             <div v-if="agenteEmEdicao.model === 'CUSTOM_INPUT'" class="form-group">
               <label>✍️ Digite o ID exato do Modelo</label>
-              <input type="text" v-model="agenteEmEdicao.custom_model_id" class="input-field" placeholder="Ex: openai/gpt-oss-120b, llama-3.3-70b-versatile..." />
+              <input type="text" v-model="agenteEmEdicao.custom_model_id" class="input-field" placeholder="Ex: openai/gpt-oss-120b, openai/gpt-oss-20b..." />
             </div>
 
             <div class="form-group">
@@ -472,7 +472,7 @@ const modelosPadrao: Record<string, Array<{ label: string; value: string }>> = {
   groq: [
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
     { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' },
-    { label: 'Llama 3.3 70B Versatile', value: 'llama-3.3-70b-versatile' },
+    { label: 'Llama 3.3 70B Versatile', value: 'openai/gpt-oss-20b' },
     { label: 'Llama 3.1 8B Instant', value: 'llama-3.1-8b-instant' }
   ],
   gemini: [
@@ -541,7 +541,7 @@ const agenteEmEdicao = ref<any>({
   description: '',
   agent_type: 'llm',
   provider: 'groq',
-  model: 'llama-3.3-70b-versatile',
+  model: 'openai/gpt-oss-20b',
   custom_model_id: '',
   temperature: 0.2,
   api_key: '',
@@ -893,7 +893,7 @@ function abrirModalNovoAgente() {
     description: '',
     agent_type: 'llm',
     provider: 'groq',
-    model: 'llama-3.3-70b-versatile',
+    model: 'openai/gpt-oss-20b',
     custom_model_id: '',
     temperature: 0.2,
     api_key: '',

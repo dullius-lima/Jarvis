@@ -215,7 +215,7 @@ export const AutonomousAgentBlueprintSchema = z.object({
   agent_type: z.enum(['llm', 'api', 'mcp', 'code']).default('llm'),
   system_prompt: z.string().default('Você é um agente especialista subordinado ao JARVIS.'),
   provider: z.string().default('groq'),
-  model: z.string().default('llama-3.3-70b-versatile'),
+  model: z.string().default('openai/gpt-oss-20b'),
   credential_id: z.string().optional(),
   tools: z.array(z.string()).default([]),
   endpoint_url: z.string().optional(),
@@ -265,7 +265,7 @@ export function validateAutonomousAgentBlueprint(rawInput: any) {
       rawInput?.parameters?.system_prompt ||
       'Você é um agente especialista subordinado ao JARVIS.',
     provider: (rawInput?.provider || rawInput?.parameters?.provider || 'groq').toLowerCase(),
-    model: rawInput?.model || rawInput?.parameters?.model || 'llama-3.3-70b-versatile',
+    model: rawInput?.model || rawInput?.parameters?.model || 'openai/gpt-oss-20b',
     credential_id:
       rawInput?.credential_id ||
       rawInput?.credentials?.id ||

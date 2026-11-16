@@ -99,7 +99,7 @@
 
           <div class="form-group">
             <label>Modelo Selecionado</label>
-            <input type="text" v-model="brainSettings.model" class="input-field" placeholder="ex: llama-3.3-70b-versatile, gpt-4o, deepseek-chat" />
+            <input type="text" v-model="brainSettings.model" class="input-field" placeholder="ex: openai/gpt-oss-20b, gpt-4o, deepseek-chat" />
           </div>
 
           <div class="form-group">
@@ -202,7 +202,7 @@
 
             <div class="form-group">
               <label>Modelo</label>
-              <input type="text" v-model="selectedAgent.model" class="input-field" placeholder="ex: llama-3.3-70b-versatile, gpt-4o-mini" />
+              <input type="text" v-model="selectedAgent.model" class="input-field" placeholder="ex: openai/gpt-oss-20b, gpt-4o-mini" />
             </div>
           </div>
 
@@ -301,14 +301,14 @@ const isNewAgent = ref(false);
 
 const brainSettings = ref({
   provider: 'groq',
-  model: 'llama-3.3-70b-versatile',
+  model: 'openai/gpt-oss-20b',
   api_key: '',
   base_url: 'https://api.groq.com/openai/v1',
   temperature: 0.2
 });
 
 const defaultEndpoints: Record<string, { url: string; model: string }> = {
-  groq: { url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+  groq: { url: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-20b' },
   openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
   ollama: { url: 'http://localhost:11434/v1', model: 'llama3.1:8b' },
   deepseek: { url: 'https://api.deepseek.com', model: 'deepseek-chat' },
@@ -381,7 +381,7 @@ function openNewAgentModal() {
     description: '',
     system_prompt: '',
     provider: 'groq',
-    model: 'llama-3.3-70b-versatile',
+    model: 'openai/gpt-oss-20b',
     api_key: '',
     base_url: '',
     script_handler: '',
@@ -412,7 +412,7 @@ function applyTemplate(tmpl: any) {
     description: tmpl.desc,
     system_prompt: tmpl.type === 'llm' ? 'Você é um agente especialista...' : '',
     provider: 'groq',
-    model: 'llama-3.3-70b-versatile',
+    model: 'openai/gpt-oss-20b',
     api_key: '',
     base_url: '',
     script_handler: tmpl.handler || '',

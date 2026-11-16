@@ -21,7 +21,7 @@ export async function initializeDatabaseSchema() {
         key VARCHAR(100) PRIMARY KEY,
         value JSONB NOT NULL DEFAULT '{}'::jsonb,
         provider VARCHAR(60) DEFAULT 'groq',
-        model VARCHAR(100) DEFAULT 'llama-3.3-70b-versatile',
+        model VARCHAR(100) DEFAULT 'openai/gpt-oss-20b',
         api_key TEXT DEFAULT '',
         base_url TEXT DEFAULT 'https://api.groq.com/openai/v1',
         temperature NUMERIC(3, 2) DEFAULT 0.30,
@@ -34,7 +34,7 @@ export async function initializeDatabaseSchema() {
     await client.query(`
       ALTER TABLE system_configs ADD COLUMN IF NOT EXISTS value JSONB DEFAULT '{}'::jsonb;
       ALTER TABLE system_configs ADD COLUMN IF NOT EXISTS provider VARCHAR(60) DEFAULT 'groq';
-      ALTER TABLE system_configs ADD COLUMN IF NOT EXISTS model VARCHAR(100) DEFAULT 'llama-3.3-70b-versatile';
+      ALTER TABLE system_configs ADD COLUMN IF NOT EXISTS model VARCHAR(100) DEFAULT 'openai/gpt-oss-20b';
       ALTER TABLE system_configs ADD COLUMN IF NOT EXISTS api_key TEXT DEFAULT '';
       ALTER TABLE system_configs ADD COLUMN IF NOT EXISTS base_url TEXT DEFAULT 'https://api.groq.com/openai/v1';
       ALTER TABLE system_configs ADD COLUMN IF NOT EXISTS temperature NUMERIC(3, 2) DEFAULT 0.30;
@@ -52,13 +52,13 @@ export async function initializeDatabaseSchema() {
       VALUES (
         'brain_llm_config',
         'groq',
-        'llama-3.3-70b-versatile',
+        'openai/gpt-oss-20b',
         'https://api.groq.com/openai/v1',
         0.2,
         '{
           "agent_name": "JARVIS",
           "provider": "groq",
-          "model": "llama-3.3-70b-versatile",
+          "model": "openai/gpt-oss-20b",
           "api_key": "",
           "base_url": "https://api.groq.com/openai/v1",
           "temperature": 0.2,
@@ -109,7 +109,7 @@ export async function initializeDatabaseSchema() {
         description TEXT DEFAULT '',
         system_prompt TEXT DEFAULT '',
         provider VARCHAR(60) NOT NULL DEFAULT 'groq',
-        model VARCHAR(100) NOT NULL DEFAULT 'llama-3.3-70b-versatile',
+        model VARCHAR(100) NOT NULL DEFAULT 'openai/gpt-oss-20b',
         api_key TEXT,
         base_url TEXT,
         temperature NUMERIC(3, 2) DEFAULT 0.30,
@@ -135,7 +135,7 @@ export async function initializeDatabaseSchema() {
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS provider VARCHAR(60) DEFAULT 'groq';
-      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS model VARCHAR(100) DEFAULT 'llama-3.3-70b-versatile';
+      ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS model VARCHAR(100) DEFAULT 'openai/gpt-oss-20b';
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS api_key TEXT;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS base_url TEXT;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS temperature NUMERIC(3, 2) DEFAULT 0.30;

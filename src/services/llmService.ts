@@ -24,7 +24,7 @@ export const KNOWN_ENDPOINTS: Record<string, string> = {
 // Modelos de referência padrão por provedor
 export const DEFAULT_MODELS: Record<string, string> = {
   openai: 'gpt-4o-mini',
-  groq: 'llama-3.3-70b-versatile',
+  groq: 'openai/gpt-oss-20b',
   deepseek: 'deepseek-chat',
   gemini: 'gemini-1.5-flash',
   openrouter: 'anthropic/claude-3.5-sonnet',

@@ -68,7 +68,7 @@
           type="text"
           v-model="configuracoesCerebro.model"
           class="input-field"
-          placeholder="Ex: openai/gpt-oss-120b, llama-3.3-70b-versatile, gemini-3.8-flash..."
+          placeholder="Ex: openai/gpt-oss-120b, openai/gpt-oss-20b, gemini-3.8-flash..."
         />
       </div>
 
@@ -166,7 +166,7 @@ const ENDPOINTS_PADRAO: Record<string, string> = {
 // 3. Catálogo de Modelos Homologados
 const modelosHomologados = ref<Record<string, Array<{ label: string; value: string }>>>({
   groq: [
-    { label: 'Llama 3.3 70B Versatile (Recomendado)', value: 'llama-3.3-70b-versatile' },
+    { label: 'Llama 3.3 70B Versatile (Recomendado)', value: 'openai/gpt-oss-20b' },
     { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' },
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' }
   ],
@@ -203,7 +203,7 @@ const rotuloFonteGist = computed(() => {
 const configuracoesCerebro = ref<any>({
   agent_name: 'JARVIS',
   provider: 'groq',
-  model: 'llama-3.3-70b-versatile',
+  model: 'openai/gpt-oss-20b',
   api_key: '',
   base_url: ENDPOINTS_PADRAO.groq,
   temperature: 0.2,
@@ -212,7 +212,7 @@ const configuracoesCerebro = ref<any>({
   saved_keys: {}
 });
 
-const opcaoModeloSelecionado = ref('llama-3.3-70b-versatile');
+const opcaoModeloSelecionado = ref('openai/gpt-oss-20b');
 const modeloCustomizado = ref('');
 
 // 6. Helpers de Manipulação de Modelos
@@ -343,7 +343,7 @@ async function testarConexaoIA() {
 
     const payload = {
       provider: configuracoesCerebro.value.provider || 'groq',
-      model: modeloFinal || configuracoesCerebro.value.model || 'llama-3.3-70b-versatile',
+      model: modeloFinal || configuracoesCerebro.value.model || 'openai/gpt-oss-20b',
       api_key: configuracoesCerebro.value.api_key || '',
       base_url: configuracoesCerebro.value.base_url || '',
       temperature: Number(configuracoesCerebro.value.temperature ?? 0.2)
@@ -397,7 +397,7 @@ async function salvarConfiguracoesCerebro() {
     const payload = {
       agent_name: configuracoesCerebro.value.agent_name || 'JARVIS',
       provider: configuracoesCerebro.value.provider || 'groq',
-      model: modeloFinal || configuracoesCerebro.value.model || 'llama-3.3-70b-versatile',
+      model: modeloFinal || configuracoesCerebro.value.model || 'openai/gpt-oss-20b',
       api_key: configuracoesCerebro.value.api_key || '',
       base_url: configuracoesCerebro.value.base_url || '',
       server_base_url: configuracoesCerebro.value.server_base_url || 'http://localhost:3333',

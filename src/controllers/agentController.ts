@@ -48,7 +48,7 @@ export async function runHackerAuditController(req: Request, res: Response) {
           Authorization: `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: 'openai/gpt-oss-20b',
           messages: [
             { role: 'system', content: sys },
             { role: 'user', content: usr }
@@ -475,7 +475,7 @@ export async function createAgent(req: Request, res: Response) {
       description = '',
       system_prompt = '',
       provider = 'groq',
-      model = 'llama-3.3-70b-versatile',
+      model = 'openai/gpt-oss-20b',
       api_key = '',
       base_url = '',
       temperature = 0.3,

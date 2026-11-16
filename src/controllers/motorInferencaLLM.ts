@@ -227,7 +227,7 @@ export async function chamarLLMCompativelOpenAI(options: {
         );
       if (ids.length === 0) return null;
       const preferidos = [
-        'llama-3.3-70b-versatile',
+        'openai/gpt-oss-20b',
         'meta-llama/llama-4-scout-17b-16e-instruct',
         'qwen/qwen3-32b',
         'llama-3.1-8b-instant',

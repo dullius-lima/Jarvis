@@ -555,7 +555,7 @@ export async function criarOuAtualizarAgenteNoBrain(
     params.model ||
     existingAgent?.model ||
     brainConfig?.model ||
-    'llama-3.3-70b-versatile';
+    'openai/gpt-oss-20b';
 
   const defaultIcons: Record<string, string> = {
     code: '💻',
@@ -717,7 +717,7 @@ export async function atualizarPersonaAgenteOuJarvis(params: {
       .query(
         `INSERT INTO prompt_versions (target_slug, system_prompt, model, provider)
          VALUES ('jarvis_core', $1, $2, $3);`,
-        [updatedPrompt, rawConfig.model || 'llama-3.3-70b-versatile', rawConfig.provider || 'groq']
+        [updatedPrompt, rawConfig.model || 'openai/gpt-oss-20b', rawConfig.provider || 'groq']
       )
       .catch(() => {});
 

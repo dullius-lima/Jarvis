@@ -319,7 +319,7 @@ export async function executarEsteiraEspecialistas(
         'groq'
       ).toLowerCase();
       const modeloAgente =
-        currentAgent.model || brainConfig?.model || 'llama-3.3-70b-versatile';
+        currentAgent.model || brainConfig?.model || 'openai/gpt-oss-20b';
       const chaveAgente =
         limparMascaraChave(currentAgent.api_key) ||
         limparMascaraChave(brainConfig?.saved_keys?.[provAgente]) ||

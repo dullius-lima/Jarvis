@@ -12,3 +12,7 @@ Thumbs.db
 android/.gradle/
 android/app/build/
 android/build/
+models/
+__pycache__/
+*.pyc
+*.bak

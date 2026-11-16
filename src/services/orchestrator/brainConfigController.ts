@@ -26,7 +26,7 @@ async function callGroqDirectly(systemPrompt: string, userPrompt: string): Promi
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-20b',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
@@ -71,7 +71,7 @@ export const KNOWN_ENDPOINTS: Record<string, string> = {
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  groq: 'llama-3.3-70b-versatile',
+  groq: 'openai/gpt-oss-20b',
   gemini: 'gemini-3.8-flash',
   openai: 'gpt-4o-mini',
   deepseek: 'deepseek-chat',
@@ -82,7 +82,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
 export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string }>> = {
   groq: [
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
-    { label: 'Llama 3.3 70B Versatile (Free Tier Recomendado)', value: 'llama-3.3-70b-versatile' },
+    { label: 'Llama 3.3 70B Versatile (Free Tier Recomendado)', value: 'openai/gpt-oss-20b' },
     { label: 'Llama 3.1 8B Instant (Free Tier Ultra-Rápido)', value: 'llama-3.1-8b-instant' },
     { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' }
   ],
@@ -204,7 +204,7 @@ function detectProviderFromKeyAndInput(rawProvider: string, apiKey: string, base
 function sanitizeModelForProvider(provider: string, rawModel?: string): string {
   const m = (rawModel || '').trim().replace(/^models\//, '');
   if (!m || m === 'CUSTOM_INPUT') {
-    return DEFAULT_MODELS[provider] || 'llama-3.3-70b-versatile';
+    return DEFAULT_MODELS[provider] || 'openai/gpt-oss-20b';
   }
 
   if (provider === 'gemini') {
@@ -445,7 +445,7 @@ export async function getBrainConfig(_req: Request, res: Response) {
       data: {
         agent_name: 'JARVIS',
         provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-20b',
         api_key: getEnvKeyForProvider('groq'),
         base_url: KNOWN_ENDPOINTS.groq,
         temperature: 0.2,
@@ -511,7 +511,7 @@ export async function updateBrainConfig(req: Request, res: Response) {
     // Modelo totalmente livre: respeita o que foi enviado
     const finalModel = (model && String(model).trim() !== 'CUSTOM_INPUT') 
       ? String(model).trim() 
-      : (existingData.model || DEFAULT_MODELS[normalizedProvider] || 'llama-3.3-70b-versatile');
+      : (existingData.model || DEFAULT_MODELS[normalizedProvider] || 'openai/gpt-oss-20b');
 
     const resolvedBaseUrl = (base_url && String(base_url).trim()) 
       ? String(base_url).trim().replace(/\/+$/, '') 
@@ -702,7 +702,7 @@ export async function validateLLMConnection(req: Request, res: Response) {
       groq: [
         selectedModel,
         'openai/gpt-oss-120b',
-        'llama-3.3-70b-versatile',
+        'openai/gpt-oss-20b',
         'llama-3.1-8b-instant',
       ],
       openrouter: [

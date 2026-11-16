@@ -166,14 +166,14 @@ Responda OBRIGATORIAMENTE em JSON puro no seguinte formato:
   "codigo_javascript": "function(payload, env) { return { ... }; } caso o tipo seja code",
   "url_endpoint": "URL caso seja api ou mcp",
   "metodo_http": "GET" | "POST",
-  "modelo_ia": "llama-3.3-70b-versatile ou gpt-4o-mini",
+  "modelo_ia": "openai/gpt-oss-20b ou gpt-4o-mini",
   "ferramentas_selecionadas": ["chave_da_tool_1", "chave_da_tool_2"],
   "icone": "Emoji representativo",
   "justificativa_arquitetural": "Por que esta estrutura foi escolhida"
 }`;
 
   const completion = await llm.chat.completions.create({
-    model: configCerebro.model || 'llama-3.3-70b-versatile',
+    model: configCerebro.model || 'openai/gpt-oss-20b',
     messages: [
       { role: 'system', content: promptEspecialista },
       { role: 'user', content: `Demanda de novo subagente: "${intencaoUsuario}"` }
@@ -202,7 +202,7 @@ Responda OBRIGATORIAMENTE em JSON puro no seguinte formato:
     INSERT INTO prompt_versions (target_slug, system_prompt, model, provider)
     VALUES ($1, $2, $3, $4)
     ON CONFLICT DO NOTHING;
-  `, [slugLimpo, plano.prompt_sistema || '', plano.modelo_ia || 'llama-3.3-70b-versatile', configCerebro.provider]);
+  `, [slugLimpo, plano.prompt_sistema || '', plano.modelo_ia || 'openai/gpt-oss-20b', configCerebro.provider]);
 
   // Persistência com upsert (ON CONFLICT DO UPDATE)
   const resultadoPersistencia = await pool.query(`
@@ -235,7 +235,7 @@ Responda OBRIGATORIAMENTE em JSON puro no seguinte formato:
     plano.codigo_javascript || null,
     plano.url_endpoint || null,
     plano.metodo_http || 'POST',
-    plano.modelo_ia || 'llama-3.3-70b-versatile',
+    plano.modelo_ia || 'openai/gpt-oss-20b',
     configCerebro.provider || 'groq',
     JSON.stringify(plano.ferramentas_selecionadas || []),
     plano.icone || '🤖'
