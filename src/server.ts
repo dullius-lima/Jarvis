@@ -320,6 +320,48 @@ app.get('/api/v1/prompts/versions/:slug', async (req: Request, res: Response) =>
   }
 });
 
+// 6.1 Preferências de Modos & Áudio (Sincronização App Android + Web)
+const DEFAULT_USER_PREFS = {
+  listen_screen_off: true,
+  listen_only_unlocked: false,
+  listen_only_app_open: false,
+  push_to_talk_only: false,
+  silent_text_only: false,
+  chime_enabled: true,
+  edge_glow_enabled: true,
+  wake_screen_on_call: true,
+  privacy_lock_camera: false,
+  continuous_chat_seconds: 15,
+  mic_sensitivity: 'balanced'
+};
+
+app.get('/api/v1/preferences', async (_req: Request, res: Response) => {
+  try {
+    const prefPath = path.join(process.cwd(), 'assets', 'user_preferences.json');
+    const saved = fs.existsSync(prefPath) ? JSON.parse(fs.readFileSync(prefPath, 'utf8')) : {};
+    return res.status(200).json({ success: true, data: { ...DEFAULT_USER_PREFS, ...saved } });
+  } catch {
+    return res.status(200).json({ success: true, data: DEFAULT_USER_PREFS });
+  }
+});
+
+const saveUserPrefsHandler = async (req: Request, res: Response) => {
+  try {
+    const incoming = (req.body && typeof req.body.data === 'object') ? req.body.data : (req.body || {});
+    const prefPath = path.join(process.cwd(), 'assets', 'user_preferences.json');
+    await fs.promises.mkdir(path.dirname(prefPath), { recursive: true });
+    const current = fs.existsSync(prefPath) ? JSON.parse(fs.readFileSync(prefPath, 'utf8')) : {};
+    const merged = { ...DEFAULT_USER_PREFS, ...current, ...incoming };
+    await fs.promises.writeFile(prefPath, JSON.stringify(merged, null, 2));
+    return res.status(200).json({ success: true, data: merged });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+app.post('/api/v1/preferences', saveUserPrefsHandler);
+app.put('/api/v1/preferences', saveUserPrefsHandler);
+
 // 7. Document Loader (RAG) & Terminal SSH
 app.post('/api/v1/docs-ssh/rag/upload', handleDocumentUploadToRag);
 app.get('/api/v1/docs-ssh/rag/documents', handleListRagDocuments);

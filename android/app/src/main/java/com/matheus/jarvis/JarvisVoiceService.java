@@ -8,6 +8,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.graphics.*;
 import android.media.*;
+import android.media.audiofx.*;
 import android.os.*;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
@@ -22,6 +23,7 @@ import java.io.*;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.*;
+import java.nio.ByteBuffer;
 import java.text.Normalizer;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -57,9 +59,11 @@ public class JarvisVoiceService extends Service {
     private volatile boolean prefPushToTalkOnly = false;
     private volatile boolean prefSilentTextOnly = false;
     private volatile boolean prefChimeEnabled = true;
+    private volatile boolean prefEdgeGlowEnabled = true;
+    private volatile boolean prefWakeScreenOnCall = true;
     private volatile boolean prefPrivacyLockCamera = false;
-    private volatile int prefContinuousSec = 0;
-    private volatile double prefSensMultiplier = 1.65;
+    private volatile int prefContinuousSec = 15;
+    private volatile double prefSensMultiplier = 1.85;
     private volatile long lastPrefSyncMs = 0L;
     private volatile boolean prefSyncInFlight = false;
 
@@ -124,8 +128,8 @@ public class JarvisVoiceService extends Service {
             int[] colors = glowMode == 1
                     ? new int[]{0xFFEF4444, 0xFFDC2626, 0xFFF87171, 0xFFB91C1C, 0xFFEF4444}
                     : (glowMode == 2
-                        ? new int[]{0xFF38BDF8, 0xFF818CF8, 0xFF22D3EE, 0xFF6366F1, 0xFF38BDF8}
-                        : new int[]{0xFF22D3EE, 0xFF34D399, 0xFF38BDF8, 0xFF60A5FA, 0xFF22D3EE});
+                    ? new int[]{0xFF38BDF8, 0xFF818CF8, 0xFF22D3EE, 0xFF6366F1, 0xFF38BDF8}
+                    : new int[]{0xFF22D3EE, 0xFF34D399, 0xFF38BDF8, 0xFF60A5FA, 0xFF22D3EE});
             SweepGradient gradient = new SweepGradient(w / 2f, h / 2f, colors, null);
             shaderMatrix.setRotate(angle, w / 2f, h / 2f);
             gradient.setLocalMatrix(shaderMatrix);
@@ -140,6 +144,12 @@ public class JarvisVoiceService extends Service {
         }
     }
 
+    private void applySensMultiplier(String sens) {
+        if ("high".equals(sens)) prefSensMultiplier = 1.45;
+        else if ("noisy".equals(sens)) prefSensMultiplier = 2.45;
+        else prefSensMultiplier = 1.85;
+    }
+
     private void initPreferences() {
         try {
             powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -151,53 +161,63 @@ public class JarvisVoiceService extends Service {
             prefPushToTalkOnly = sp.getBoolean("push_to_talk_only", false);
             prefSilentTextOnly = sp.getBoolean("silent_text_only", false);
             prefChimeEnabled = sp.getBoolean("chime_enabled", true);
+            prefEdgeGlowEnabled = sp.getBoolean("edge_glow_enabled", true);
+            prefWakeScreenOnCall = sp.getBoolean("wake_screen_on_call", true);
             prefPrivacyLockCamera = sp.getBoolean("privacy_lock_camera", false);
-            prefContinuousSec = sp.getInt("continuous_chat_seconds", 0);
-            String sens = sp.getString("mic_sensitivity", "balanced");
-            prefSensMultiplier = "high".equals(sens) ? 1.35 : ("noisy".equals(sens) ? 2.25 : 1.65);
+            prefContinuousSec = sp.getInt("continuous_chat_seconds", 15);
+            applySensMultiplier(sp.getString("mic_sensitivity", "balanced"));
         } catch (Exception ignored) {}
     }
 
     private void syncUserPrefsIfNeeded() {
         long now = System.currentTimeMillis();
-        if (prefSyncInFlight || (now - lastPrefSyncMs) < 4000L) return;
+        if (prefSyncInFlight || (now - lastPrefSyncMs) < 3500L) return;
         lastPrefSyncMs = now;
         prefSyncInFlight = true;
         netPool.execute(() -> {
+            HttpURLConnection c = null;
             try {
-                HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/preferences").openConnection();
+                c = (HttpURLConnection) new URL(BASE + "/api/v1/preferences").openConnection();
                 c.setConnectTimeout(2500);
                 c.setReadTimeout(2500);
                 if (c.getResponseCode() == 200) {
                     Scanner sc = new Scanner(c.getInputStream(), "UTF-8").useDelimiter("\\A");
-                    JSONObject j = new JSONObject(sc.hasNext() ? sc.next() : "{}");
-                    JSONObject d = j.optJSONObject("data");
-                    if (d != null) {
-                        prefListenScreenOff = d.optBoolean("listen_screen_off", true);
-                        prefListenOnlyUnlocked = d.optBoolean("listen_only_unlocked", false);
-                        prefListenOnlyAppOpen = d.optBoolean("listen_only_app_open", false);
-                        prefPushToTalkOnly = d.optBoolean("push_to_talk_only", false);
-                        prefSilentTextOnly = d.optBoolean("silent_text_only", false);
-                        prefChimeEnabled = d.optBoolean("chime_enabled", true);
-                        prefPrivacyLockCamera = d.optBoolean("privacy_lock_camera", false);
-                        prefContinuousSec = d.optInt("continuous_chat_seconds", 0);
-                        String sens = d.optString("mic_sensitivity", "balanced");
-                        prefSensMultiplier = "high".equals(sens) ? 1.35 : ("noisy".equals(sens) ? 2.25 : 1.65);
-                        getSharedPreferences(PREFS_CACHE, MODE_PRIVATE).edit()
-                                .putBoolean("listen_screen_off", prefListenScreenOff)
-                                .putBoolean("listen_only_unlocked", prefListenOnlyUnlocked)
-                                .putBoolean("listen_only_app_open", prefListenOnlyAppOpen)
-                                .putBoolean("push_to_talk_only", prefPushToTalkOnly)
-                                .putBoolean("silent_text_only", prefSilentTextOnly)
-                                .putBoolean("chime_enabled", prefChimeEnabled)
-                                .putBoolean("privacy_lock_camera", prefPrivacyLockCamera)
-                                .putInt("continuous_chat_seconds", prefContinuousSec)
-                                .putString("mic_sensitivity", sens)
-                                .apply();
+                    String raw = sc.hasNext() ? sc.next() : "{}";
+                    if (raw.trim().startsWith("{")) {
+                        JSONObject j = new JSONObject(raw);
+                        JSONObject d = j.optJSONObject("data");
+                        if (d != null) {
+                            prefListenScreenOff = d.optBoolean("listen_screen_off", true);
+                            prefListenOnlyUnlocked = d.optBoolean("listen_only_unlocked", false);
+                            prefListenOnlyAppOpen = d.optBoolean("listen_only_app_open", false);
+                            prefPushToTalkOnly = d.optBoolean("push_to_talk_only", false);
+                            prefSilentTextOnly = d.optBoolean("silent_text_only", false);
+                            prefChimeEnabled = d.optBoolean("chime_enabled", true);
+                            prefEdgeGlowEnabled = d.optBoolean("edge_glow_enabled", true);
+                            prefWakeScreenOnCall = d.optBoolean("wake_screen_on_call", true);
+                            prefPrivacyLockCamera = d.optBoolean("privacy_lock_camera", false);
+                            prefContinuousSec = d.optInt("continuous_chat_seconds", 15);
+                            String sens = d.optString("mic_sensitivity", "balanced");
+                            applySensMultiplier(sens);
+                            getSharedPreferences(PREFS_CACHE, MODE_PRIVATE).edit()
+                                    .putBoolean("listen_screen_off", prefListenScreenOff)
+                                    .putBoolean("listen_only_unlocked", prefListenOnlyUnlocked)
+                                    .putBoolean("listen_only_app_open", prefListenOnlyAppOpen)
+                                    .putBoolean("push_to_talk_only", prefPushToTalkOnly)
+                                    .putBoolean("silent_text_only", prefSilentTextOnly)
+                                    .putBoolean("chime_enabled", prefChimeEnabled)
+                                    .putBoolean("edge_glow_enabled", prefEdgeGlowEnabled)
+                                    .putBoolean("wake_screen_on_call", prefWakeScreenOnCall)
+                                    .putBoolean("privacy_lock_camera", prefPrivacyLockCamera)
+                                    .putInt("continuous_chat_seconds", prefContinuousSec)
+                                    .putString("mic_sensitivity", sens)
+                                    .apply();
+                        }
                     }
                 }
             } catch (Exception ignored) {
             } finally {
+                if (c != null) c.disconnect();
                 prefSyncInFlight = false;
             }
         });
@@ -205,12 +225,18 @@ public class JarvisVoiceService extends Service {
 
     private boolean shouldCaptureAudioNow() {
         syncUserPrefsIfNeeded();
-        if (prefPushToTalkOnly) return false;
-        if (prefListenOnlyAppOpen && !MainActivity.isAppInForeground) return false;
-        if (!prefListenOnlyAppOpen && MainActivity.isAppInForeground) return false;
+        // Quando o app está aberto em 1º plano, o WebView assume o microfone sem conflito de hardware
+        if (MainActivity.isAppInForeground) return false;
+        // Se "Áudio apenas com app aberto" estiver marcado, não captura em segundo plano
+        if (prefListenOnlyAppOpen) return false;
+        // Se "Push-to-Talk" estiver marcado, só captura se acionado manualmente via wakeNow()
+        if (prefPushToTalkOnly && System.currentTimeMillis() >= awakeUntil) return false;
+
         boolean screenInteractive = (powerManager == null) || powerManager.isInteractive();
         boolean deviceUnlocked = (keyguardManager == null) || !keyguardManager.isKeyguardLocked();
-        if (!prefListenScreenOff || prefListenOnlyUnlocked) return screenInteractive && deviceUnlocked;
+        if (!prefListenScreenOff || prefListenOnlyUnlocked) {
+            return screenInteractive && deviceUnlocked;
+        }
         return true;
     }
 
@@ -240,23 +266,27 @@ public class JarvisVoiceService extends Service {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) nm.createNotificationChannel(ch);
         Notification notif = new NotificationCompat.Builder(this, "jarvis_bg")
-                .setContentTitle("JARVIS Assistente Ativo")
-                .setContentText("Vigília silenciosa calibrada — diga 'Jarvis'")
+                .setContentTitle("JARVIS Snapdragon Audio DSP")
+                .setContentText("Escuta calibrada — diga 'Jarvis'")
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                 .setOngoing(true)
                 .build();
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(101, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
-            else startForeground(101, notif);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(101, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+            } else {
+                startForeground(101, notif);
+            }
         } catch (Exception e) { stopSelf(); return; }
         if (powerManager != null) {
-            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "jarvis:always_on_clean");
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "jarvis:snapdragon_dsp_mic");
             wakeLock.acquire();
         }
-        new Thread(this::continuousAudioLoop, "JarvisAlwaysOnAudio").start();
+        new Thread(this::continuousAudioLoop, "JarvisSnapdragonAudio").start();
     }
 
     private void wakeScreenOnce() {
+        if (!prefWakeScreenOnCall) return;
         long now = System.currentTimeMillis();
         if (now - lastScreenWakeAt < 8000L) return;
         lastScreenWakeAt = now;
@@ -271,6 +301,7 @@ public class JarvisVoiceService extends Service {
     }
 
     private void showScreenGlow(int mode) {
+        if (!prefEdgeGlowEnabled) return;
         mainHandler.post(() -> {
             try {
                 if (MainActivity.isAppInForeground || !Settings.canDrawOverlays(this)) return;
@@ -313,7 +344,7 @@ public class JarvisVoiceService extends Service {
                     pcm[i] = (short) (Math.sin(2.0 * Math.PI * freq * i / sr) * 14000 * env);
                 }
                 AudioTrack track = new AudioTrack.Builder()
-                        .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+                        .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
                         .setAudioFormat(new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(sr).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
                         .setBufferSizeInBytes(pcm.length * 2).setTransferMode(AudioTrack.MODE_STATIC).build();
                 track.write(pcm, 0, pcm.length);
@@ -323,61 +354,112 @@ public class JarvisVoiceService extends Service {
             } catch (Exception ignored) {}
         }).start();
     }
+
+    private void releaseDspEffects(NoiseSuppressor ns, AutomaticGainControl agc, AcousticEchoCanceler aec) {
+        try { if (ns != null) ns.release(); } catch (Exception ignored) {}
+        try { if (agc != null) agc.release(); } catch (Exception ignored) {}
+        try { if (aec != null) aec.release(); } catch (Exception ignored) {}
+    }
+
     private void continuousAudioLoop() {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
         int minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        int chunkSize = Math.max(minBuf / 2, 1600);
+        int chunkSize = Math.max(minBuf / 2, 1600); // ~50ms a 16kHz mono
         byte[] buf = new byte[chunkSize];
         LinkedList<byte[]> preRoll = new LinkedList<>();
         ByteArrayOutputStream speechBuf = new ByteArrayOutputStream();
         boolean capturing = false;
         int voicedChunks = 0;
         long lastVoiceMs = 0L, captureStartMs = 0L;
-        double noiseFloor = 150.0;
+        double noiseFloor = 140.0;
+
+        // Filtro passa-alta (~280Hz) + passa-baixa (~3400Hz) em ponto flutuante para isolar faixa vocal
+        double hpPrevIn = 0.0, hpPrevOut = 0.0, lpPrevOut = 0.0;
+        final double hpAlpha = 0.895; // corte ~280Hz a 16kHz
+        final double lpAlpha = 0.571; // corte ~3400Hz a 16kHz
+
         AudioRecord recorder = null;
+        NoiseSuppressor ns = null;
+        AutomaticGainControl agc = null;
+        AcousticEchoCanceler aec = null;
 
         while (running) {
             try {
                 boolean hasMicPerm = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
                 if (!hasMicPerm || !shouldCaptureAudioNow() || isEnrollmentRecording() || isSpeaking || isProcessing) {
                     if (recorder != null) {
+                        releaseDspEffects(ns, agc, aec);
+                        ns = null; agc = null; aec = null;
                         try { recorder.stop(); recorder.release(); } catch (Exception ignored) {}
                         recorder = null;
                     }
-                    if (MainActivity.isAppInForeground) { awakeUntil = 0L; hideScreenGlow(); }
+                    if (MainActivity.isAppInForeground || !shouldCaptureAudioNow()) {
+                        awakeUntil = 0L;
+                        hideScreenGlow();
+                    }
                     capturing = false; voicedChunks = 0; speechBuf.reset(); preRoll.clear();
+                    hpPrevIn = 0.0; hpPrevOut = 0.0; lpPrevOut = 0.0;
                     Thread.sleep(250);
                     continue;
                 }
+
                 long now = System.currentTimeMillis();
                 if (awakeUntil > 0L && now >= awakeUntil && !capturing) { awakeUntil = 0L; hideScreenGlow(); }
+
                 if (recorder == null) {
                     recorder = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, chunkSize * 6);
                     if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
                         recorder.release();
                         recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, chunkSize * 6);
                     }
-                    if (recorder.getState() != AudioRecord.STATE_INITIALIZED) { recorder.release(); recorder = null; Thread.sleep(800); continue; }
+                    if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
+                        recorder.release(); recorder = null; Thread.sleep(800); continue;
+                    }
+                    // Ativa filtros DSP nativos no coprocessador Snapdragon (0% CPU)
+                    int sessionId = recorder.getAudioSessionId();
+                    try {
+                        if (NoiseSuppressor.isAvailable()) { ns = NoiseSuppressor.create(sessionId); if (ns != null) ns.setEnabled(true); }
+                        if (AutomaticGainControl.isAvailable()) { agc = AutomaticGainControl.create(sessionId); if (agc != null) agc.setEnabled(true); }
+                        if (AcousticEchoCanceler.isAvailable()) { aec = AcousticEchoCanceler.create(sessionId); if (aec != null) aec.setEnabled(true); }
+                    } catch (Exception ignored) {}
                     recorder.startRecording();
                 }
+
                 int read = recorder.read(buf, 0, buf.length);
                 if (read <= 0) continue;
-                long sum = 0;
+
+                // Analisa energia APENAS na banda vocal (280Hz-3400Hz) e taxa de cruzamento por zero (ZCR)
+                double vocalSum = 0.0;
+                int zeroCrossings = 0;
+                double prevBand = 0.0;
+                int totalSamples = read / 2;
                 for (int i = 0; i + 1 < read; i += 2) {
                     short s = (short) ((buf[i] & 0xff) | (buf[i + 1] << 8));
-                    int boosted = Math.max(-32767, Math.min(32767, (int) (s * 2.2)));
-                    buf[i] = (byte) (boosted & 0xff);
-                    buf[i + 1] = (byte) ((boosted >> 8) & 0xff);
-                    sum += (long) boosted * boosted;
+                    double hp = hpAlpha * (hpPrevOut + s - hpPrevIn);
+                    hpPrevIn = s;
+                    hpPrevOut = hp;
+                    double bp = lpPrevOut + lpAlpha * (hp - lpPrevOut);
+                    lpPrevOut = bp;
+                    vocalSum += bp * bp;
+                    if ((bp >= 0 && prevBand < 0) || (bp < 0 && prevBand >= 0)) zeroCrossings++;
+                    prevBand = bp;
                 }
-                double rms = Math.sqrt((double) sum / (read / 2.0));
-                double threshold = Math.min(Math.max(360.0, noiseFloor * prefSensMultiplier), 1150.0);
+
+                double vocalRms = Math.sqrt(vocalSum / Math.max(1, totalSamples));
+                double zcr = (double) zeroCrossings / Math.max(1, totalSamples);
+                boolean isHumanBand = (zcr >= 0.025 && zcr <= 0.36);
+                double threshold = Math.min(Math.max(340.0, noiseFloor * prefSensMultiplier), 1250.0);
+
                 if (!capturing) {
-                    if (rms < threshold) { noiseFloor = noiseFloor * 0.95 + Math.min(rms, 300.0) * 0.05; voicedChunks = 0; }
-                    else voicedChunks++;
+                    if (vocalRms < threshold || !isHumanBand) {
+                        noiseFloor = noiseFloor * 0.96 + Math.min(vocalRms, 280.0) * 0.04;
+                        voicedChunks = 0;
+                    } else {
+                        voicedChunks++;
+                    }
                     preRoll.addLast(Arrays.copyOf(buf, read));
-                    if (preRoll.size() > 20) preRoll.removeFirst();
-                    if (voicedChunks >= 4) {
+                    if (preRoll.size() > 18) preRoll.removeFirst(); // ~900ms de pré-gravação
+                    if (voicedChunks >= 5) { // ~250ms de voz humana sustentada
                         capturing = true; voicedChunks = 0; captureStartMs = now; lastVoiceMs = now;
                         speechBuf.reset();
                         for (byte[] p : preRoll) speechBuf.write(p);
@@ -385,20 +467,24 @@ public class JarvisVoiceService extends Service {
                     }
                 } else {
                     speechBuf.write(buf, 0, read);
-                    if (rms > threshold * 0.75) lastVoiceMs = now;
-                    if (now - lastVoiceMs > 580L || now - captureStartMs > 7000L) {
+                    if (vocalRms > threshold * 0.72 && isHumanBand) lastVoiceMs = now;
+                    if (now - lastVoiceMs > 520L || now - captureStartMs > 7000L) {
                         capturing = false;
                         byte[] pcm = speechBuf.toByteArray();
                         speechBuf.reset();
-                        if (pcm.length >= 9600) {
-                            byte[] wav = wrapWav(normalizeAndPad(pcm, SAMPLE_RATE), SAMPLE_RATE);
-                            netPool.execute(() -> processVoiceClip(wav));
+                        if (pcm.length >= 11200) {
+                            byte[] normPcm = normalizeAndPad(pcm, SAMPLE_RATE);
+                            byte[] payload = encodeAacOrWav(normPcm, SAMPLE_RATE);
+                            netPool.execute(() -> processVoiceClip(payload));
                         }
                     }
                 }
             } catch (Exception e) { try { Thread.sleep(300); } catch (Exception ignored) {} }
         }
-        if (recorder != null) { try { recorder.stop(); recorder.release(); } catch (Exception ignored) {} }
+        if (recorder != null) {
+            releaseDspEffects(ns, agc, aec);
+            try { recorder.stop(); recorder.release(); } catch (Exception ignored) {}
+        }
     }
 
     private byte[] normalizeAndPad(byte[] pcm, int rate) {
@@ -407,8 +493,8 @@ public class JarvisVoiceService extends Service {
             int s = Math.abs((short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8)));
             if (s > maxAbs) maxAbs = s;
         }
-        double gain = (maxAbs > 1400 && maxAbs < 25000) ? Math.min(1.6, 22000.0 / maxAbs) : 1.0;
-        byte[] out = new byte[pcm.length + (rate * 2 * 320) / 1000];
+        double gain = (maxAbs > 1200 && maxAbs < 24000) ? Math.min(1.75, 22000.0 / maxAbs) : 1.0;
+        byte[] out = new byte[pcm.length + (rate * 2 * 300) / 1000];
         for (int i = 0; i + 1 < pcm.length; i += 2) {
             short s = (short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8));
             int boosted = Math.max(-32767, Math.min(32767, (int) Math.round(s * gain)));
@@ -416,6 +502,74 @@ public class JarvisVoiceService extends Service {
             out[i + 1] = (byte) ((boosted >> 8) & 0xff);
         }
         return out;
+    }
+
+    // Compressão AAC-LC 24kbps no encoder de hardware Snapdragon (com fallback WAV)
+    private byte[] encodeAacOrWav(byte[] pcm, int rate) {
+        MediaCodec codec = null;
+        try {
+            MediaFormat fmt = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, rate, 1);
+            fmt.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
+            fmt.setInteger(MediaFormat.KEY_BIT_RATE, 24000);
+            fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384);
+            codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC);
+            codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            codec.start();
+
+            ByteArrayOutputStream adtsOut = new ByteArrayOutputStream();
+            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+            int offset = 0;
+            boolean inputDone = false, outputDone = false;
+
+            while (!outputDone) {
+                if (!inputDone) {
+                    int inIdx = codec.dequeueInputBuffer(5000);
+                    if (inIdx >= 0) {
+                        ByteBuffer inBuf = codec.getInputBuffer(inIdx);
+                        if (inBuf != null) {
+                            inBuf.clear();
+                            if (offset >= pcm.length) {
+                                codec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                                inputDone = true;
+                            } else {
+                                int toCopy = Math.min(inBuf.remaining(), pcm.length - offset);
+                                inBuf.put(pcm, offset, toCopy);
+                                long ptsUs = (offset / 2L) * 1000000L / rate;
+                                codec.queueInputBuffer(inIdx, 0, toCopy, ptsUs, 0);
+                                offset += toCopy;
+                            }
+                        }
+                    }
+                }
+                int outIdx = codec.dequeueOutputBuffer(info, 5000);
+                if (outIdx >= 0) {
+                    ByteBuffer outBuf = codec.getOutputBuffer(outIdx);
+                    if (outBuf != null && info.size > 0 && (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+                        int frameLen = info.size + 7;
+                        byte[] adts = new byte[frameLen];
+                        // Cabeçalho ADTS 16kHz (freqIdx=8) Mono (chanCfg=1)
+                        adts[0] = (byte) 0xFF;
+                        adts[1] = (byte) 0xF1;
+                        adts[2] = (byte) ((1 << 6) | (8 << 2) | (1 >> 2));
+                        adts[3] = (byte) (((1 & 3) << 6) | (frameLen >> 11));
+                        adts[4] = (byte) ((frameLen >> 3) & 0xFF);
+                        adts[5] = (byte) (((frameLen & 7) << 5) | 0x1F);
+                        adts[6] = (byte) 0xFC;
+                        outBuf.position(info.offset);
+                        outBuf.get(adts, 7, info.size);
+                        adtsOut.write(adts);
+                    }
+                    codec.releaseOutputBuffer(outIdx, false);
+                    if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true;
+                }
+            }
+            byte[] encoded = adtsOut.toByteArray();
+            if (encoded.length > 256) return encoded;
+        } catch (Exception ignored) {
+        } finally {
+            if (codec != null) { try { codec.stop(); codec.release(); } catch (Exception ignored) {} }
+        }
+        try { return wrapWav(pcm, rate); } catch (IOException e) { return pcm; }
     }
 
     private byte[] wrapWav(byte[] pcm, int rate) throws IOException {
@@ -437,35 +591,41 @@ public class JarvisVoiceService extends Service {
                 .replaceAll("[\\p{InCombiningDiacriticalMarks}.?!,-]", " ").replaceAll("\\s+", " ").trim();
     }
 
+    // Gatilho estrito para "Jarvis" (removidos falsos positivos como "já vi", "já viu", "chaves")
     private boolean containsWakeWord(String norm) {
-        return norm.matches("(?s).*\\b(jarvis|javis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|chaves|jaires|jairbis|jarlb[iy]s?|jabi|jaips|gerbis|graves|jorps|de arvores|de arvies|ja vez|jar vis|ja vis|ja vi|ja viu)\\b.*");
+        return norm.matches("(?s).*\\b(jarvis|javis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|jaires|jairbis|jarlb[iy]s?|gerbis|jorps|jar vis|ja vis)\\b.*");
     }
 
     private String stripWakeWord(String raw) {
         return (raw == null ? "" : raw)
-                .replaceFirst("(?i)^(?:oi|ol[aá]|ei|ok|fala|al[oô]|e a[ií])?[,\\s.-]*(?:j\\.?a\\.?r\\.?v\\.?i\\.?s|j[aá]rvis|j[aá]vis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|chaves|jaires|jairbis|jarlb[iy]s?|j[aá]bi|jaips|gerbis|graves|jorps|de\\s+[aá]rvores|de\\s+arvies|j[aá]\\s+vez|jar\\s+vis|j[aá]\\s+vis|j[aá]\\s+vi|j[aá]\\s+viu)[,\\s.:!?-]*", "").trim();
+                .replaceFirst("(?i)^(?:oi|ol[aá]|ei|ok|fala|al[oô]|e a[ií])?[,\\s.-]*(?:j\\.?a\\.?r\\.?v\\.?i\\.?s|j[aá]rvis|j[aá]vis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|jaires|jairbis|jarlb[iy]s?|gerbis|jorps|jar\\s+vis|j[aá]\\s+vis)[,\\s.:!?-]*", "").trim();
     }
 
-    private void processVoiceClip(byte[] wavBytes) {
+    private void processVoiceClip(byte[] audioBytes) {
         boolean isAwake = System.currentTimeMillis() < awakeUntil;
         if (isAwake) showScreenGlow(2);
         try {
-            String b64 = Base64.encodeToString(wavBytes, Base64.NO_WRAP);
+            String b64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP);
+            byte[] payload = ("{\"audioBase64\":" + JSONObject.quote(b64) + "}").getBytes("UTF-8");
             HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/audio/transcribe").openConnection();
             c.setRequestMethod("POST");
             c.setRequestProperty("Content-Type", "application/json");
-            c.setConnectTimeout(5000);
+            c.setRequestProperty("Connection", "keep-alive");
+            c.setFixedLengthStreamingMode(payload.length);
+            c.setConnectTimeout(4500);
             c.setReadTimeout(12000);
             c.setDoOutput(true);
-            c.getOutputStream().write(("{\"audioBase64\":" + JSONObject.quote(b64) + "}").getBytes("UTF-8"));
+            c.getOutputStream().write(payload);
+
             Scanner sc = new Scanner(c.getInputStream()).useDelimiter("\\A");
             String text = new JSONObject(sc.hasNext() ? sc.next() : "{}").optString("text", "").trim();
-            if (text.length() < 2) {
+            String norm = normalizeText(text);
+            if (norm.length() < 2 || norm.matches(".*(obrigado por assistir|legendas pela comunidade|amara org|sous titres).*")) {
                 if (isAwake && System.currentTimeMillis() < awakeUntil) showScreenGlow(1);
                 else hideScreenGlow();
                 return;
             }
-            if (!containsWakeWord(normalizeText(text)) && !isAwake) { hideScreenGlow(); return; }
+            if (!containsWakeWord(norm) && !isAwake) { hideScreenGlow(); return; }
             String cmd = stripWakeWord(text);
             if (cmd.isEmpty()) {
                 awakeUntil = System.currentTimeMillis() + Math.max(10000L, prefContinuousSec * 1000L);
@@ -512,12 +672,16 @@ public class JarvisVoiceService extends Service {
             }
             sd.put("type", "voice_or_text"); sd.put("textPrompt", finalPrompt); sd.put("prompt", finalPrompt);
 
-            HttpURLConnection ic = (HttpURLConnection) new URL(BASE + "/api/v1/webhook/ingress").openConnection();
-            ic.setRequestMethod("POST"); ic.setRequestProperty("Content-Type", "application/json");
-            ic.setConnectTimeout(6000); ic.setReadTimeout(25000); ic.setDoOutput(true);
             JSONObject body = new JSONObject();
             body.put("identityToken", "Matheus-Admin"); body.put("sessionId", "sess_main_admin"); body.put("sensorData", sd);
-            ic.getOutputStream().write(body.toString().getBytes("UTF-8"));
+            byte[] reqBytes = body.toString().getBytes("UTF-8");
+
+            HttpURLConnection ic = (HttpURLConnection) new URL(BASE + "/api/v1/webhook/ingress").openConnection();
+            ic.setRequestMethod("POST"); ic.setRequestProperty("Content-Type", "application/json");
+            ic.setRequestProperty("Connection", "keep-alive");
+            ic.setFixedLengthStreamingMode(reqBytes.length);
+            ic.setConnectTimeout(5000); ic.setReadTimeout(25000); ic.setDoOutput(true);
+            ic.getOutputStream().write(reqBytes);
 
             Scanner isc = new Scanner(ic.getInputStream()).useDelimiter("\\A");
             JSONObject resp = new JSONObject(isc.hasNext() ? isc.next() : "{}");
@@ -537,10 +701,13 @@ public class JarvisVoiceService extends Service {
 
         String fetchedB64 = "";
         try {
+            byte[] speakReq = ("{\"text\":" + JSONObject.quote(clean) + "}").getBytes("UTF-8");
             HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/audio/speak").openConnection();
             c.setRequestMethod("POST"); c.setRequestProperty("Content-Type", "application/json");
+            c.setRequestProperty("Connection", "keep-alive");
+            c.setFixedLengthStreamingMode(speakReq.length);
             c.setConnectTimeout(4500); c.setReadTimeout(9000); c.setDoOutput(true);
-            c.getOutputStream().write(("{\"text\":" + JSONObject.quote(clean) + "}").getBytes("UTF-8"));
+            c.getOutputStream().write(speakReq);
             Scanner sc = new Scanner(c.getInputStream()).useDelimiter("\\A");
             fetchedB64 = new JSONObject(sc.hasNext() ? sc.next() : "{}").optString("audioBase64", "");
         } catch (Exception ignored) {}

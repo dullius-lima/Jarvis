@@ -61,7 +61,7 @@
         </div>
         <select v-model.number="prefs.continuous_chat_seconds" @change="salvar" class="mini-select">
           <option :value="0">Desativado (Sempre exigir "Jarvis")</option>
-          <option :value="15">15 segundos</option>
+          <option :value="15">15 segundos (Conversa natural — Padrão)</option>
           <option :value="25">25 segundos</option>
         </select>
       </div>
@@ -145,7 +145,7 @@ const prefs = reactive({
   listen_only_unlocked: false,
   listen_only_app_open: false,
   push_to_talk_only: false,
-  continuous_chat_seconds: 0,
+  continuous_chat_seconds: 15,
   mic_sensitivity: 'balanced',
   silent_text_only: false,
   edge_glow_enabled: true,
@@ -224,6 +224,7 @@ async function salvar() {
       body: JSON.stringify(prefs)
     });
     localStorage.setItem('jarvis_user_prefs', JSON.stringify(prefs));
+    window.dispatchEvent(new CustomEvent('jarvis-prefs-updated', { detail: { ...prefs } }));
     statusMsg.value = '✅ Aplicado';
     setTimeout(() => (statusMsg.value = ''), 2000);
   } catch {
