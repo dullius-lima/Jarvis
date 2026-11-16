@@ -1,5 +1,5 @@
 import { pool } from '../config/database.js';
-import { executeSingleAgentLogic } from '../controllers/agentController.js';
+import { processOrchestratorWorkflow } from './orchestratorService.js';
 
 function getCampoGrandeNow(): Date {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Campo_Grande' }));
@@ -34,32 +34,63 @@ export function matchesCronExpression(cronExpression: string, date: Date = getCa
   );
 }
 
-export async function executeScheduledAgent(agent: any, isManual = false) {
+export async function executeScheduledAgent(agent: any, isManual = false, overridePrompt?: string) {
   const start = Date.now();
-  const promptToRun = (agent.schedule_prompt || '').trim() ||
-    `Execute agora sua rotina programada principal conforme sua especialidade (${agent.description || agent.name}).`;
+  const tarefa = (overridePrompt || agent.schedule_prompt || '').trim();
+  if (!tarefa) {
+    throw new Error('Nenhuma tarefa foi preenchida no campo "Comando / Tarefa" deste agente.');
+  }
+
+  const nextSlugs = Array.isArray(agent.next_agent_slugs) && agent.next_agent_slugs.length > 0
+    ? agent.next_agent_slugs.join(', ')
+    : (agent.next_agent_slug || 'nenhum fixo');
+
+  const comandoCompleto = `[DISPARO AUTOMÁTICO AGENDADO - EXECUTAR IMEDIATAMENTE SEM PERGUNTAR]
+Agente Principal Acionado: ${agent.name} (${agent.slug})
+Próximos Nós Encadeados: ${nextSlugs}
+Data/Hora Atual (Campo Grande -04:00): ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Campo_Grande' })}
+
+ORDEM A EXECUTAR AGORA:
+${tarefa}
+
+REGRAS OBRIGATÓRIAS:
+1. Acione imediatamente o especialista "${agent.slug}" e suas ferramentas conectadas (ex: google_calendar, gmail, home_assistant, etc.).
+2. Se a ordem pedir para encaminhar ou enviar resultado a outro especialista/WhatsApp, execute toda a cadeia até concluir o envio.
+3. Nunca responda dizendo que "está pronto para ajudar"; execute a tarefa e devolva o resultado real.`;
 
   try {
-    const res = await executeSingleAgentLogic(
-      agent,
-      { prompt: promptToRun, textPrompt: promptToRun, trigger: isManual ? 'manual_ui' : 'cron_schedule' },
-      'production'
-    );
-    const outStr = typeof res.output === 'string' ? res.output : JSON.stringify(res.output);
+    const res: any = await processOrchestratorWorkflow({
+      identityToken: 'Matheus-Admin',
+      sessionId: `cron_${agent.slug}_${Date.now()}`,
+      sensorData: {
+        type: 'schedule_trigger',
+        source: isManual ? 'manual_schedule_test' : 'cron_schedule',
+        targetAgentSlug: agent.slug,
+        prompt: comandoCompleto,
+        textPrompt: comandoCompleto
+      }
+    });
+
+    const finalOutput = res?.response || res?.data?.response || JSON.stringify(res);
 
     await pool.query(`UPDATE ai_agents SET last_scheduled_run = NOW() WHERE id = $1;`, [agent.id]).catch(() => {});
     await pool.query(
       `INSERT INTO schedule_execution_logs (agent_slug, agent_name, cron_expression, prompt_dispatched, execution_status, output_summary, execution_time_ms)
        VALUES ($1, $2, $3, $4, 'success', $5, $6);`,
-      [agent.slug, agent.name, agent.cron_expression || 'manual', promptToRun, outStr.slice(0, 1000), Date.now() - start]
+      [agent.slug, agent.name, agent.cron_expression || 'manual', tarefa, String(finalOutput).slice(0, 1200), Date.now() - start]
     ).catch(() => {});
 
-    return { success: true, output: res.output, executionTimeMs: Date.now() - start };
+    return {
+      success: true,
+      output: finalOutput,
+      rota: res?.rota_completa || res?.agent || agent.name,
+      executionTimeMs: Date.now() - start
+    };
   } catch (err: any) {
     await pool.query(
       `INSERT INTO schedule_execution_logs (agent_slug, agent_name, cron_expression, prompt_dispatched, execution_status, output_summary, execution_time_ms)
        VALUES ($1, $2, $3, $4, 'error', $5, $6);`,
-      [agent.slug, agent.name, agent.cron_expression || 'manual', promptToRun, err.message, Date.now() - start]
+      [agent.slug, agent.name, agent.cron_expression || 'manual', tarefa, err.message, Date.now() - start]
     ).catch(() => {});
     throw err;
   }
@@ -87,9 +118,9 @@ export async function evaluateScheduledTriggers() {
         if (diffMs < 55000) continue;
       }
       if (matchesCronExpression(agent.cron_expression, nowCg)) {
-        console.log(`⏰ [Schedule Trigger - Campo Grande] Disparando "${agent.name}" (${agent.cron_expression})`);
+        console.log(`⏰ [Schedule Trigger - Campo Grande] Executando "${agent.name}" (${agent.cron_expression})`);
         executeScheduledAgent(agent, false).catch((e) =>
-          console.error(`❌ [Schedule Trigger] Erro em "${agent.name}":`, e.message)
+          console.error(`❌ [Schedule Trigger] Falha em "${agent.name}":`, e.message)
         );
       }
     }
@@ -100,5 +131,5 @@ export async function evaluateScheduledTriggers() {
 
 export function startScheduleTriggerEngine() {
   setInterval(evaluateScheduledTriggers, 20 * 1000);
-  console.log('⏰ [Schedule Trigger] Motor Cron ativo (Fuso: America/Campo_Grande -04:00).');
+  console.log('⏰ [Schedule Trigger] Motor Cron conectado ao Orquestrador ativo (Fuso: America/Campo_Grande).');
 }

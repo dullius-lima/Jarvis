@@ -1315,15 +1315,21 @@ const saidaCronManual = ref('');
 const rodandoHacker = ref(false);
 const relatorioHacker = ref('');
 
-async function dispararCronAgora(slug: string) {
+async function dispararCronAgora(slug: string, customPrompt?: string) {
   if (!slug) return;
   executandoCronManual.value = true;
-  saidaCronManual.value = '⏳ Executando rotina programada...';
+  saidaCronManual.value = '⏳ Executando rotina e ferramentas encadeadas...';
+  const promptEnviar = customPrompt ?? (agenteEmEdicao.value?.slug === slug ? agenteEmEdicao.value?.schedule_prompt : undefined);
   try {
-    const r = await fetch(`/api/v1/triggers/schedule/run-now/${encodeURIComponent(slug)}`, { method: 'POST' });
+    const r = await fetch(`/api/v1/triggers/schedule/run-now/${encodeURIComponent(slug)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schedule_prompt: promptEnviar })
+    });
     const j = await r.json();
     saidaCronManual.value = j.success
-      ? `✅ Concluído (${j.data?.executionTimeMs || 0}ms):\n${typeof j.data?.output === 'string' ? j.data.output : JSON.stringify(j.data?.output, null, 2)}`
+      ? `✅ Concluído (${j.data?.executionTimeMs || 0}ms) | Rota: ${j.data?.rota || slug}
+${typeof j.data?.output === 'string' ? j.data.output : JSON.stringify(j.data?.output, null, 2)}`
       : `❌ ${j.error}`;
   } catch (e: any) {
     saidaCronManual.value = `❌ ${e.message}`;
