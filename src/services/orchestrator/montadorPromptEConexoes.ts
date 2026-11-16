@@ -116,23 +116,6 @@ export async function montarContextoEConexoes(
     const descEnriquecida = `${ag.description?.trim() || `Especialista ${ag.name}.`} ${
       toolsDoAgente.length > 0 ? `Controla as seguintes ferramentas técnicas: [${toolsDoAgente.join(', ')}].` : ''
     } Acione este agente para tarefas do seu domínio.`;
-  try {
-    const candRes = await pool.query(`
-      SELECT LOWER(TRIM(titulo)) AS chave, MAX(titulo) AS titulo, MAX(conteudo) AS conteudo, COUNT(*)::int AS qtd
-      FROM jarvis_episodic_memory
-      WHERE created_at >= NOW() - INTERVAL '14 days'
-      GROUP BY LOWER(TRIM(titulo))
-      HAVING COUNT(*) >= 3
-      ORDER BY COUNT(*) DESC LIMIT 1;
-    `);
-    if (candRes.rows.length > 0) {
-      const c = candRes.rows[0];
-      contextoRagTexto += `
-
-[CONSOLIDAÇÃO AUTÔNOMA DE MEMÓRIA]: O padrão "${c.titulo}" (${c.conteudo}) foi citado ${c.qtd} vezes nos últimos 14 dias. Ao final da resposta, pergunte se o usuário deseja promovê-lo definitivamente para o banco vetorial de longo prazo.`;
-    }
-  } catch {}
-
 
     return {
       type: 'function',
@@ -305,6 +288,21 @@ ${resumoAgentesInativos}
  - Cumprimentos e conversação comum devem ser respondidos de forma amigável, inteligente e em português.
 
 ${contextoRagTexto ? `\n--- MEMÓRIA E CONHECIMENTO DO SISTEMA (AGENDA, MÉDIO E LONGO PRAZO) ---\n${contextoRagTexto}` : ''}`;
+  try {
+    const candRes = await pool.query(`
+      SELECT LOWER(TRIM(titulo)) AS chave, MAX(titulo) AS titulo, MAX(conteudo) AS conteudo, COUNT(*)::int AS qtd
+      FROM jarvis_episodic_memory
+      WHERE created_at >= NOW() - INTERVAL '14 days'
+      GROUP BY LOWER(TRIM(titulo))
+      HAVING COUNT(*) >= 3
+      ORDER BY COUNT(*) DESC LIMIT 1;
+    `);
+    if (candRes.rows.length > 0) {
+      const c = candRes.rows[0];
+      contextoRagTexto += `\n\n[CONSOLIDAÇÃO AUTÔNOMA DE MEMÓRIA]: O padrão "${c.titulo}" (${c.conteudo}) foi citado ${c.qtd} vezes nos últimos 14 dias. Ao final da resposta, pergunte se o usuário deseja promovê-lo definitivamente para o banco vetorial de longo prazo.`;
+    }
+  } catch {}
+
 
   return {
     configuracaoCerebro,

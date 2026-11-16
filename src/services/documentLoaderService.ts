@@ -183,7 +183,7 @@ export async function processAndIngestDocument(payload: DocumentUploadPayload) {
       extractedText = await extractTextFromPdfBuffer(fileBuffer);
     } else if (ext === 'docx') {
       extractedText = extractDocxXml(fileBuffer);
-    } else if (ext === 'csv' {
+    } else if (ext === 'csv') {
       const csvRaw = fileBuffer.toString('utf8');
       extractedText = parseCsvToSemanticText(csvRaw, fileName);
     } else if (ext === 'json') {
