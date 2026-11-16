@@ -453,7 +453,37 @@
         </div>
       </div>
     </div>
-  </section>
+  
+    <!-- PLAYGROUND ISOLADO, ROLLBACK DE PROMPTS E WEBHOOKS HMAC (TESTE / PROD) -->
+    <div v-if="agenteEmEdicao?.slug" style="margin-top:14px;border-top:1px solid #1e293b;padding-top:12px;">
+      <div style="background:#020617;border:1px solid #1e293b;border-radius:8px;padding:10px;margin-bottom:10px;font-size:11px;font-family:monospace;">
+        <div style="color:#38bdf8;font-weight:700;margin-bottom:4px;">🔐 Webhooks Blindados (Header: x-hmac-signature)</div>
+        <div style="color:#fbbf24;">🧪 TESTE: {{ originBaseUrl }}/api/v1/webhook/test/{{ agenteEmEdicao.slug }}</div>
+        <div style="color:#34d399;">🚀 PROD: {{ originBaseUrl }}/api/v1/webhook/prod/{{ agenteEmEdicao.slug }}</div>
+      </div>
+
+      <div style="background:#020617;border:1px solid #1e293b;border-radius:8px;padding:10px;margin-bottom:10px;">
+        <div style="font-size:12px;font-weight:700;color:#a78bfa;margin-bottom:6px;">🧪 Playground de Teste Isolado</div>
+        <div style="display:flex;gap:6px;">
+          <input v-model="sandboxPrompt" placeholder="Entrada de teste para este especialista..." style="flex:1;background:#0f172a;color:#fff;border:1px solid #334155;padding:6px 8px;border-radius:6px;font-size:12px;" />
+          <button type="button" :disabled="rodandoSandbox" @click="executarPlaygroundAgente" style="background:#7c3aed;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;">{{ rodandoSandbox ? '⏳...' : '▶ Testar' }}</button>
+        </div>
+        <pre v-if="sandboxSaida" style="margin-top:6px;background:#0f172a;color:#22c55e;padding:8px;border-radius:6px;font-size:11px;max-height:110px;overflow:auto;white-space:pre-wrap;">{{ sandboxSaida }}</pre>
+      </div>
+
+      <div style="background:#020617;border:1px solid #1e293b;border-radius:8px;padding:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <span style="font-size:12px;font-weight:700;color:#f59e0b;">⏪ Rollback de Prompts (prompt_versions)</span>
+          <button type="button" @click="carregarHistoricoPrompts(agenteEmEdicao.slug)" style="background:#1e293b;color:#cbd5e1;border:none;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">🔄 Listar Versões</button>
+        </div>
+        <div v-for="v in versoesPrompt" :key="v.id" style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:#0f172a;padding:5px 8px;border-radius:5px;margin-top:4px;font-size:11px;">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cbd5e1;">#{{ v.id }}: {{ v.system_prompt }}</span>
+          <button type="button" @click="restaurarPromptVersao(v.id)" style="background:#d97706;color:#fff;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;">⏪ Restaurar</button>
+        </div>
+      </div>
+    </div>
+
+</section>
 </template>
 
 <script setup lang="ts">
@@ -1038,6 +1068,27 @@ onMounted(async () => {
   await buscarAgentesEspecialistas();
   await carregarCatalogoDeFerramentas();
 });
+
+const originBaseUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3333';
+const sandboxPrompt = ref(''); const sandboxSaida = ref(''); const rodandoSandbox = ref(false);
+const versoesPrompt = ref<any[]>([]);
+
+async function executarPlaygroundAgente() {
+  if (!agenteEmEdicao.value) return; rodandoSandbox.value = true; sandboxSaida.value = 'Testando...';
+  try {
+    const r = await fetch('/api/v1/agents/sandbox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: agenteEmEdicao.value, testInput: sandboxPrompt.value || 'Teste isolado.' }) });
+    const j = await r.json();
+    sandboxSaida.value = j.success ? `[${j.latencyMs}ms] ${typeof j.output === 'string' ? j.output : JSON.stringify(j.output)}` : `❌ ${j.error}`;
+  } catch (e: any) { sandboxSaida.value = `❌ ${e.message}`; } finally { rodandoSandbox.value = false; }
+}
+async function carregarHistoricoPrompts(slug: string) {
+  try { const r = await fetch(`/api/v1/prompts/versions/${encodeURIComponent(slug)}`); const j = await r.json(); versoesPrompt.value = j.data || []; } catch {}
+}
+async function restaurarPromptVersao(id: number) {
+  const r = await fetch(`/api/v1/prompts/rollback/${id}`, { method: 'POST' }); const j = await r.json();
+  if (j.success && j.data?.system_prompt && agenteEmEdicao.value) { agenteEmEdicao.value.system_prompt = j.data.system_prompt; }
+}
+
 </script>
 
 <style scoped>

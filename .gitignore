@@ -16,3 +16,8 @@ models/
 __pycache__/
 *.pyc
 *.bak
+models/
+__pycache__/
+*.pyc
+*.bak
+*.bak

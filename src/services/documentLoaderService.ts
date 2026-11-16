@@ -1,3 +1,4 @@
+import zlib from 'zlib';
 // src/services/documentLoaderService.ts
 import { ingestDocument } from './ragService.js';
 import { pool } from '../config/database.js';
@@ -135,6 +136,29 @@ async function extractTextFromPdfBuffer(buffer: Buffer): Promise<string> {
 /**
  * Processa o arquivo (PDF, CSV, TXT, MD, JSON), divide em chunks e salva no RAG (vector_documents)
  */
+
+function extractDocxXml(buf: Buffer): string {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd === -1) throw new Error('DOCX inválido.');
+  let cur = buf.readUInt32LE(eocd + 16), entries = buf.readUInt16LE(eocd + 10);
+  for (let i = 0; i < entries && cur + 46 <= buf.length; i++) {
+    const comp = buf.readUInt16LE(cur + 10), cSize = buf.readUInt32LE(cur + 20);
+    const fnLen = buf.readUInt16LE(cur + 28), exLen = buf.readUInt16LE(cur + 30), cmLen = buf.readUInt16LE(cur + 32);
+    const lOff = buf.readUInt32LE(cur + 42), name = buf.toString('utf8', cur + 46, cur + 46 + fnLen);
+    if (name === 'word/document.xml') {
+      const start = lOff + 30 + buf.readUInt16LE(lOff + 26) + buf.readUInt16LE(lOff + 28);
+      const slice = buf.subarray(start, start + cSize);
+      const xml = comp === 0 ? slice.toString('utf8') : zlib.inflateRawSync(slice).toString('utf8');
+      return xml.replace(/<\/w:p>/g, '\n').replace(/<[^>]+>/g, '').replace(/\n{3,}/g, '\n\n').trim();
+    }
+    cur += 46 + fnLen + exLen + cmLen;
+  }
+  throw new Error('Texto não encontrado no DOCX.');
+}
+
 export async function processAndIngestDocument(payload: DocumentUploadPayload) {
   const {
     fileName,
@@ -157,7 +181,9 @@ export async function processAndIngestDocument(payload: DocumentUploadPayload) {
 
     if (ext === 'pdf') {
       extractedText = await extractTextFromPdfBuffer(fileBuffer);
-    } else if (ext === 'csv') {
+    } else if (ext === 'docx') {
+      extractedText = extractDocxXml(fileBuffer);
+    } else if (ext === 'csv' {
       const csvRaw = fileBuffer.toString('utf8');
       extractedText = parseCsvToSemanticText(csvRaw, fileName);
     } else if (ext === 'json') {

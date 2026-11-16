@@ -215,7 +215,30 @@
         </div>
       </div>
     </div>
-  </section>
+  
+    <!-- CONSOLIDAÇÃO AUTÔNOMA (MÉDIO -> LONGO PRAZO) -->
+    <div v-if="candidatosConsolidacao.length > 0" style="background:#1e1b4b;border:1px solid #6366f1;border-radius:10px;padding:12px;margin:12px 0;">
+      <strong style="color:#a5b4fc;font-size:13px;">🧠 Padrão Recorrente (3+ vezes em 14 dias) — Promover para Longo Prazo?</strong>
+      <div v-for="c in candidatosConsolidacao" :key="c.chave" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;background:#0f172a;padding:8px;border-radius:6px;">
+        <span style="font-size:12px;color:#e2e8f0;"><strong>{{ c.titulo }}</strong> ({{ c.qtd }}x): {{ c.conteudo }}</span>
+        <button type="button" @click="promoverPadraoRag(c)" style="background:#10b981;color:#022c22;border:none;padding:5px 10px;border-radius:6px;font-weight:700;font-size:11px;cursor:pointer;">🏛️ Promover p/ RAG</button>
+      </div>
+    </div>
+
+    <!-- DOCUMENT LOADER VISUAL (PDF, CSV, DOCX, TXT) -->
+    <div v-if="nivelAtivo === 'longo'" style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:12px;margin:12px 0;">
+      <strong style="color:#38bdf8;font-size:13px;">📄 Document Loader Visual (PDF, CSV, DOCX e TXT para o RAG)</strong>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center;">
+        <input type="file" accept=".pdf,.csv,.docx,.txt,.md,.json" @change="selecionarDocRag" style="font-size:12px;color:#cbd5e1;" />
+        <input v-model="docCategoria" placeholder="Categoria (ex: b3, contratos)" style="background:#020617;color:#fff;border:1px solid #334155;padding:6px 8px;border-radius:6px;font-size:12px;" />
+        <button type="button" :disabled="!docBase64 || enviandoDocRag" @click="enviarDocRag" style="background:#0284c7;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">
+          {{ enviandoDocRag ? '⏳ Fatiando...' : '🚀 Fatiar & Indexar' }}
+        </button>
+        <span v-if="statusDocRag" style="font-size:11px;color:#38bdf8;">{{ statusDocRag }}</span>
+      </div>
+    </div>
+
+</section>
 </template>
 
 <script setup lang="ts">
@@ -426,6 +449,34 @@ function formatarData(dt: string) {
 onMounted(async () => {
   await buscarSessoesDeMemoria();
 });
+
+const candidatosConsolidacao = ref<any[]>([]);
+const docNome = ref(''); const docBase64 = ref(''); const docCategoria = ref('geral');
+const enviandoDocRag = ref(false); const statusDocRag = ref('');
+
+async function carregarCandidatosConsolidacao() {
+  try { const r = await fetch('/api/v1/memory/consolidation/candidates'); const j = await r.json(); candidatosConsolidacao.value = j.data || []; } catch {}
+}
+async function promoverPadraoRag(c: any) {
+  await fetch('/api/v1/memory/consolidation/promote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) });
+  await carregarCandidatosConsolidacao();
+  if (typeof carregarMemoriasLongoPrazo === 'function') await carregarMemoriasLongoPrazo();
+}
+function selecionarDocRag(e: Event) {
+  const f = (e.target as HTMLInputElement).files?.[0]; if (!f) return;
+  docNome.value = f.name;
+  const reader = new FileReader(); reader.onload = () => { docBase64.value = String(reader.result || ''); }; reader.readAsDataURL(f);
+}
+async function enviarDocRag() {
+  if (!docBase64.value) return; enviandoDocRag.value = true; statusDocRag.value = 'Processando chunks...';
+  try {
+    const r = await fetch('/api/v1/docs-ssh/rag/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileName: docNome.value, contentBase64: docBase64.value, category: docCategoria.value }) });
+    const j = await r.json(); statusDocRag.value = j.success ? `✅ ${j.message}` : `❌ ${j.error}`;
+    if (j.success && typeof carregarMemoriasLongoPrazo === 'function') await carregarMemoriasLongoPrazo();
+  } catch (err: any) { statusDocRag.value = `❌ ${err.message}`; } finally { enviandoDocRag.value = false; }
+}
+carregarCandidatosConsolidacao();
+
 </script>
 
 <style scoped>
