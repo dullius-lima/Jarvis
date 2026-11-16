@@ -120,10 +120,16 @@ app.get('/download/jarvis.apk', (_req, res) => res.download('/home/ubuntu/jarvis
 app.get('/download/jarvis-watch.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis-watch.apk', 'jarvis-watch.apk'));
 app.use('/api/v1/auth', authRoutes);
 
-// __SYNC_AGENT_SCHEDULE_FIELDS__ - Garante gravação dos campos de Agendamento Cron e Error Trigger ao criar/editar agente
+// __SYNC_AGENT_SCHEDULE_FIELDS__ - Grava múltiplos disparos (schedules JSONB) e campos legados
 app.use('/api/v1/agents', (req: Request, res: Response, next: NextFunction) => {
   if ((req.method === 'POST' || req.method === 'PUT') && req.body && req.body.slug) {
     const b = req.body;
+    const schedList = Array.isArray(b.schedules) ? b.schedules : [];
+    const activeList = schedList.filter((s: any) => s && s.enabled !== false);
+    const hasAnyActive = activeList.length > 0 || Boolean(b.schedule_enabled);
+    const primaryCron = activeList[0]?.cron_expression || (b.schedule_enabled ? b.cron_expression : null) || null;
+    const primaryPrompt = activeList[0]?.schedule_prompt || b.schedule_prompt || null;
+
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         pool.query(
@@ -131,13 +137,15 @@ app.use('/api/v1/agents', (req: Request, res: Response, next: NextFunction) => {
            SET schedule_enabled = $1,
                cron_expression = $2,
                schedule_prompt = $3,
-               is_error_trigger = $4
-           WHERE slug = $5;`,
+               is_error_trigger = $4,
+               schedules = $5::jsonb
+           WHERE slug = $6;`,
           [
-            Boolean(b.schedule_enabled),
-            b.schedule_enabled ? (b.cron_expression || null) : null,
-            b.schedule_prompt || null,
+            hasAnyActive,
+            primaryCron,
+            primaryPrompt,
             Boolean(b.is_error_trigger),
+            JSON.stringify(schedList),
             b.slug
           ]
         ).catch(() => {});
@@ -146,7 +154,6 @@ app.use('/api/v1/agents', (req: Request, res: Response, next: NextFunction) => {
   }
   next();
 });
-
 app.use('/api/v1/agents', agentRoutes);
 app.use('/api/v1/rag', ragRoutes);
 app.use('/api/v1/messaging', messagingRoutes);
