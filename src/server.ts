@@ -119,6 +119,34 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.get('/download/jarvis.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis.apk', 'jarvis.apk'));
 app.get('/download/jarvis-watch.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis-watch.apk', 'jarvis-watch.apk'));
 app.use('/api/v1/auth', authRoutes);
+
+// __SYNC_AGENT_SCHEDULE_FIELDS__ - Garante gravação dos campos de Agendamento Cron e Error Trigger ao criar/editar agente
+app.use('/api/v1/agents', (req: Request, res: Response, next: NextFunction) => {
+  if ((req.method === 'POST' || req.method === 'PUT') && req.body && req.body.slug) {
+    const b = req.body;
+    res.on('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        pool.query(
+          `UPDATE ai_agents
+           SET schedule_enabled = $1,
+               cron_expression = $2,
+               schedule_prompt = $3,
+               is_error_trigger = $4
+           WHERE slug = $5;`,
+          [
+            Boolean(b.schedule_enabled),
+            b.schedule_enabled ? (b.cron_expression || null) : null,
+            b.schedule_prompt || null,
+            Boolean(b.is_error_trigger),
+            b.slug
+          ]
+        ).catch(() => {});
+      }
+    });
+  }
+  next();
+});
+
 app.use('/api/v1/agents', agentRoutes);
 app.use('/api/v1/rag', ragRoutes);
 app.use('/api/v1/messaging', messagingRoutes);

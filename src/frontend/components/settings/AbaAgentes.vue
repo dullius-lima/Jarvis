@@ -1,5 +1,54 @@
 <template>
   <section class="tab-section">
+
+  <!-- PAINEL DE VISÃO GERAL: AGENTES COM DISPARO AUTOMÁTICO PROGRAMADO -->
+  <div style="background: linear-gradient(135deg, #0c192c, #0f172a); border: 1px solid #0284c7; border-radius: 12px; padding: 14px 16px; margin-bottom: 18px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
+      <div>
+        <strong style="color: #38bdf8; font-size: 14px;">⏰ Disparos Automáticos Programados ({{ agentesAgendados.length }})</strong>
+        <div style="font-size: 11px; color: #94a3b8;">Fuso horário ativo: America/Campo_Grande (UTC-4)</div>
+      </div>
+      <span v-if="agentesAgendados.length === 0" style="font-size: 12px; color: #64748b; background: #020617; padding: 5px 10px; border-radius: 6px; border: 1px solid #1e293b;">
+        Nenhum agente com disparo automático ativo. Clique em "✏️ Editar" num agente para agendar.
+      </span>
+    </div>
+
+    <div v-if="agentesAgendados.length > 0" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 10px;">
+      <div
+        v-for="ag in agentesAgendados"
+        :key="'sched_' + ag.slug"
+        style="background: #020617; border: 1px solid #1e3a5f; border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px;"
+      >
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+            <strong style="color: #f8fafc; font-size: 13px;">{{ ag.icon || '🤖' }} {{ ag.name }}</strong>
+            <span style="background: #0369a1; color: #e0f2fe; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;">
+              {{ descreverCronAmigavel(ag.cron_expression) }}
+            </span>
+          </div>
+          <div style="font-size: 11px; color: #cbd5e1; margin-top: 5px; background: #0f172a; padding: 5px 8px; border-radius: 5px;">
+            💬 <strong>Tarefa:</strong> {{ ag.schedule_prompt || 'Rotina padrão do especialista' }}
+          </div>
+          <div style="font-size: 10px; color: #64748b; margin-top: 4px;">
+            Último disparo: {{ ag.last_scheduled_run ? new Date(ag.last_scheduled_run).toLocaleString('pt-BR') : 'Aguardando próximo horário' }}
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 6px; justify-content: flex-end;">
+          <button type="button" @click="dispararCronAgora(ag.slug)" style="background: #0284c7; color: #fff; border: none; padding: 4px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer;">
+            ▶ Disparar Agora
+          </button>
+          <button type="button" @click="abrirModalEditarAgente(ag)" style="background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;">
+            ✏️ Configurar
+          </button>
+          <button type="button" @click="pausarAgendamentoRapido(ag)" style="background: #3f1d24; color: #fda4af; border: 1px solid #881337; padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;">
+            ⏸️ Desativar
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
     <header class="section-header">
       <div>
         <h1>🤖 Agentes Especialistas &amp; Terminações Nervosas (SNP)</h1>
@@ -439,10 +488,117 @@
             </div>
 
             <div class="form-row" style="margin-top: 10px;">
-              <div class="form-group">
-                <label>⏰ Expressão Cron de Agendamento</label>
-                <input type="text" v-model="agenteEmEdicao.cron_expression" class="input-field" placeholder="Ex: */15 * * * *" />
+              
+        <!-- CONSTRUTOR VISUAL DE AGENDAMENTO AUTOMÁTICO (DATA, HORÁRIO E FREQUÊNCIA) -->
+        <div style="background: #020617; border: 1px solid #0284c7; border-radius: 10px; padding: 14px; margin-top: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; color: #38bdf8; font-weight: 700; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" v-model="agenteEmEdicao.schedule_enabled" @change="aoAlternarAgendamentoModal" />
+              ⏰ Ativar Disparo Automático Programado
+            </label>
+            <button
+              v-if="agenteEmEdicao.slug"
+              type="button"
+              :disabled="executandoCronManual"
+              @click="dispararCronAgora(agenteEmEdicao.slug)"
+              style="background: #0284c7; color: #fff; border: none; padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer;"
+            >
+              {{ executandoCronManual ? '⏳ Executando...' : '▶ Testar Disparo Agora' }}
+            </button>
+          </div>
+
+          <div v-if="agenteEmEdicao.schedule_enabled" style="margin-top: 12px; display: flex; flex-direction: column; gap: 10px;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px;">
+              <div>
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">1. Frequência do Disparo</label>
+                <select v-model="agendaUi.modo" @change="recalcularCronVisual" style="width: 100%; background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 7px; border-radius: 6px; font-size: 12px;">
+                  <option value="diario">📅 Todos os dias (Horário fixo)</option>
+                  <option value="dias_uteis">💼 Segunda a Sexta (Dias úteis)</option>
+                  <option value="data_unica">🗓️ Data e Horário específicos</option>
+                  <option value="semanal">📆 Um dia da semana</option>
+                  <option value="intervalo">🔁 A cada X minutos / horas</option>
+                  <option value="custom">⚙️ Expressão Cron manual</option>
+                </select>
               </div>
+
+              <div v-if="agendaUi.modo === 'intervalo'">
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">2. Intervalo</label>
+                <select v-model="agendaUi.intervalo" @change="recalcularCronVisual" style="width: 100%; background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 7px; border-radius: 6px; font-size: 12px;">
+                  <option value="*/5 * * * *">A cada 5 minutos</option>
+                  <option value="*/15 * * * *">A cada 15 minutos</option>
+                  <option value="*/30 * * * *">A cada 30 minutos</option>
+                  <option value="0 * * * *">A cada 1 hora</option>
+                  <option value="0 */2 * * *">A cada 2 horas</option>
+                  <option value="0 */6 * * *">A cada 6 horas</option>
+                  <option value="0 */12 * * *">A cada 12 horas</option>
+                </select>
+              </div>
+
+              <div v-if="agendaUi.modo === 'data_unica'">
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">2. Data do Disparo</label>
+                <input type="date" v-model="agendaUi.data" @change="recalcularCronVisual" style="width: 100%; background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 6px; border-radius: 6px; font-size: 12px;" />
+              </div>
+
+              <div v-if="agendaUi.modo === 'semanal'">
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">2. Dia da Semana</label>
+                <select v-model="agendaUi.diaSemana" @change="recalcularCronVisual" style="width: 100%; background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 7px; border-radius: 6px; font-size: 12px;">
+                  <option value="1">Segunda-feira</option>
+                  <option value="2">Terça-feira</option>
+                  <option value="3">Quarta-feira</option>
+                  <option value="4">Quinta-feira</option>
+                  <option value="5">Sexta-feira</option>
+                  <option value="6">Sábado</option>
+                  <option value="0">Domingo</option>
+                </select>
+              </div>
+
+              <div v-if="['diario', 'dias_uteis', 'data_unica', 'semanal'].includes(agendaUi.modo)">
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">3. Horário (Campo Grande)</label>
+                <input type="time" v-model="agendaUi.hora" @change="recalcularCronVisual" style="width: 100%; background: #0f172a; color: #38bdf8; border: 1px solid #334155; padding: 6px; border-radius: 6px; font-size: 12px; font-weight: 700;" />
+              </div>
+
+              <div v-if="agendaUi.modo === 'custom'">
+                <label style="display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px;">Cron (min hora dia mês sem)</label>
+                <input v-model="agenteEmEdicao.cron_expression" placeholder="0 8 * * *" style="width: 100%; background: #0f172a; color: #38bdf8; border: 1px solid #334155; padding: 6px; border-radius: 6px; font-family: monospace; font-size: 12px;" />
+              </div>
+            </div>
+
+            <div style="background: #0f172a; border: 1px dashed #0284c7; padding: 7px 10px; border-radius: 6px; font-size: 12px; color: #7dd3fc; display: flex; justify-content: space-between; align-items: center;">
+              <span>📌 <strong>Programação:</strong> {{ descreverCronAmigavel(agenteEmEdicao.cron_expression) }}</span>
+              <code style="color: #94a3b8; font-size: 11px;">Cron: {{ agenteEmEdicao.cron_expression || 'não definido' }}</code>
+            </div>
+
+            <div>
+              <label style="display: block; font-size: 11px; color: #fbbf24; font-weight: 600; margin-bottom: 4px;">
+                4. Comando / Tarefa que este agente deve executar no horário (Obrigatório):
+              </label>
+              <textarea
+                v-model="agenteEmEdicao.schedule_prompt"
+                rows="2"
+                placeholder="Ex: Liste todos os meus compromissos de hoje no Google Calendar e envie um resumo organizado."
+                style="width: 100%; background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 8px; border-radius: 6px; font-size: 12px;"
+              ></textarea>
+            </div>
+          </div>
+
+          <pre v-if="saidaCronManual" style="margin-top: 8px; background: #0f172a; color: #38bdf8; padding: 8px; border-radius: 6px; font-size: 11px; max-height: 110px; overflow: auto; white-space: pre-wrap;">{{ saidaCronManual }}</pre>
+        </div>
+
+        <!-- CONSOLE OPERACIONAL DO AGENTE HACKER & ERROR TRIGGER -->
+        <div style="background: #020617; border: 1px solid #10b981; border-radius: 10px; padding: 12px; margin-top: 10px;">
+          <label style="display: flex; align-items: center; gap: 8px; color: #10b981; font-weight: 700; font-size: 12px; cursor: pointer; margin-bottom: 8px;">
+            <input type="checkbox" v-model="agenteEmEdicao.is_error_trigger" />
+            🕵️‍♂️ Supervisor de Falhas (Error Trigger / Self-Healing Automático)
+          </label>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+            <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('self_healing_debug', agenteEmEdicao.slug)" style="background: #059669; color: #fff; border: none; padding: 5px 10px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer;">🔧 Self-Healing (Logs)</button>
+            <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('red_team_audit', agenteEmEdicao.slug)" style="background: #e11d48; color: #fff; border: none; padding: 5px 10px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer;">🛡️ Red Team OWASP</button>
+            <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('api_probe', agenteEmEdicao.slug)" style="background: #0284c7; color: #fff; border: none; padding: 5px 10px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer;">🌐 API Probe</button>
+            <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('sandbox_code_test', agenteEmEdicao.slug)" style="background: #7c3aed; color: #fff; border: none; padding: 5px 10px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer;">🧪 Sandbox</button>
+          </div>
+          <pre v-if="relatorioHacker" style="margin-top: 6px; background: #0f172a; color: #a7f3d0; padding: 8px; border-radius: 6px; font-size: 11px; max-height: 140px; overflow: auto; white-space: pre-wrap;">{{ relatorioHacker }}</pre>
+        </div>
+
             </div>
           </div>
         </div>
@@ -483,68 +639,11 @@
       </div>
     </div>
 
-
-    <!-- ETAPA A: AGENDAMENTO CRON (SCHEDULE TRIGGER) + CONSOLE AGENTE HACKER -->
-    <div v-if="agenteEmEdicao" style="margin-top:14px;border-top:1px solid #1e293b;padding-top:12px;">
-      <!-- 1. SCHEDULE TRIGGER (CRON POR AGENTE 100% NO FRONTEND) -->
-      <div style="background:#020617;border:1px solid #0284c7;border-radius:8px;padding:12px;margin-bottom:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <label style="display:flex;align-items:center;gap:8px;color:#38bdf8;font-weight:700;font-size:12px;cursor:pointer;">
-            <input type="checkbox" v-model="agenteEmEdicao.schedule_enabled" />
-            ⏰ Ativar Agendamento Automático (Schedule Trigger / Cron)
-          </label>
-          <button v-if="agenteEmEdicao.slug" type="button" :disabled="executandoCronManual" @click="dispararCronAgora(agenteEmEdicao.slug)" style="background:#0284c7;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">
-            {{ executandoCronManual ? '⏳ Executando...' : '▶ Disparar Rotina Agora' }}
-          </button>
-        </div>
-
-        <div v-if="agenteEmEdicao.schedule_enabled" style="display:flex;flex-direction:column;gap:8px;">
-          <div style="display:flex;flex-wrap:wrap;gap:6px;">
-            <button type="button" @click="agenteEmEdicao.cron_expression = '*/5 * * * *'" style="background:#0f172a;color:#94a3b8;border:1px solid #334155;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">A cada 5 min</button>
-            <button type="button" @click="agenteEmEdicao.cron_expression = '0 8 * * *'" style="background:#0f172a;color:#94a3b8;border:1px solid #334155;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">Todo dia 08:00</button>
-            <button type="button" @click="agenteEmEdicao.cron_expression = '30 17 * * 1-5'" style="background:#0f172a;color:#94a3b8;border:1px solid #334155;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">Fechamento B3 (17:30 Seg-Sex)</button>
-            <button type="button" @click="agenteEmEdicao.cron_expression = '0 9 * * 1'" style="background:#0f172a;color:#94a3b8;border:1px solid #334155;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">Segundas 09:00</button>
-          </div>
-          <div style="display:grid;grid-template-columns:160px 1fr;gap:8px;">
-            <input v-model="agenteEmEdicao.cron_expression" placeholder="Ex: 0 8 * * *" style="background:#0f172a;color:#38bdf8;border:1px solid #334155;padding:6px 8px;border-radius:6px;font-family:monospace;font-size:12px;" />
-            <input v-model="agenteEmEdicao.schedule_prompt" placeholder="Instrução automática (ex: Verifique cotações da carteira e envie resumo)" style="background:#0f172a;color:#fff;border:1px solid #334155;padding:6px 8px;border-radius:6px;font-size:12px;" />
-          </div>
-        </div>
-        <pre v-if="saidaCronManual" style="margin-top:8px;background:#0f172a;color:#38bdf8;padding:8px;border-radius:6px;font-size:11px;max-height:100px;overflow:auto;white-space:pre-wrap;">{{ saidaCronManual }}</pre>
-      </div>
-
-      <!-- 2. ERROR TRIGGER & CONSOLE OPERACIONAL DO AGENTE HACKER -->
-      <div style="background:#020617;border:1px solid #10b981;border-radius:8px;padding:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <label style="display:flex;align-items:center;gap:8px;color:#10b981;font-weight:700;font-size:12px;cursor:pointer;">
-            <input type="checkbox" v-model="agenteEmEdicao.is_error_trigger" />
-            🕵️‍♂️ Supervisor de Falhas (Error Trigger / Self-Healing Automático)
-          </label>
-        </div>
-
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-          <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('self_healing_debug', agenteEmEdicao.slug)" style="background:#059669;color:#fff;border:none;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">
-            🔧 Self-Healing (Auditar Logs & Alucinações)
-          </button>
-          <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('red_team_audit', agenteEmEdicao.slug)" style="background:#e11d48;color:#fff;border:none;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">
-            🛡️ Red Team OWASP (Testar Prompt Injection)
-          </button>
-          <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('api_probe', agenteEmEdicao.slug)" style="background:#0284c7;color:#fff;border:none;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">
-            🌐 API Probe (Testar URL do Agente)
-          </button>
-          <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('sandbox_code_test', agenteEmEdicao.slug)" style="background:#7c3aed;color:#fff;border:none;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">
-            🧪 Validar Script na Sandbox
-          </button>
-        </div>
-        <pre v-if="relatorioHacker" style="margin-top:6px;background:#0f172a;color:#a7f3d0;padding:8px;border-radius:6px;font-size:11px;max-height:150px;overflow:auto;white-space:pre-wrap;">{{ relatorioHacker }}</pre>
-      </div>
-    </div>
-
 </section>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import {ref, reactive, onMounted, computed} from 'vue';
 
 const ENDPOINTS_PADRAO: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
@@ -1147,6 +1246,70 @@ async function restaurarPromptVersao(id: number) {
 }
 
 
+const agentesAgendados = computed(() =>
+  (listaAgentes.value || []).filter((a: any) => Boolean(a.schedule_enabled))
+);
+
+const agendaUi = ref({
+  modo: 'diario',
+  hora: '08:00',
+  data: new Date().toISOString().slice(0, 10),
+  diaSemana: '1',
+  intervalo: '*/30 * * * *'
+});
+
+function descreverCronAmigavel(cron?: string): string {
+  if (!cron) return 'Sem horário definido';
+  const p = cron.trim().split(/\s+/);
+  if (p.length !== 5) return cron;
+  const [m, h, dom, mon, dow] = p;
+  if (m.startsWith('*/') && h === '*') return `A cada ${m.slice(2)} minutos`;
+  if (m === '0' && h === '*') return 'A cada 1 hora';
+  if (m === '0' && h.startsWith('*/')) return `A cada ${h.slice(2)} horas`;
+  const hh = h.padStart(2, '0');
+  const mm = m.padStart(2, '0');
+  const diasMap: Record<string, string> = { '0': 'Domingo', '1': 'Segunda', '2': 'Terça', '3': 'Quarta', '4': 'Quinta', '5': 'Sexta', '6': 'Sábado', '1-5': 'Seg a Sex' };
+  if (dom !== '*' && mon !== '*') return `Dia ${dom.padStart(2, '0')}/${mon.padStart(2, '0')} às ${hh}:${mm}`;
+  if (dow === '1-5') return `Seg a Sex às ${hh}:${mm}`;
+  if (dow !== '*' && diasMap[dow]) return `Toda ${diasMap[dow]} às ${hh}:${mm}`;
+  if (dom === '*' && mon === '*' && dow === '*') return `Todo dia às ${hh}:${mm}`;
+  return `${cron}`;
+}
+
+function recalcularCronVisual() {
+  if (!agenteEmEdicao.value) return;
+  const [hhStr, mmStr] = (agendaUi.value.hora || '08:00').split(':');
+  const hh = Number(hhStr || 8);
+  const mm = Number(mmStr || 0);
+  if (agendaUi.value.modo === 'intervalo') {
+    agenteEmEdicao.value.cron_expression = agendaUi.value.intervalo;
+  } else if (agendaUi.value.modo === 'diario') {
+    agenteEmEdicao.value.cron_expression = `${mm} ${hh} * * *`;
+  } else if (agendaUi.value.modo === 'dias_uteis') {
+    agenteEmEdicao.value.cron_expression = `${mm} ${hh} * * 1-5`;
+  } else if (agendaUi.value.modo === 'semanal') {
+    agenteEmEdicao.value.cron_expression = `${mm} ${hh} * * ${agendaUi.value.diaSemana}`;
+  } else if (agendaUi.value.modo === 'data_unica') {
+    const [, mesStr, diaStr] = (agendaUi.value.data || new Date().toISOString().slice(0, 10)).split('-');
+    agenteEmEdicao.value.cron_expression = `${mm} ${hh} ${Number(diaStr)} ${Number(mesStr)} *`;
+  }
+}
+
+function aoAlternarAgendamentoModal() {
+  if (agenteEmEdicao.value?.schedule_enabled && !agenteEmEdicao.value?.cron_expression) {
+    recalcularCronVisual();
+  }
+}
+
+async function pausarAgendamentoRapido(ag: any) {
+  await fetch(`/api/v1/agents/${ag.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...ag, schedule_enabled: false })
+  });
+  ag.schedule_enabled = false;
+}
+
 const executandoCronManual = ref(false);
 const saidaCronManual = ref('');
 const rodandoHacker = ref(false);
@@ -1155,11 +1318,13 @@ const relatorioHacker = ref('');
 async function dispararCronAgora(slug: string) {
   if (!slug) return;
   executandoCronManual.value = true;
-  saidaCronManual.value = 'Disparando rotina agendada...';
+  saidaCronManual.value = '⏳ Executando rotina programada...';
   try {
     const r = await fetch(`/api/v1/triggers/schedule/run-now/${encodeURIComponent(slug)}`, { method: 'POST' });
     const j = await r.json();
-    saidaCronManual.value = j.success ? `✅ Concluído (${j.data?.executionTimeMs || 0}ms):\n${typeof j.data?.output === 'string' ? j.data.output : JSON.stringify(j.data?.output, null, 2)}` : `❌ ${j.error}`;
+    saidaCronManual.value = j.success
+      ? `✅ Concluído (${j.data?.executionTimeMs || 0}ms):\n${typeof j.data?.output === 'string' ? j.data.output : JSON.stringify(j.data?.output, null, 2)}`
+      : `❌ ${j.error}`;
   } catch (e: any) {
     saidaCronManual.value = `❌ ${e.message}`;
   } finally {
@@ -1173,7 +1338,7 @@ async function executarOperacaoHacker(mode: string, slug?: string) {
   try {
     const payload: any = { mode, target_slug: slug };
     if (mode === 'api_probe') payload.target_url = agenteEmEdicao.value?.endpoint_url || 'https://economia.awesomeapi.com.br/last/USD-BRL';
-    if (mode === 'sandbox_code_test') payload.code_to_test = agenteEmEdicao.value?.code_snippet || 'return { status: "ok", checkedAt: new Date().toISOString() };';
+    if (mode === 'sandbox_code_test') payload.code_to_test = agenteEmEdicao.value?.code_snippet || 'return { status: "ok" };';
     const r = await fetch('/api/v1/agents/hacker/audit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -1,8 +1,12 @@
 import { pool } from '../config/database.js';
 import { executeSingleAgentLogic } from '../controllers/agentController.js';
 
+function getCampoGrandeNow(): Date {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Campo_Grande' }));
+}
+
 export function matchesCronField(cronField: string, currentValue: number): boolean {
-  if (!cronField || cronField === '*') return true;
+  if (!cronField || cronField === '*' || cronField === '?') return true;
   if (cronField.startsWith('*/')) {
     const step = parseInt(cronField.replace('*/', ''), 10);
     return !isNaN(step) && step > 0 && currentValue % step === 0;
@@ -17,7 +21,7 @@ export function matchesCronField(cronField: string, currentValue: number): boole
   return parseInt(cronField, 10) === currentValue;
 }
 
-export function matchesCronExpression(cronExpression: string, date: Date = new Date()): boolean {
+export function matchesCronExpression(cronExpression: string, date: Date = getCampoGrandeNow()): boolean {
   const parts = (cronExpression || '').trim().split(/\s+/);
   if (parts.length !== 5) return false;
   const [minR, hourR, domR, monR, dowR] = parts;
@@ -32,9 +36,8 @@ export function matchesCronExpression(cronExpression: string, date: Date = new D
 
 export async function executeScheduledAgent(agent: any, isManual = false) {
   const start = Date.now();
-  const promptToRun =
-    agent.schedule_prompt ||
-    `[DISPARO AGENDADO CRON: ${agent.cron_expression || 'manual'}] Execute sua rotina principal: ${agent.description || agent.name}`;
+  const promptToRun = (agent.schedule_prompt || '').trim() ||
+    `Execute agora sua rotina programada principal conforme sua especialidade (${agent.description || agent.name}).`;
 
   try {
     const res = await executeSingleAgentLogic(
@@ -44,11 +47,7 @@ export async function executeScheduledAgent(agent: any, isManual = false) {
     );
     const outStr = typeof res.output === 'string' ? res.output : JSON.stringify(res.output);
 
-    await pool.query(
-      `UPDATE ai_agents SET last_scheduled_run = NOW() WHERE id = $1;`,
-      [agent.id]
-    ).catch(() => {});
-
+    await pool.query(`UPDATE ai_agents SET last_scheduled_run = NOW() WHERE id = $1;`, [agent.id]).catch(() => {});
     await pool.query(
       `INSERT INTO schedule_execution_logs (agent_slug, agent_name, cron_expression, prompt_dispatched, execution_status, output_summary, execution_time_ms)
        VALUES ($1, $2, $3, $4, 'success', $5, $6);`,
@@ -66,8 +65,14 @@ export async function executeScheduledAgent(agent: any, isManual = false) {
   }
 }
 
+let lastMinuteKey = '';
+
 export async function evaluateScheduledTriggers() {
-  const now = new Date();
+  const nowCg = getCampoGrandeNow();
+  const minuteKey = `${nowCg.getFullYear()}-${nowCg.getMonth()}-${nowCg.getDate()}-${nowCg.getHours()}:${nowCg.getMinutes()}`;
+  if (minuteKey === lastMinuteKey) return;
+  lastMinuteKey = minuteKey;
+
   try {
     const result = await pool.query(`
       SELECT * FROM ai_agents
@@ -77,19 +82,23 @@ export async function evaluateScheduledTriggers() {
         AND TRIM(cron_expression) <> '';
     `);
     for (const agent of result.rows) {
-      if (matchesCronExpression(agent.cron_expression, now)) {
-        console.log(`⏰ [Schedule Trigger] Executando "${agent.name}" (${agent.cron_expression})`);
+      if (agent.last_scheduled_run) {
+        const diffMs = Date.now() - new Date(agent.last_scheduled_run).getTime();
+        if (diffMs < 55000) continue;
+      }
+      if (matchesCronExpression(agent.cron_expression, nowCg)) {
+        console.log(`⏰ [Schedule Trigger - Campo Grande] Disparando "${agent.name}" (${agent.cron_expression})`);
         executeScheduledAgent(agent, false).catch((e) =>
-          console.error(`❌ [Schedule Trigger] Falha em "${agent.name}":`, e.message)
+          console.error(`❌ [Schedule Trigger] Erro em "${agent.name}":`, e.message)
         );
       }
     }
   } catch (error: any) {
-    console.error('❌ [Schedule Trigger] Erro na varredura Cron:', error.message);
+    console.error('❌ [Schedule Trigger] Falha na varredura Cron:', error.message);
   }
 }
 
 export function startScheduleTriggerEngine() {
-  setInterval(evaluateScheduledTriggers, 60 * 1000);
-  console.log('⏰ [Schedule Trigger] Motor Cron por Agente ativo (intervalo: 60s).');
+  setInterval(evaluateScheduledTriggers, 20 * 1000);
+  console.log('⏰ [Schedule Trigger] Motor Cron ativo (Fuso: America/Campo_Grande -04:00).');
 }
