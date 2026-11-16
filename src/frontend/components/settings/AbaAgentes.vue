@@ -6,7 +6,7 @@
     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
       <div>
         <strong style="color: #38bdf8; font-size: 14px;">⏰ Disparos Automáticos Programados ({{ todosDisparosAtivos.length }})</strong>
-        <div style="font-size: 11px; color: #94a3b8;">Fuso: America/Campo_Grande (UTC-4) • Múltiplos disparos por agente</div>
+        <div style="font-size: 11px; color: #94a3b8;">Fuso: America/Campo_Grande (UTC-4) • Suporta múltiplos disparos por agente</div>
       </div>
       <span v-if="todosDisparosAtivos.length === 0" style="font-size: 12px; color: #64748b; background: #020617; padding: 5px 10px; border-radius: 6px;">Nenhum disparo ativo.</span>
     </div>
@@ -22,7 +22,7 @@
         </div>
         <div style="display: flex; gap: 6px; justify-content: flex-end;">
           <button type="button" @click="dispararCronAgora(item.agent.slug, item.sched.schedule_prompt, item.sched.id)" style="background: #0284c7; color: #fff; border: none; padding: 4px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer;">▶ Disparar Agora</button>
-          <button type="button" @click="dispararCronAgora(item.agent)" style="background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;">✏️ Configurar</button>
+          <button type="button" @click="abrirModalEditarAgente(item.agent)" style="background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;">✏️ Configurar</button>
         </div>
       </div>
     </div>
@@ -477,7 +477,7 @@
             </button>
           </div>
           <div v-if="getListaDisparosModal().length === 0" style="background: #0f172a; border: 1px dashed #334155; padding: 10px; border-radius: 8px; font-size: 12px; color: #94a3b8; text-align: center;">
-            Nenhum disparo programado. Toque em <strong>➕ Adicionar Novo Disparo</strong> acima.
+            Nenhum disparo programado. Clique em <strong>➕ Adicionar Novo Disparo</strong> acima.
           </div>
           <div v-for="(sched, idx) in getListaDisparosModal()" :key="sched.id || idx" style="background: #0f172a; border: 1px solid #1e3a5f; border-radius: 8px; padding: 12px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px;">
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
@@ -1204,7 +1204,7 @@ async function restaurarPromptVersao(id: number) {
 
 const todosDisparosAtivos = computed(() => {
   const saida: any[] = [];
-  for (const ag of (agentesAgendados.value || [])) {
+  for (const ag of (listaAgentes.value || [])) {
     const lista = Array.isArray(ag.schedules) && ag.schedules.length > 0
       ? ag.schedules
       : (ag.schedule_enabled && ag.cron_expression ? [{ id: 'legacy', label: 'Disparo Principal', enabled: true, cron_expression: ag.cron_expression, schedule_prompt: ag.schedule_prompt, last_run: ag.last_scheduled_run }] : []);
