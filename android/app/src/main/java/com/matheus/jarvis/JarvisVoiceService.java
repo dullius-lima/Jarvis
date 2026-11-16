@@ -62,7 +62,7 @@ public class JarvisVoiceService extends Service {
     private volatile boolean prefEdgeGlowEnabled = true;
     private volatile boolean prefWakeScreenOnCall = true;
     private volatile boolean prefPrivacyLockCamera = false;
-    private volatile int prefContinuousSec = 15;
+    private volatile int prefContinuousSec = 0;
     private volatile double prefSensMultiplier = 1.85;
     private volatile long lastPrefSyncMs = 0L;
     private volatile boolean prefSyncInFlight = false;
@@ -164,7 +164,7 @@ public class JarvisVoiceService extends Service {
             prefEdgeGlowEnabled = sp.getBoolean("edge_glow_enabled", true);
             prefWakeScreenOnCall = sp.getBoolean("wake_screen_on_call", true);
             prefPrivacyLockCamera = sp.getBoolean("privacy_lock_camera", false);
-            prefContinuousSec = sp.getInt("continuous_chat_seconds", 15);
+            prefContinuousSec = sp.getInt("continuous_chat_seconds", 0);
             applySensMultiplier(sp.getString("mic_sensitivity", "balanced"));
         } catch (Exception ignored) {}
     }
@@ -196,7 +196,7 @@ public class JarvisVoiceService extends Service {
                             prefEdgeGlowEnabled = d.optBoolean("edge_glow_enabled", true);
                             prefWakeScreenOnCall = d.optBoolean("wake_screen_on_call", true);
                             prefPrivacyLockCamera = d.optBoolean("privacy_lock_camera", false);
-                            prefContinuousSec = d.optInt("continuous_chat_seconds", 15);
+                            prefContinuousSec = d.optInt("continuous_chat_seconds", 0);
                             String sens = d.optString("mic_sensitivity", "balanced");
                             applySensMultiplier(sens);
                             getSharedPreferences(PREFS_CACHE, MODE_PRIVATE).edit()
@@ -693,7 +693,14 @@ public class JarvisVoiceService extends Service {
     }
 
     private void speakReply(String text) {
-        String clean = (text == null ? "" : text).replaceAll("```[\\s\\S]*?```", "").replaceAll("[*#_`~>|]", "").trim();
+        String clean = (text == null ? "" : text)
+                .replaceAll("```[\\s\\S]*?```", "")
+                .replaceAll("\\(?\\*{1,4}\\s*\\+?\\d[\\d\\s().-]{6,}\\*{0,4}\\)?", "o número cadastrado")
+                .replaceAll("\\+?55\\s*\\(?\\d{2}\\)?\\s*9?\\d{4}[-\\s]?\\d{4}", "o número cadastrado")
+                .replaceAll("[*#_`~>|]+", " ")
+                .replaceAll("(?i)\\b(\\w+(?:\\s+\\w+){0,2})(?:\\s+\\1){1,}\\b", "$1")
+                .replaceAll("\\s+", " ")
+                .trim();
         if (clean.isEmpty() || prefSilentTextOnly) { awakeUntil = 0L; hideScreenGlow(); return; }
         isSpeaking = true; showScreenGlow(3);
         Runnable safetyUnlock = () -> { isSpeaking = false; awakeUntil = 0L; hideScreenGlow(); };
@@ -735,16 +742,22 @@ public class JarvisVoiceService extends Service {
     }
 
     private void finishSpeaking(String clean) {
+        String cLow = normalizeText(clean);
+        boolean follow = clean.endsWith("?") || prefContinuousSec > 0
+                || cLow.matches(".*(repita|repetir|nao entendi|nao compreendi|pode dizer|diga novamente|qual deles|qual contato|qual aparelho|qual comodo|confirma|estou ouvindo).*");
+        if (follow) {
+            playChime(true);
+            showScreenGlow(1);
+        } else {
+            awakeUntil = 0L;
+            hideScreenGlow();
+        }
         mainHandler.postDelayed(() -> {
-            isSpeaking = false;
-            String cLow = normalizeText(clean);
-            boolean follow = clean.endsWith("?") || prefContinuousSec > 0
-                    || cLow.matches(".*(repita|repetir|nao entendi|nao compreendi|pode dizer|diga novamente|qual deles|qual contato|qual aparelho|qual comodo|confirma|estou ouvindo).*");
             if (follow) {
-                awakeUntil = System.currentTimeMillis() + Math.max(10000L, prefContinuousSec * 1000L);
-                playChime(true); showScreenGlow(1);
-            } else { awakeUntil = 0L; hideScreenGlow(); }
-        }, 300L);
+                awakeUntil = System.currentTimeMillis() + Math.max(8000L, prefContinuousSec * 1000L);
+            }
+            isSpeaking = false;
+        }, 750L);
     }
 
     private void speakWithNativeTts(String text, boolean useAlarm, Runnable safetyUnlock) {

@@ -117,7 +117,9 @@ export function transcribeWithLocalWhisper(
     }
 
     const isWav = buf.length >= 4 && buf.toString('utf8', 0, 4) === 'RIFF';
-    const tempFile = path.join(os.tmpdir(), `jv_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${isWav ? 'wav' : 'webm'}`);
+    const isM4a = buf.length >= 8 && buf.toString('utf8', 4, 8) === 'ftyp';
+    const ext = isWav ? 'wav' : (isM4a ? 'm4a' : 'webm');
+    const tempFile = path.join(os.tmpdir(), `jv_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`);
 
     try {
       await fs.promises.writeFile(tempFile, buf);

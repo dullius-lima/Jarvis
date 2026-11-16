@@ -68,7 +68,7 @@
           type="text"
           v-model="configuracoesCerebro.model"
           class="input-field"
-          placeholder="Ex: openai/gpt-oss-120b, llama-3.3-70b-versatile, gemini-2.5-flash..."
+          placeholder="Ex: openai/gpt-oss-120b, llama-3.3-70b-versatile, gemini-3.8-flash..."
         />
       </div>
 
@@ -171,7 +171,7 @@ const modelosHomologados = ref<Record<string, Array<{ label: string; value: stri
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' }
   ],
   gemini: [
-    { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
+    { label: 'Gemini 2.5 Flash', value: 'gemini-3.8-flash' },
     { label: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
     { label: 'Gemini 1.5 Flash', value: 'gemini-1.5-flash' },
     { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' }

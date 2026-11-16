@@ -23,5 +23,5 @@ mkdir -p /home/ubuntu/jarvis_releases ../dist/public/download
 cp -f app/build/outputs/apk/debug/app-debug.apk /home/ubuntu/jarvis_releases/jarvis.apk
 cp -f app/build/outputs/apk/debug/app-debug.apk ../dist/public/download/jarvis.apk
 chmod 644 /home/ubuntu/jarvis_releases/jarvis.apk ../dist/public/download/jarvis.apk
-echo "✅ APK v1.7.6 compilado com sucesso!"
+echo "✅ APK v1.7.7 compilado com sucesso!"
 ls -lh /home/ubuntu/jarvis_releases/jarvis.apk

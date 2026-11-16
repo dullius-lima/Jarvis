@@ -1,3 +1,8 @@
+try:
+    from kokoro_engine import synthesize_fast_ptbr as _kokoro_synth
+except Exception:
+    _kokoro_synth = None
+
 import sys
 import os
 import json

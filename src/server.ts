@@ -274,8 +274,13 @@ app.post('/api/v1/audio/speak', async (req: Request, res: Response) => {
 
     const cleanText = String(text)
       .replace(/```[\s\S]*?```/g, 'bloco de código na tela.')
-      .replace(/[*#_`~>|]/g, '')
-      .slice(0, 1200);
+      .replace(/\(?\*{1,4}\s*\+?\d[\d\s().-]{6,}\*{0,4}\)?/g, 'o número cadastrado')
+      .replace(/\+?55\s*\(?\d{2}\)?\s*9?\d{4}[-\s]?\d{4}/g, 'o número cadastrado')
+      .replace(/[*#_`~>|]+/g, ' ')
+      .replace(/\b(\w+(?:\s+\w+){0,2})(?:\s+\1){1,}\b/gi, '$1')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 900);
 
     const venvPython = path.join(process.cwd(), 'whisper-env', 'bin', 'python3');
     const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
@@ -331,7 +336,7 @@ const DEFAULT_USER_PREFS = {
   edge_glow_enabled: true,
   wake_screen_on_call: true,
   privacy_lock_camera: false,
-  continuous_chat_seconds: 15,
+  continuous_chat_seconds: 0,
   mic_sensitivity: 'balanced'
 };
 

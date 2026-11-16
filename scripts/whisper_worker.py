@@ -119,7 +119,7 @@ def main():
                 temperature=0.0,
                 repetition_penalty=1.25,
                 no_repeat_ngram_size=3,
-                vad_filter=False,
+                vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=450, speech_pad_ms=200),
                 condition_on_previous_text=False,
                 initial_prompt="Jarvis, oi Jarvis, manda um WhatsApp, envia mensagem, pergunta para minha mãe, esposa, filha, ligar, desligar, ar-condicionado, quarto de casal, sala, luz, agenda, e-mail."
