@@ -483,6 +483,63 @@
       </div>
     </div>
 
+
+    <!-- ETAPA A: AGENDAMENTO CRON (SCHEDULE TRIGGER) + CONSOLE AGENTE HACKER -->
+    <div v-if="agenteEmEdicao" style="margin-top:14px;border-top:1px solid #1e293b;padding-top:12px;">
+      <!-- 1. SCHEDULE TRIGGER (CRON POR AGENTE 100% NO FRONTEND) -->
+      <div style="background:#020617;border:1px solid #0284c7;border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <label style="display:flex;align-items:center;gap:8px;color:#38bdf8;font-weight:700;font-size:12px;cursor:pointer;">
+            <input type="checkbox" v-model="agenteEmEdicao.schedule_enabled" />
+            ⏰ Ativar Agendamento Automático (Schedule Trigger / Cron)
+          </label>
+          <button v-if="agenteEmEdicao.slug" type="button" :disabled="executandoCronManual" @click="dispararCronAgora(agenteEmEdicao.slug)" style="background:#0284c7;color:#fff;border:none;padding:4px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">
+            {{ executandoCronManual ? '⏳ Executando...' : '▶ Disparar Rotina Agora' }}
+          </button>
+        </div>
+
+        <div v-if="agenteEmEdicao.schedule_enabled" style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">
+            <button type="button" @click="agenteEmEdicao.cron_expression = '*/5 * * * *'" style="background:#0f172a;color:#94a3b8;border:1px solid #334155;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">A cada 5 min</button>
+            <button type="button" @click="agenteEmEdicao.cron_expression = '0 8 * * *'" style="background:#0f172a;color:#94a3b8;border:1px solid #334155;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">Todo dia 08:00</button>
+            <button type="button" @click="agenteEmEdicao.cron_expression = '30 17 * * 1-5'" style="background:#0f172a;color:#94a3b8;border:1px solid #334155;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">Fechamento B3 (17:30 Seg-Sex)</button>
+            <button type="button" @click="agenteEmEdicao.cron_expression = '0 9 * * 1'" style="background:#0f172a;color:#94a3b8;border:1px solid #334155;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">Segundas 09:00</button>
+          </div>
+          <div style="display:grid;grid-template-columns:160px 1fr;gap:8px;">
+            <input v-model="agenteEmEdicao.cron_expression" placeholder="Ex: 0 8 * * *" style="background:#0f172a;color:#38bdf8;border:1px solid #334155;padding:6px 8px;border-radius:6px;font-family:monospace;font-size:12px;" />
+            <input v-model="agenteEmEdicao.schedule_prompt" placeholder="Instrução automática (ex: Verifique cotações da carteira e envie resumo)" style="background:#0f172a;color:#fff;border:1px solid #334155;padding:6px 8px;border-radius:6px;font-size:12px;" />
+          </div>
+        </div>
+        <pre v-if="saidaCronManual" style="margin-top:8px;background:#0f172a;color:#38bdf8;padding:8px;border-radius:6px;font-size:11px;max-height:100px;overflow:auto;white-space:pre-wrap;">{{ saidaCronManual }}</pre>
+      </div>
+
+      <!-- 2. ERROR TRIGGER & CONSOLE OPERACIONAL DO AGENTE HACKER -->
+      <div style="background:#020617;border:1px solid #10b981;border-radius:8px;padding:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <label style="display:flex;align-items:center;gap:8px;color:#10b981;font-weight:700;font-size:12px;cursor:pointer;">
+            <input type="checkbox" v-model="agenteEmEdicao.is_error_trigger" />
+            🕵️‍♂️ Supervisor de Falhas (Error Trigger / Self-Healing Automático)
+          </label>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+          <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('self_healing_debug', agenteEmEdicao.slug)" style="background:#059669;color:#fff;border:none;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">
+            🔧 Self-Healing (Auditar Logs & Alucinações)
+          </button>
+          <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('red_team_audit', agenteEmEdicao.slug)" style="background:#e11d48;color:#fff;border:none;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">
+            🛡️ Red Team OWASP (Testar Prompt Injection)
+          </button>
+          <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('api_probe', agenteEmEdicao.slug)" style="background:#0284c7;color:#fff;border:none;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">
+            🌐 API Probe (Testar URL do Agente)
+          </button>
+          <button type="button" :disabled="rodandoHacker" @click="executarOperacaoHacker('sandbox_code_test', agenteEmEdicao.slug)" style="background:#7c3aed;color:#fff;border:none;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">
+            🧪 Validar Script na Sandbox
+          </button>
+        </div>
+        <pre v-if="relatorioHacker" style="margin-top:6px;background:#0f172a;color:#a7f3d0;padding:8px;border-radius:6px;font-size:11px;max-height:150px;overflow:auto;white-space:pre-wrap;">{{ relatorioHacker }}</pre>
+      </div>
+    </div>
+
 </section>
 </template>
 
@@ -1087,6 +1144,48 @@ async function carregarHistoricoPrompts(slug: string) {
 async function restaurarPromptVersao(id: number) {
   const r = await fetch(`/api/v1/prompts/rollback/${id}`, { method: 'POST' }); const j = await r.json();
   if (j.success && j.data?.system_prompt && agenteEmEdicao.value) { agenteEmEdicao.value.system_prompt = j.data.system_prompt; }
+}
+
+
+const executandoCronManual = ref(false);
+const saidaCronManual = ref('');
+const rodandoHacker = ref(false);
+const relatorioHacker = ref('');
+
+async function dispararCronAgora(slug: string) {
+  if (!slug) return;
+  executandoCronManual.value = true;
+  saidaCronManual.value = 'Disparando rotina agendada...';
+  try {
+    const r = await fetch(`/api/v1/triggers/schedule/run-now/${encodeURIComponent(slug)}`, { method: 'POST' });
+    const j = await r.json();
+    saidaCronManual.value = j.success ? `✅ Concluído (${j.data?.executionTimeMs || 0}ms):\n${typeof j.data?.output === 'string' ? j.data.output : JSON.stringify(j.data?.output, null, 2)}` : `❌ ${j.error}`;
+  } catch (e: any) {
+    saidaCronManual.value = `❌ ${e.message}`;
+  } finally {
+    executandoCronManual.value = false;
+  }
+}
+
+async function executarOperacaoHacker(mode: string, slug?: string) {
+  rodandoHacker.value = true;
+  relatorioHacker.value = `🕵️‍♂️ Executando Agente Hacker [${mode}]...`;
+  try {
+    const payload: any = { mode, target_slug: slug };
+    if (mode === 'api_probe') payload.target_url = agenteEmEdicao.value?.endpoint_url || 'https://economia.awesomeapi.com.br/last/USD-BRL';
+    if (mode === 'sandbox_code_test') payload.code_to_test = agenteEmEdicao.value?.code_snippet || 'return { status: "ok", checkedAt: new Date().toISOString() };';
+    const r = await fetch('/api/v1/agents/hacker/audit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const j = await r.json();
+    relatorioHacker.value = j.success ? JSON.stringify(j.data, null, 2) : `❌ ${j.error}`;
+  } catch (e: any) {
+    relatorioHacker.value = `❌ ${e.message}`;
+  } finally {
+    rodandoHacker.value = false;
+  }
 }
 
 </script>
