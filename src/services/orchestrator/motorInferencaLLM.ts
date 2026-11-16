@@ -254,6 +254,20 @@ export async function chamarLLMCompativelOpenAI(options: {
       payload.tool_choice = 'auto';
       if (provider === 'groq') payload.parallel_tool_calls = false;
     }
+    // __GUARD_TEXTO_PURO_V2__
+
+    if (!payload.tools) {
+
+      payload.messages = [
+
+        ...(payload.messages || []),
+
+        { role: 'system', content: 'MODO RESPOSTA TEXTUAL: Nenhuma ferramenta está ativa neste turno. NÃO chame funções nem emita tags <function>. Responda apenas em texto natural em português.' }
+
+      ];
+
+    }
+
     return await client.chat.completions.create(payload);
   };
 
