@@ -41,7 +41,7 @@
 
       <div class="meter-section">
         <div class="meter-head">
-          <span class="meter-label">Teste sua voz agora:</span>
+          <span class="meter-label">Teste sua voz agora {{ meterMode ? `(${meterMode})` : '' }}:</span>
           <button type="button" @click="toggleMicTest" :class="['test-btn', { recording: testingMic }]">
             {{ testingMic ? '⏹️ Parar' : '🎧 Medir Voz' }}
           </button>
@@ -50,7 +50,9 @@
           <div class="meter-fill" :class="{ ready: liveLevel >= 30 }" :style="{ width: Math.min(100, liveLevel) + '%' }"></div>
           <div class="meter-mark"></div>
         </div>
-        <p class="meter-hint">{{ liveLevel >= 30 ? '✅ Nível ideal de disparo!' : 'Fale "Jarvis" em tom normal e ultrapasse a marca amarela.' }}</p>
+        <p class="meter-hint">
+          {{ liveLevel >= 30 ? '✅ Nível ideal! O JARVIS já detecta sua voz nesse tom.' : 'Fale "Jarvis" em tom normal e ultrapasse a marca amarela.' }}
+        </p>
       </div>
     </section>
 
@@ -109,6 +111,7 @@ const toggleList = [
 const statusMsg = ref('');
 const testingMic = ref(false);
 const liveLevel = ref(0);
+const meterMode = ref('');
 let audioCtx: AudioContext | null = null;
 let mediaStream: MediaStream | null = null;
 let rafId: number | null = null;
@@ -147,35 +150,93 @@ async function savePrefs() {
 function applyPreset(val: number) { prefs.value.mic_sensitivity = val; savePrefs(); }
 function isPreset(val: number) { return Math.abs(Number(prefs.value.mic_sensitivity) - val) < 0.08; }
 
+function pcmBase64ToRms(b64: string): number {
+  const clean = b64.includes(',') ? b64.split(',')[1] : b64;
+  const bin = atob(clean);
+  const offset = bin.length > 44 && bin.slice(0, 4) === 'RIFF' ? 44 : 0;
+  const samples = Math.floor((bin.length - offset) / 2);
+  if (samples <= 0) return 0;
+  let sumSq = 0;
+  for (let i = 0; i < samples; i++) {
+    const lo = bin.charCodeAt(offset + i * 2);
+    const hi = bin.charCodeAt(offset + i * 2 + 1);
+    let val = (hi << 8) | lo;
+    if (val >= 32768) val -= 65536;
+    const norm = val / 32768;
+    sumSq += norm * norm;
+  }
+  return Math.sqrt(sumSq / samples);
+}
+
+async function runNativeMeterLoop(nativePlugin: any) {
+  meterMode.value = 'Android Nativo';
+  testingMic.value = true;
+  while (testingMic.value) {
+    try {
+      const res = await nativePlugin.recordAudio({ durationMs: 320, duration: 320 });
+      if (!testingMic.value) break;
+      const b64 = res?.audioBase64 || res?.base64 || res?.data || '';
+      if (b64) {
+        const rms = pcmBase64ToRms(b64);
+        const sens = Number(prefs.value.mic_sensitivity || 1.6);
+        liveLevel.value = Math.min(100, rms * 380 * sens);
+      }
+    } catch {
+      testingMic.value = false;
+      statusMsg.value = '⚠️ Abra o app pelo link HTTPS (163.176.111.18.sslip.io) ou teste falando fora do app.';
+      break;
+    }
+  }
+}
+
 async function toggleMicTest() {
   if (testingMic.value) { stopMicTest(); return; }
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    audioCtx = new AudioContext();
-    const src = audioCtx.createMediaStreamSource(mediaStream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256;
-    src.connect(analyser);
-    const data = new Uint8Array(analyser.frequencyBinCount);
-    testingMic.value = true;
-    const tick = () => {
-      if (!testingMic.value) return;
-      analyser.getByteTimeDomainData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
-      liveLevel.value = Math.min(100, Math.sqrt(sum / data.length) * 340 * Number(prefs.value.mic_sensitivity || 1.6));
-      rafId = requestAnimationFrame(tick);
-    };
-    tick();
-  } catch { statusMsg.value = '⚠️ Libere o microfone do app para testar na barra.'; }
+
+  // 1. Tenta WebAudio padrão (funciona em HTTPS / PC / Localhost)
+  if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioCtx = new AudioContext();
+      const src = audioCtx.createMediaStreamSource(mediaStream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      meterMode.value = 'WebAudio';
+      testingMic.value = true;
+      const tick = () => {
+        if (!testingMic.value) return;
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+        liveLevel.value = Math.min(100, Math.sqrt(sum / data.length) * 340 * Number(prefs.value.mic_sensitivity || 1.6));
+        rafId = requestAnimationFrame(tick);
+      };
+      tick();
+      return;
+    } catch {}
+  }
+
+  // 2. Fallback automático para Ponte Nativa Android (JarvisDevice) dentro do APK HTTP
+  const cap = (window as any).Capacitor;
+  const nativePlugin = cap?.Plugins?.JarvisDevice;
+  if (nativePlugin && typeof nativePlugin.recordAudio === 'function') {
+    runNativeMeterLoop(nativePlugin);
+    return;
+  }
+
+  statusMsg.value = 'ℹ️ No APK HTTP o medidor web é bloqueado pelo Android; teste falando em 2º plano ou acesse https://163.176.111.18.sslip.io/settings.html.';
 }
 
 function stopMicTest() {
-  testingMic.value = false; liveLevel.value = 0;
+  testingMic.value = false;
+  liveLevel.value = 0;
+  meterMode.value = '';
   if (rafId) cancelAnimationFrame(rafId);
   if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
   if (audioCtx) audioCtx.close();
-  mediaStream = null; audioCtx = null;
+  mediaStream = null;
+  audioCtx = null;
 }
 
 onUnmounted(stopMicTest);

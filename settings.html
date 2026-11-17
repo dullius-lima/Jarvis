@@ -4,8 +4,32 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>JARVIS Core - Painel de Configurações</title>
+    <style>
+      body {
+        margin: 0;
+        padding: max(40px, env(safe-area-inset-top)) 0 28px 0;
+        width: 100%;
+        min-height: 100dvh;
+        overflow-x: hidden;
+        background-color: #070913;
+        color: #f8fafc;
+        font-family: system-ui, -apple-system, sans-serif;
+        box-sizing: border-box;
+      }
+      .top-safe-shield {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: max(36px, env(safe-area-inset-top));
+        background: #070913;
+        z-index: 9999;
+        pointer-events: none;
+      }
+    </style>
   </head>
-  <body style="margin: 0; padding: max(36px, env(safe-area-inset-top)) 0 24px 0; box-sizing: border-box; width: 100%; min-height: 100dvh; overflow-x: hidden; background-color: #070913; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif;">
+  <body>
+    <div class="top-safe-shield"></div>
     <div id="app" style="width: 100%; min-height: 100dvh;"></div>
     <script type="module" src="/src/frontend/settingsMain.ts"></script>
   </body>
