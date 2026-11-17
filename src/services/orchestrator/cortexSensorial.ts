@@ -209,6 +209,18 @@ export async function processarBiometriaESaudacao(
       }
 
       const checagemVoz = await identifySpeaker(rawAudioInput);
+  // VOICE_MATCH_BIOMETRIC_BARRIER
+  if (!checagemVoz.identified && (checagemVoz as any).lockEnabled && (checagemVoz as any).hasRegisteredProfiles && !/cadastr(ar|o)\s+(nova\s+)?voz|treinar\s+voz/i.test(userPrompt || '')) {
+    console.log(`[VoiceLock] Áudio rejeitado pela biometria vocal (score=${(checagemVoz as any).confidence || 0})`);
+    return {
+      success: true,
+      ignoredWakeWord: true,
+      silentIgnore: true,
+      agent: 'JARVIS',
+      response: '',
+      executionTimeMs: typeof startTime !== 'undefined' ? (Date.now() - startTime) : 10
+    };
+  }
       if (checagemVoz && checagemVoz.identified) {
         activeSpeakerName = checagemVoz.name;
         speakerRole = checagemVoz.role;

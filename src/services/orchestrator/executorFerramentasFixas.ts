@@ -290,9 +290,16 @@ export async function executarFerramentaVinculada(
     chaveLimpa === 'agenda_contatos';
 
   if (ehConsultaContato) {
-    const termoBusca = normalizarTexto(
-      String(args?.nome || args?.contato || args?.target || valorConsulta || '')
+    let termoBusca = normalizarTexto(
+      String(args?.nome || args?.contato || args?.target || valorConsulta || userPrompt || '')
     );
+    if (/\b(meu numero|meu telefone|para mim|pra mim|meu zap|meu whatsapp|matheus|eu)\b/i.test(termoBusca) || /\b(meu numero|meu telefone|para mim|pra mim|meu zap|meu whatsapp)\b/i.test(promptNormalizado)) {
+      termoBusca = "matheus";
+    } else if (/\b(amor|esposa|estefana|ester|este)\b/i.test(termoBusca) || /\b(amor|esposa|estefana|ester)\b/i.test(promptNormalizado)) {
+      termoBusca = "amor";
+    } else if (/\b(mae|minha mae)\b/i.test(termoBusca) || /\b(mae|minha mae)\b/i.test(promptNormalizado)) {
+      termoBusca = "mae";
+    }
     try {
       const res = await pool.query(
         `SELECT nome, telefone, apelidos 

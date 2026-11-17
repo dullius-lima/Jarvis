@@ -12,12 +12,12 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 WAKE_FIX_RE = re.compile(
-    r"\b(j[aá]\s*vi[su]?|jar\s*vis|jair\s*viz|iarvis|yarvis|djarvis|jarbas|jarves|jaives|javes|darvis|charvis|jaires|jairbis|jarlb[iy]s?|j[aá]bi|j[aá]\s*amiz|jaips|graves|jorps|j[aá]\s*arv[eê]s|de\s*[aá]rvores|de\s*arvies|j[aá]\s*vez|gerbis)\b",
+    r"\b(j[aá]\s*vi[su]?|jar\s*vis|jair\s*viz|iarvis|yarvis|djarvis|jarbas|jarves|jaives|javes|darvis|charvis|jaires|jairbis|jarlb[iy]s?|j[aá]bi|j[aá]\s*amiz|jaips|graves|jorps|j[aá]\s*arv[eê]s|de\s*[aá]rvores|de\s*arvies|j[aá]\s*vez|gerbis|e-avis)\b",
     re.IGNORECASE
 )
 
 HALLUCINATION_RE = re.compile(
-    r"^(obrigad[oa]|legendas.*|amara\.org.*|inscreva-se.*|tchau|sil[eê]ncio|you|thank you|bye|am[eé]m|[.\s!?,-]+)$",
+    r"^(o que [eé] o problema\??|o que [eé] isso\??|o que [eé] o seu nome\??|[eé],?\s*[eé]\.?|ah,?\s*ah!?|n[aã]o [eé]\??|acha!?|ainda n[aã]o\.?|obrigad[oa]|legendas.*|amara\.org.*|inscreva-se.*|tchau|sil[eê]ncio|you|thank you|bye|am[eé]m|[.\s!?,-]+)$",
     re.IGNORECASE
 )
 
@@ -68,13 +68,13 @@ def load_audio_16k_float32(file_path: str) -> np.ndarray:
     if out.returncode == 0 and len(out.stdout) > 1600:
         return np.frombuffer(out.stdout, dtype=np.int16).astype(np.float32) / 32768.0
 
-    raise RuntimeError("Audio invalido")
+    raise RuntimeError("Audio invalido ou vazio")
 
 def main():
     model_size = sys.argv[1] if len(sys.argv) > 1 else "base"
     try:
         from faster_whisper import WhisperModel
-        model = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=4)
+        model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=2)
         dummy = np.zeros(8000, dtype=np.float32)
         list(model.transcribe(dummy, language="pt", beam_size=1, vad_filter=False)[0])
         sys.stdout.write(json.dumps({"ready": True, "model": model_size}) + "\n")
@@ -89,7 +89,7 @@ def main():
         if not file_path:
             continue
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 400:
-            sys.stdout.write(json.dumps({"success": False, "text": "", "error": "Curto"}) + "\n")
+            sys.stdout.write(json.dumps({"success": False, "text": "", "error": "Arquivo curto"}) + "\n")
             sys.stdout.flush()
             continue
 
@@ -99,30 +99,28 @@ def main():
                 audio = audio[:16000 * 9]
 
             peak = float(np.max(np.abs(audio))) if audio.size > 0 else 0.0
-            rms = float(np.sqrt(np.mean(audio ** 2))) if audio.size > 0 else 0.0
-
-            if peak < 0.48 or rms < 0.015:
+            if peak < 0.010:
                 sys.stdout.write(json.dumps({"success": True, "text": "", "peak": round(peak, 4)}) + "\n")
                 sys.stdout.flush()
                 continue
 
-            if peak < 0.80:
-                gain = min(4.5, 0.80 / peak)
+            # Amplifica falas baixas ou distantes para 82% do volume máximo
+            if peak < 0.82:
+                gain = min(6.0, 0.82 / peak)
                 audio = np.clip(audio * gain, -1.0, 1.0)
 
             segments, _ = model.transcribe(
                 audio,
                 language="pt",
                 beam_size=1,
-                best_of=2,
+                best_of=1,
                 without_timestamps=True,
                 temperature=0.0,
                 repetition_penalty=1.25,
                 no_repeat_ngram_size=3,
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=450, speech_pad_ms=200),
+                vad_filter=False,
                 condition_on_previous_text=False,
-                initial_prompt="Jarvis, oi Jarvis, manda um WhatsApp, envia mensagem, pergunta para minha mãe, esposa, filha, ligar, desligar, ar-condicionado, quarto de casal, sala, luz, agenda, e-mail."
+                initial_prompt="Jarvis, Oi Jarvis, bom dia Jarvis, manda um WhatsApp, envia mensagem, acende a luz, apaga a luz, ar-condicionado, quarto de casal, sala, que horas são, status do sistema."
             )
             text = " ".join([seg.text.strip() for seg in segments]).strip()
 

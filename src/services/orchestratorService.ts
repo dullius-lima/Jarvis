@@ -293,6 +293,7 @@ export async function processarExecucaoWorkflow(
           agentesAtivos: dadosContexto.agentesAtivos,
           connectorsMap: dadosContexto.connectorsMap,
           validToolSlugs: dadosContexto.validToolSlugs,
+            toolsCatalogoOrquestrador: dadosContexto.tools,
           activeSpeakerName,
           sessionId,
           threadConversa: dadosContexto.threadConversa,
@@ -531,24 +532,7 @@ export async function processarExecucaoWorkflow(
         if (prev && prev.kind === it.kind && prev.slug === it.slug) continue;
         semConsecutivos.push(it);
       }
-      const trilhaLimpa: any[] = [];
-      const agentesVistos = new Set<string>();
-      let ignorarToolsRepetidas = false;
-      for (const it of semConsecutivos) {
-        if (it.kind === 'agent') {
-          if (agentesVistos.has(it.slug)) {
-            ignorarToolsRepetidas = true;
-            continue;
-          }
-          agentesVistos.add(it.slug);
-          ignorarToolsRepetidas = false;
-          trilhaLimpa.push(it);
-        } else {
-          if (ignorarToolsRepetidas) continue;
-          trilhaLimpa.push(it);
-        }
-      }
-      passosRotaFinal = trilhaLimpa.map((it, idx) => ({ ...it, step: idx + 1 }));
+      passosRotaFinal = semConsecutivos.map((it, idx) => ({ ...it, step: idx + 1 }));
     }
     rotaCompletaTexto = ['🧠 JARVIS', ...passosRotaFinal.map((p: any) => `${p.kind === 'tool' ? '🔧' : '🤖'} ${p.name || p.slug}`)].join(' ➔ ');
     console.log('[ROTA COMPLETA]', rotaCompletaTexto);

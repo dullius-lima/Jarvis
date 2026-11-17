@@ -12,7 +12,6 @@ import android.media.audiofx.*;
 import android.os.*;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
-import android.speech.tts.UtteranceProgressListener;
 import android.util.Base64;
 import android.view.*;
 import android.view.animation.LinearInterpolator;
@@ -20,232 +19,79 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 import org.json.JSONObject;
 import java.io.*;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.net.*;
-import java.nio.ByteBuffer;
-import java.text.Normalizer;
-import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.concurrent.*;
 
 public class JarvisVoiceService extends Service {
     public static volatile JarvisVoiceService instance;
     private static final String BASE = "http://163.176.111.18";
-    private static final int SAMPLE_RATE = 16000;
-    private static final String PREFS_CACHE = "jarvis_user_prefs_cache";
-
     private Handler mainHandler;
-    private PowerManager.WakeLock wakeLock;
-    private PowerManager powerManager;
-    private KeyguardManager keyguardManager;
-    private AudioManager audioManager;
-    private TextToSpeech nativeTts;
-    private JarvisEdgeGlowView edgeGlowView;
     private WindowManager wm;
-    private final ExecutorService netPool = Executors.newSingleThreadExecutor();
-
+    private EdgeGlowView glowView;
+    private TextToSpeech tts;
     private volatile boolean ttsReady = false;
     private volatile boolean running = true;
     private volatile boolean isSpeaking = false;
-    private volatile boolean isProcessing = false;
-    private volatile long awakeUntil = 0L;
-    private volatile long lastScreenWakeAt = 0L;
-    private volatile long lastWakeChimeAt = 0L;
+    private volatile long forceAwakeUntil = 0L;
+    private volatile long continuousUntil = 0L;
 
-    private volatile boolean prefListenScreenOff = true;
-    private volatile boolean prefListenOnlyUnlocked = false;
-    private volatile boolean prefListenOnlyAppOpen = false;
-    private volatile boolean prefPushToTalkOnly = false;
-    private volatile boolean prefSilentTextOnly = false;
-    private volatile boolean prefChimeEnabled = true;
-    private volatile boolean prefEdgeGlowEnabled = true;
-    private volatile boolean prefWakeScreenOnCall = true;
-    private volatile boolean prefPrivacyLockCamera = false;
-    private volatile int prefContinuousSec = 0;
-    private volatile double prefSensMultiplier = 1.85;
-    private volatile long lastPrefSyncMs = 0L;
-    private volatile boolean prefSyncInFlight = false;
+    private volatile boolean prefScreenOff = true;
+    private volatile boolean prefOnlyUnlocked = false;
+    private volatile boolean prefOnlyAppOpen = false;
+    private volatile boolean prefPushToTalk = false;
+    private volatile boolean prefSilent = false;
+    private volatile boolean prefChime = true;
+    private volatile int prefContinuousSec = 15;
+    private volatile float prefSensitivity = 1.6f;
+    private volatile float prefGain = 3.3f;
 
     public static void wakeNow() {
         if (instance != null) {
-            long windowMs = Math.max(10000L, instance.prefContinuousSec * 1000L);
-            instance.awakeUntil = System.currentTimeMillis() + windowMs;
-            instance.wakeScreenOnce();
+            instance.forceAwakeUntil = System.currentTimeMillis() + 9000L;
             instance.playChime(true);
-            instance.showScreenGlow(1);
+            instance.showGlow(1);
         }
     }
 
-    private static class JarvisEdgeGlowView extends View {
-        private final Paint outerGlowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint innerRimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Matrix shaderMatrix = new Matrix();
+    private static class EdgeGlowView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private float angle = 0f;
-        private float pulseScale = 1f;
-        private int glowMode = 1;
-        private ValueAnimator animator;
+        private int mode = 1;
+        private ValueAnimator anim;
 
-        public JarvisEdgeGlowView(Context ctx) {
+        public EdgeGlowView(Context ctx) {
             super(ctx);
-            outerGlowPaint.setStyle(Paint.Style.STROKE);
-            outerGlowPaint.setMaskFilter(new BlurMaskFilter(30f, BlurMaskFilter.Blur.NORMAL));
-            innerRimPaint.setStyle(Paint.Style.STROKE);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(12f);
         }
+        public void setMode(int m) { this.mode = m; invalidate(); }
 
-        public void setGlowMode(int mode) {
-            this.glowMode = mode;
-            if (animator != null) animator.setDuration(mode == 2 ? 950L : (mode == 3 ? 850L : 1450L));
-            invalidate();
-        }
-
-        @Override
-        protected void onAttachedToWindow() {
+        @Override protected void onAttachedToWindow() {
             super.onAttachedToWindow();
-            animator = ValueAnimator.ofFloat(0f, 360f);
-            animator.setDuration(1450L);
-            animator.setRepeatCount(ValueAnimator.INFINITE);
-            animator.setInterpolator(new LinearInterpolator());
-            animator.addUpdateListener(anim -> {
-                angle = (float) anim.getAnimatedValue();
-                double rad = Math.toRadians(angle * (glowMode == 3 ? 3.0 : 2.0));
-                pulseScale = 1f + (float) Math.sin(rad) * (glowMode == 3 ? 0.28f : 0.20f);
-                invalidate();
-            });
-            animator.start();
+            anim = ValueAnimator.ofFloat(0f, 360f);
+            anim.setDuration(1100L);
+            anim.setRepeatCount(ValueAnimator.INFINITE);
+            anim.setInterpolator(new LinearInterpolator());
+            anim.addUpdateListener(a -> { angle = (float) a.getAnimatedValue(); invalidate(); });
+            anim.start();
         }
-
-        @Override
-        protected void onDetachedFromWindow() {
-            if (animator != null) { animator.cancel(); animator = null; }
+        @Override protected void onDetachedFromWindow() {
+            if (anim != null) { anim.cancel(); anim = null; }
             super.onDetachedFromWindow();
         }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
+        @Override protected void onDraw(Canvas canvas) {
             int w = getWidth(), h = getHeight();
             if (w <= 0 || h <= 0) return;
-            int[] colors = glowMode == 1
-                    ? new int[]{0xFFEF4444, 0xFFDC2626, 0xFFF87171, 0xFFB91C1C, 0xFFEF4444}
-                    : (glowMode == 2
-                    ? new int[]{0xFF38BDF8, 0xFF818CF8, 0xFF22D3EE, 0xFF6366F1, 0xFF38BDF8}
-                    : new int[]{0xFF22D3EE, 0xFF34D399, 0xFF38BDF8, 0xFF60A5FA, 0xFF22D3EE});
-            SweepGradient gradient = new SweepGradient(w / 2f, h / 2f, colors, null);
-            shaderMatrix.setRotate(angle, w / 2f, h / 2f);
-            gradient.setLocalMatrix(shaderMatrix);
-            outerGlowPaint.setShader(gradient);
-            outerGlowPaint.setStrokeWidth(34f * pulseScale);
-            outerGlowPaint.setAlpha(155);
-            canvas.drawRoundRect(0f, 0f, w, h, 58f, 58f, outerGlowPaint);
-            innerRimPaint.setShader(gradient);
-            innerRimPaint.setStrokeWidth(9f * pulseScale);
-            innerRimPaint.setAlpha(245);
-            canvas.drawRoundRect(2f, 2f, w - 2f, h - 2f, 56f, 56f, innerRimPaint);
+            int[] c = mode == 1 ? new int[]{0xFFEF4444, 0xFFF87171, 0xFFDC2626, 0xFFEF4444}
+                    : mode == 2 ? new int[]{0xFF38BDF8, 0xFF818CF8, 0xFF22D3EE, 0xFF38BDF8}
+                    : new int[]{0xFF22D3EE, 0xFF34D399, 0xFF38BDF8, 0xFF22D3EE};
+            SweepGradient sg = new SweepGradient(w / 2f, h / 2f, c, null);
+            Matrix m = new Matrix();
+            m.setRotate(angle, w / 2f, h / 2f);
+            sg.setLocalMatrix(m);
+            paint.setShader(sg);
+            canvas.drawRect(5f, 5f, w - 5f, h - 5f, paint);
         }
-    }
-
-    private void applySensMultiplier(String sens) {
-        if ("high".equals(sens)) prefSensMultiplier = 1.45;
-        else if ("noisy".equals(sens)) prefSensMultiplier = 2.45;
-        else prefSensMultiplier = 1.85;
-    }
-
-    private void initPreferences() {
-        try {
-            powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            keyguardManager = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
-            SharedPreferences sp = getSharedPreferences(PREFS_CACHE, MODE_PRIVATE);
-            prefListenScreenOff = sp.getBoolean("listen_screen_off", true);
-            prefListenOnlyUnlocked = sp.getBoolean("listen_only_unlocked", false);
-            prefListenOnlyAppOpen = sp.getBoolean("listen_only_app_open", false);
-            prefPushToTalkOnly = sp.getBoolean("push_to_talk_only", false);
-            prefSilentTextOnly = sp.getBoolean("silent_text_only", false);
-            prefChimeEnabled = sp.getBoolean("chime_enabled", true);
-            prefEdgeGlowEnabled = sp.getBoolean("edge_glow_enabled", true);
-            prefWakeScreenOnCall = sp.getBoolean("wake_screen_on_call", true);
-            prefPrivacyLockCamera = sp.getBoolean("privacy_lock_camera", false);
-            prefContinuousSec = sp.getInt("continuous_chat_seconds", 0);
-            applySensMultiplier(sp.getString("mic_sensitivity", "balanced"));
-        } catch (Exception ignored) {}
-    }
-
-    private void syncUserPrefsIfNeeded() {
-        long now = System.currentTimeMillis();
-        if (prefSyncInFlight || (now - lastPrefSyncMs) < 3500L) return;
-        lastPrefSyncMs = now;
-        prefSyncInFlight = true;
-        netPool.execute(() -> {
-            HttpURLConnection c = null;
-            try {
-                c = (HttpURLConnection) new URL(BASE + "/api/v1/preferences").openConnection();
-                c.setConnectTimeout(2500);
-                c.setReadTimeout(2500);
-                if (c.getResponseCode() == 200) {
-                    Scanner sc = new Scanner(c.getInputStream(), "UTF-8").useDelimiter("\\A");
-                    String raw = sc.hasNext() ? sc.next() : "{}";
-                    if (raw.trim().startsWith("{")) {
-                        JSONObject j = new JSONObject(raw);
-                        JSONObject d = j.optJSONObject("data");
-                        if (d != null) {
-                            prefListenScreenOff = d.optBoolean("listen_screen_off", true);
-                            prefListenOnlyUnlocked = d.optBoolean("listen_only_unlocked", false);
-                            prefListenOnlyAppOpen = d.optBoolean("listen_only_app_open", false);
-                            prefPushToTalkOnly = d.optBoolean("push_to_talk_only", false);
-                            prefSilentTextOnly = d.optBoolean("silent_text_only", false);
-                            prefChimeEnabled = d.optBoolean("chime_enabled", true);
-                            prefEdgeGlowEnabled = d.optBoolean("edge_glow_enabled", true);
-                            prefWakeScreenOnCall = d.optBoolean("wake_screen_on_call", true);
-                            prefPrivacyLockCamera = d.optBoolean("privacy_lock_camera", false);
-                            prefContinuousSec = d.optInt("continuous_chat_seconds", 0);
-                            String sens = d.optString("mic_sensitivity", "balanced");
-                            applySensMultiplier(sens);
-                            getSharedPreferences(PREFS_CACHE, MODE_PRIVATE).edit()
-                                    .putBoolean("listen_screen_off", prefListenScreenOff)
-                                    .putBoolean("listen_only_unlocked", prefListenOnlyUnlocked)
-                                    .putBoolean("listen_only_app_open", prefListenOnlyAppOpen)
-                                    .putBoolean("push_to_talk_only", prefPushToTalkOnly)
-                                    .putBoolean("silent_text_only", prefSilentTextOnly)
-                                    .putBoolean("chime_enabled", prefChimeEnabled)
-                                    .putBoolean("edge_glow_enabled", prefEdgeGlowEnabled)
-                                    .putBoolean("wake_screen_on_call", prefWakeScreenOnCall)
-                                    .putBoolean("privacy_lock_camera", prefPrivacyLockCamera)
-                                    .putInt("continuous_chat_seconds", prefContinuousSec)
-                                    .putString("mic_sensitivity", sens)
-                                    .apply();
-                        }
-                    }
-                }
-            } catch (Exception ignored) {
-            } finally {
-                if (c != null) c.disconnect();
-                prefSyncInFlight = false;
-            }
-        });
-    }
-
-    private boolean shouldCaptureAudioNow() {
-        syncUserPrefsIfNeeded();
-        // Quando o app está aberto em 1º plano, o WebView assume o microfone sem conflito de hardware
-        if (MainActivity.isAppInForeground) return false;
-        // Se "Áudio apenas com app aberto" estiver marcado, não captura em segundo plano
-        if (prefListenOnlyAppOpen) return false;
-        // Se "Push-to-Talk" estiver marcado, só captura se acionado manualmente via wakeNow()
-        if (prefPushToTalkOnly && System.currentTimeMillis() >= awakeUntil) return false;
-
-        boolean screenInteractive = (powerManager == null) || powerManager.isInteractive();
-        boolean deviceUnlocked = (keyguardManager == null) || !keyguardManager.isKeyguardLocked();
-        if (!prefListenScreenOff || prefListenOnlyUnlocked) {
-            return screenInteractive && deviceUnlocked;
-        }
-        return true;
-    }
-
-    private boolean isEnrollmentRecording() {
-        try {
-            Field f = JarvisDevicePlugin.class.getDeclaredField("isRecordingSample");
-            f.setAccessible(true);
-            return f.getBoolean(null);
-        } catch (Exception ignored) { return false; }
     }
 
     @Override
@@ -253,543 +99,313 @@ public class JarvisVoiceService extends Service {
         super.onCreate();
         instance = this;
         mainHandler = new Handler(Looper.getMainLooper());
-        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        initPreferences();
-        nativeTts = new TextToSpeech(getApplicationContext(), status -> {
-            if (status == TextToSpeech.SUCCESS) {
-                int res = nativeTts.setLanguage(new Locale("pt", "BR"));
-                ttsReady = (res != TextToSpeech.LANG_MISSING_DATA && res != TextToSpeech.LANG_NOT_SUPPORTED);
-                nativeTts.setSpeechRate(1.06f);
+        tts = new TextToSpeech(getApplicationContext(), st -> {
+            if (st == TextToSpeech.SUCCESS) {
+                int r = tts.setLanguage(new Locale("pt", "BR"));
+                ttsReady = (r != TextToSpeech.LANG_MISSING_DATA && r != TextToSpeech.LANG_NOT_SUPPORTED);
             }
         });
-        NotificationChannel ch = new NotificationChannel("jarvis_bg", "JARVIS Assistente 24h", NotificationManager.IMPORTANCE_LOW);
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm != null) nm.createNotificationChannel(ch);
-        Notification notif = new NotificationCompat.Builder(this, "jarvis_bg")
-                .setContentTitle("JARVIS Snapdragon Audio DSP")
-                .setContentText("Escuta calibrada — diga 'Jarvis'")
+
+        NotificationChannel ch = new NotificationChannel("jarvis_24h", "JARVIS Escuta Ativa 24h", NotificationManager.IMPORTANCE_LOW);
+        getSystemService(NotificationManager.class).createNotificationChannel(ch);
+        Notification n = new NotificationCompat.Builder(this, "jarvis_24h")
+                .setContentTitle("JARVIS Escuta Ativa 24h")
+                .setContentText("Ouvindo 'Jarvis' em segundo plano")
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                 .setOngoing(true)
                 .build();
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(101, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
-            } else {
-                startForeground(101, notif);
-            }
-        } catch (Exception e) { stopSelf(); return; }
-        if (powerManager != null) {
-            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "jarvis:snapdragon_dsp_mic");
-            wakeLock.acquire();
-        }
-        new Thread(this::continuousAudioLoop, "JarvisSnapdragonAudio").start();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(101, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+        else startForeground(101, n);
+
+        new Thread(this::prefsLoop, "JarvisPrefs").start();
+        new Thread(this::listenLoop, "JarvisPhoneAudio").start();
     }
 
-    private void wakeScreenOnce() {
-        if (!prefWakeScreenOnCall) return;
-        long now = System.currentTimeMillis();
-        if (now - lastScreenWakeAt < 8000L) return;
-        lastScreenWakeAt = now;
-        try {
-            if (powerManager != null && !powerManager.isInteractive()) {
-                @SuppressWarnings("deprecation")
-                PowerManager.WakeLock screenLock = powerManager.newWakeLock(
-                        PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP, "jarvis:screen_wake");
-                screenLock.acquire(5000L);
-            }
-        } catch (Exception ignored) {}
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && "ACTION_WAKE_NOW".equals(intent.getAction())) wakeNow();
+        return START_STICKY;
     }
 
-    private void showScreenGlow(int mode) {
-        if (!prefEdgeGlowEnabled) return;
-        mainHandler.post(() -> {
+    private void prefsLoop() {
+        while (running) {
             try {
-                if (MainActivity.isAppInForeground || !Settings.canDrawOverlays(this)) return;
-                if (wm == null) wm = (WindowManager) getSystemService(WINDOW_SERVICE);
-                if (edgeGlowView == null) {
-                    edgeGlowView = new JarvisEdgeGlowView(this);
-                    int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
-                    WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
-                            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT);
-                    lp.gravity = Gravity.TOP | Gravity.START;
-                    wm.addView(edgeGlowView, lp);
-                }
-                edgeGlowView.setGlowMode(mode);
-                edgeGlowView.setVisibility(View.VISIBLE);
+                HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/preferences").openConnection();
+                c.setConnectTimeout(2500);
+                c.setReadTimeout(2500);
+                Scanner sc = new Scanner(c.getInputStream()).useDelimiter("\\A");
+                JSONObject j = new JSONObject(sc.hasNext() ? sc.next() : "{}");
+                JSONObject d = j.optJSONObject("data") != null ? j.getJSONObject("data") : j;
+                prefScreenOff = d.optBoolean("listen_screen_off", true);
+                prefOnlyUnlocked = d.optBoolean("listen_only_unlocked", false);
+                prefOnlyAppOpen = d.optBoolean("listen_only_app_open", false);
+                prefPushToTalk = d.optBoolean("push_to_talk_only", false);
+                prefSilent = d.optBoolean("silent_text_only", false);
+                prefChime = d.optBoolean("chime_enabled", true);
+                prefContinuousSec = d.optInt("continuous_chat_seconds", 15);
+                prefSensitivity = (float) Math.max(0.5, Math.min(2.5, d.optDouble("mic_sensitivity", 1.6)));
+                prefGain = (float) Math.max(1.8, Math.min(4.8, prefSensitivity * 2.1));
             } catch (Exception ignored) {}
+            try { Thread.sleep(1500L); } catch (InterruptedException ignored) {}
+        }
+    }
+
+    private boolean canListenNow() {
+        if (isSpeaking) return false;
+        if (MainActivity.isAppInForeground) return false; // Libera mic para o WebView dentro do app
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false;
+        if (System.currentTimeMillis() < forceAwakeUntil || System.currentTimeMillis() < continuousUntil) return true;
+        if (prefOnlyAppOpen || prefPushToTalk) return false;
+
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        KeyguardManager km = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+        boolean screenOn = pm == null || pm.isInteractive();
+        boolean locked = km != null && km.isKeyguardLocked();
+        if (!screenOn && !prefScreenOff) return false;
+        if (locked && prefOnlyUnlocked) return false;
+        return true;
+    }
+
+    private void listenLoop() {
+        int sr = 16000;
+        int minBuf = AudioRecord.getMinBufferSize(sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        int bufSize = Math.max(minBuf * 2, 8192);
+        AudioRecord rec = null;
+        double noiseFloor = 110.0;
+        double hpPrevIn = 0.0, hpPrevOut = 0.0, lpPrevOut = 0.0;
+        ArrayDeque<byte[]> preRoll = new ArrayDeque<>();
+
+        while (running) {
+            if (!canListenNow()) {
+                if (rec != null) { try { rec.stop(); rec.release(); } catch (Exception ignored) {} rec = null; }
+                hideGlow();
+                try { Thread.sleep(250L); } catch (InterruptedException ignored) {}
+                continue;
+            }
+
+            try {
+                if (rec == null) {
+                    rec = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, sr,
+                            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize);
+                    if (rec.getState() != AudioRecord.STATE_INITIALIZED) { rec.release(); rec = null; Thread.sleep(400L); continue; }
+                    try {
+                        if (AutomaticGainControl.isAvailable()) AutomaticGainControl.create(rec.getAudioSessionId()).setEnabled(true);
+                        if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.getAudioSessionId()).setEnabled(true);
+                        if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.getAudioSessionId()).setEnabled(true);
+                    } catch (Exception ignored) {}
+                    rec.startRecording();
+                }
+
+                short[] chunk = new short[1600]; // 100ms
+                int n = rec.read(chunk, 0, chunk.length);
+                if (n <= 0) continue;
+
+                long sumSq = 0;
+                byte[] pcmBytes = new byte[n * 2];
+                for (int i = 0; i < n; i++) {
+                    double x = chunk[i];
+                    double hp = 0.89 * (hpPrevOut + x - hpPrevIn);
+                    hpPrevIn = x; hpPrevOut = hp;
+                    double lp = lpPrevOut + 0.57 * (hp - lpPrevOut);
+                    lpPrevOut = lp;
+                    int amp = Math.max(-32768, Math.min(32767, (int) (lp * prefGain)));
+                    sumSq += (long) amp * amp;
+                    pcmBytes[i * 2] = (byte) (amp & 0xFF);
+                    pcmBytes[i * 2 + 1] = (byte) ((amp >> 8) & 0xFF);
+                }
+
+                double rms = Math.sqrt((double) sumSq / n);
+                double baseThresh = Math.max(115.0, 340.0 / Math.max(0.5, prefSensitivity));
+                double threshold = Math.max(baseThresh, Math.min(noiseFloor, 180.0) * 1.35);
+                boolean forced = System.currentTimeMillis() < forceAwakeUntil || System.currentTimeMillis() < continuousUntil;
+
+                if (!forced && rms < threshold) {
+                    noiseFloor = noiseFloor * 0.94 + rms * 0.06;
+                    preRoll.addLast(pcmBytes);
+                    while (preRoll.size() > 12) preRoll.removeFirst(); // 1.2s pré-buffer
+                    continue;
+                }
+
+                // Captura fala completa até pausa de 900ms
+                ByteArrayOutputStream utterance = new ByteArrayOutputStream();
+                for (byte[] b : preRoll) utterance.write(b);
+                preRoll.clear();
+                utterance.write(pcmBytes);
+
+                if (forced) showGlow(1);
+                long startSpeak = System.currentTimeMillis();
+                long lastVoice = startSpeak;
+
+                while (running && canListenNow() && (System.currentTimeMillis() - startSpeak < 8500L)) {
+                    int r = rec.read(chunk, 0, chunk.length);
+                    if (r <= 0) continue;
+                    long s2 = 0;
+                    byte[] b2 = new byte[r * 2];
+                    for (int i = 0; i < r; i++) {
+                        int a = Math.max(-32768, Math.min(32767, (int) (chunk[i] * prefGain)));
+                        s2 += (long) a * a;
+                        b2[i * 2] = (byte) (a & 0xFF);
+                        b2[i * 2 + 1] = (byte) ((a >> 8) & 0xFF);
+                    }
+                    utterance.write(b2);
+                    double curRms = Math.sqrt((double) s2 / r);
+                    if (curRms >= threshold * 0.85) lastVoice = System.currentTimeMillis();
+                    else if (System.currentTimeMillis() - lastVoice > 900L && utterance.size() > 12800) break;
+                }
+
+                byte[] fullPcm = utterance.toByteArray();
+                if (fullPcm.length < 11000) { hideGlow(); continue; }
+
+                if (forced) showGlow(2);
+                sendAudioTurn(fullPcm, sr, !forced);
+            } catch (Exception e) {
+                if (rec != null) { try { rec.stop(); rec.release(); } catch (Exception ignored) {} rec = null; }
+                try { Thread.sleep(400L); } catch (InterruptedException ignored) {}
+            }
+        }
+    }
+
+    private void sendAudioTurn(byte[] pcm, int sr, boolean requireWake) {
+        try {
+            byte[] wav = buildWav(pcm, sr);
+            JSONObject body = new JSONObject();
+            body.put("audioBase64", Base64.encodeToString(wav, Base64.NO_WRAP));
+            body.put("mimeType", "audio/wav");
+            body.put("requireWakeWord", requireWake);
+            body.put("identityToken", "Matheus-Admin");
+            body.put("sessionId", "sess_main_admin");
+
+            HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/voice/turn").openConnection();
+            c.setRequestMethod("POST");
+            c.setRequestProperty("Content-Type", "application/json");
+            c.setConnectTimeout(5000);
+            c.setReadTimeout(22000);
+            c.setDoOutput(true);
+            c.getOutputStream().write(body.toString().getBytes("UTF-8"));
+
+            Scanner sc = new Scanner(c.getInputStream()).useDelimiter("\\A");
+            JSONObject res = new JSONObject(sc.hasNext() ? sc.next() : "{}");
+            boolean woke = res.optBoolean("woke", !requireWake);
+            String reply = res.optString("reply", "");
+            String transcript = res.optString("transcript", "");
+            String audioB64 = res.optString("audioBase64", "");
+
+            if (!woke && reply.isEmpty()) { hideGlow(); return; }
+            forceAwakeUntil = 0L;
+
+            if (transcript.toLowerCase().matches(".*(obrigado|pode descansar|encerrar|tchau).*")) {
+                continuousUntil = 0L;
+            } else if (prefContinuousSec > 0) {
+                continuousUntil = System.currentTimeMillis() + (prefContinuousSec * 1000L);
+            }
+
+            if (reply.isEmpty() && woke) {
+                playChime(true);
+                showGlow(1);
+                return;
+            }
+
+            playReply(reply, audioB64);
+        } catch (Exception e) {
+            hideGlow();
+        }
+    }
+
+    private void playReply(String text, String audioB64) {
+        String clean = (text == null ? "" : text).replaceAll("[*#_`~>|]", "").trim();
+        if (prefSilent || (clean.isEmpty() && (audioB64 == null || audioB64.isEmpty()))) {
+            if (System.currentTimeMillis() < continuousUntil) showGlow(1); else hideGlow();
+            return;
+        }
+        isSpeaking = true;
+        showGlow(3);
+        mainHandler.post(() -> {
+            Runnable onDone = () -> {
+                isSpeaking = false;
+                if (System.currentTimeMillis() < continuousUntil) showGlow(1);
+                else hideGlow();
+            };
+            if (audioB64 != null && !audioB64.isEmpty()) {
+                try {
+                    File f = File.createTempFile("jv_ph_", ".mp3", getCacheDir());
+                    try (FileOutputStream fos = new FileOutputStream(f)) { fos.write(Base64.decode(audioB64, Base64.DEFAULT)); }
+                    MediaPlayer mp = new MediaPlayer();
+                    mp.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
+                    mp.setDataSource(f.getAbsolutePath());
+                    mp.setOnCompletionListener(m -> { m.release(); f.delete(); onDone.run(); });
+                    mp.setOnErrorListener((m, w, e) -> { m.release(); f.delete(); onDone.run(); return true; });
+                    mp.prepare();
+                    mp.start();
+                    mainHandler.postDelayed(() -> { if (isSpeaking) onDone.run(); }, 25000L);
+                    return;
+                } catch (Exception ignored) {}
+            }
+            if (tts != null && ttsReady && !clean.isEmpty()) tts.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "ph_ans");
+            mainHandler.postDelayed(onDone, Math.max(2200L, clean.length() * 65L));
         });
     }
 
-    private void hideScreenGlow() {
-        mainHandler.post(() -> { if (edgeGlowView != null) edgeGlowView.setVisibility(View.GONE); });
-    }
-
-    private void playChime(boolean wake) {
-        if (!prefChimeEnabled || prefSilentTextOnly) return;
-        if (wake) {
-            long t = System.currentTimeMillis();
-            if (t - lastWakeChimeAt < 2000L) return;
-            lastWakeChimeAt = t;
-        }
+    private void playChime(boolean up) {
+        if (!prefChime) return;
         new Thread(() -> {
             try {
-                int sr = 16000, samples = (int) (sr * 0.14);
-                short[] pcm = new short[samples];
-                double f1 = wake ? 587.33 : 783.99, f2 = wake ? 880.00 : 587.33;
-                for (int i = 0; i < samples; i++) {
-                    double freq = (i < samples / 2) ? f1 : f2;
-                    double env = Math.min(1.0, i / 80.0) * (1.0 - (double) i / samples);
-                    pcm[i] = (short) (Math.sin(2.0 * Math.PI * freq * i / sr) * 14000 * env);
+                int sr = 16000, len = (int) (sr * 0.13);
+                short[] pcm = new short[len];
+                double f1 = up ? 587.33 : 783.99, f2 = up ? 880.0 : 587.33;
+                for (int i = 0; i < len; i++) {
+                    double f = i < len / 2 ? f1 : f2;
+                    double env = Math.min(1.0, i / 50.0) * (1.0 - (double) i / len);
+                    pcm[i] = (short) (Math.sin(2.0 * Math.PI * f * i / sr) * 14000 * env);
                 }
-                AudioTrack track = new AudioTrack.Builder()
+                AudioTrack t = new AudioTrack.Builder()
                         .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
                         .setAudioFormat(new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(sr).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
                         .setBufferSizeInBytes(pcm.length * 2).setTransferMode(AudioTrack.MODE_STATIC).build();
-                track.write(pcm, 0, pcm.length);
-                track.play();
-                Thread.sleep(160);
-                track.release();
+                t.write(pcm, 0, pcm.length);
+                t.play();
+                Thread.sleep(150);
+                t.release();
             } catch (Exception ignored) {}
         }).start();
     }
 
-    private void releaseDspEffects(NoiseSuppressor ns, AutomaticGainControl agc, AcousticEchoCanceler aec) {
-        try { if (ns != null) ns.release(); } catch (Exception ignored) {}
-        try { if (agc != null) agc.release(); } catch (Exception ignored) {}
-        try { if (aec != null) aec.release(); } catch (Exception ignored) {}
-    }
-
-    private void continuousAudioLoop() {
-        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
-        int minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        int chunkSize = Math.max(minBuf / 2, 1600); // ~50ms a 16kHz mono
-        byte[] buf = new byte[chunkSize];
-        LinkedList<byte[]> preRoll = new LinkedList<>();
-        ByteArrayOutputStream speechBuf = new ByteArrayOutputStream();
-        boolean capturing = false;
-        int voicedChunks = 0;
-        long lastVoiceMs = 0L, captureStartMs = 0L;
-        double noiseFloor = 140.0;
-
-        // Filtro passa-alta (~280Hz) + passa-baixa (~3400Hz) em ponto flutuante para isolar faixa vocal
-        double hpPrevIn = 0.0, hpPrevOut = 0.0, lpPrevOut = 0.0;
-        final double hpAlpha = 0.895; // corte ~280Hz a 16kHz
-        final double lpAlpha = 0.571; // corte ~3400Hz a 16kHz
-
-        AudioRecord recorder = null;
-        NoiseSuppressor ns = null;
-        AutomaticGainControl agc = null;
-        AcousticEchoCanceler aec = null;
-
-        while (running) {
+    private void showGlow(int mode) {
+        mainHandler.post(() -> {
             try {
-                boolean hasMicPerm = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
-                if (!hasMicPerm || !shouldCaptureAudioNow() || isEnrollmentRecording() || isSpeaking || isProcessing) {
-                    if (recorder != null) {
-                        releaseDspEffects(ns, agc, aec);
-                        ns = null; agc = null; aec = null;
-                        try { recorder.stop(); recorder.release(); } catch (Exception ignored) {}
-                        recorder = null;
-                    }
-                    if (MainActivity.isAppInForeground || !shouldCaptureAudioNow()) {
-                        awakeUntil = 0L;
-                        hideScreenGlow();
-                    }
-                    capturing = false; voicedChunks = 0; speechBuf.reset(); preRoll.clear();
-                    hpPrevIn = 0.0; hpPrevOut = 0.0; lpPrevOut = 0.0;
-                    Thread.sleep(250);
-                    continue;
+                if (!Settings.canDrawOverlays(this)) return;
+                if (wm == null) wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                if (glowView == null) {
+                    glowView = new EdgeGlowView(this);
+                    int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+                    wm.addView(glowView, new WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT));
                 }
-
-                long now = System.currentTimeMillis();
-                if (awakeUntil > 0L && now >= awakeUntil && !capturing) { awakeUntil = 0L; hideScreenGlow(); }
-
-                if (recorder == null) {
-                    recorder = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, chunkSize * 6);
-                    if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
-                        recorder.release();
-                        recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, chunkSize * 6);
-                    }
-                    if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
-                        recorder.release(); recorder = null; Thread.sleep(800); continue;
-                    }
-                    // Ativa filtros DSP nativos no coprocessador Snapdragon (0% CPU)
-                    int sessionId = recorder.getAudioSessionId();
-                    try {
-                        if (NoiseSuppressor.isAvailable()) { ns = NoiseSuppressor.create(sessionId); if (ns != null) ns.setEnabled(true); }
-                        if (AutomaticGainControl.isAvailable()) { agc = AutomaticGainControl.create(sessionId); if (agc != null) agc.setEnabled(true); }
-                        if (AcousticEchoCanceler.isAvailable()) { aec = AcousticEchoCanceler.create(sessionId); if (aec != null) aec.setEnabled(true); }
-                    } catch (Exception ignored) {}
-                    recorder.startRecording();
-                }
-
-                int read = recorder.read(buf, 0, buf.length);
-                if (read <= 0) continue;
-
-                // Analisa energia APENAS na banda vocal (280Hz-3400Hz) e taxa de cruzamento por zero (ZCR)
-                double vocalSum = 0.0;
-                int zeroCrossings = 0;
-                double prevBand = 0.0;
-                int totalSamples = read / 2;
-                for (int i = 0; i + 1 < read; i += 2) {
-                    short s = (short) ((buf[i] & 0xff) | (buf[i + 1] << 8));
-                    double hp = hpAlpha * (hpPrevOut + s - hpPrevIn);
-                    hpPrevIn = s;
-                    hpPrevOut = hp;
-                    double bp = lpPrevOut + lpAlpha * (hp - lpPrevOut);
-                    lpPrevOut = bp;
-                    vocalSum += bp * bp;
-                    if ((bp >= 0 && prevBand < 0) || (bp < 0 && prevBand >= 0)) zeroCrossings++;
-                    prevBand = bp;
-                }
-
-                double vocalRms = Math.sqrt(vocalSum / Math.max(1, totalSamples));
-                double zcr = (double) zeroCrossings / Math.max(1, totalSamples);
-                boolean isHumanBand = (zcr >= 0.025 && zcr <= 0.36);
-                double threshold = Math.min(Math.max(340.0, noiseFloor * prefSensMultiplier), 1250.0);
-
-                if (!capturing) {
-                    if (vocalRms < threshold || !isHumanBand) {
-                        noiseFloor = noiseFloor * 0.96 + Math.min(vocalRms, 280.0) * 0.04;
-                        voicedChunks = 0;
-                    } else {
-                        voicedChunks++;
-                    }
-                    preRoll.addLast(Arrays.copyOf(buf, read));
-                    if (preRoll.size() > 18) preRoll.removeFirst(); // ~900ms de pré-gravação
-                    if (voicedChunks >= 5) { // ~250ms de voz humana sustentada
-                        capturing = true; voicedChunks = 0; captureStartMs = now; lastVoiceMs = now;
-                        speechBuf.reset();
-                        for (byte[] p : preRoll) speechBuf.write(p);
-                        preRoll.clear();
-                    }
-                } else {
-                    speechBuf.write(buf, 0, read);
-                    if (vocalRms > threshold * 0.72 && isHumanBand) lastVoiceMs = now;
-                    if (now - lastVoiceMs > 520L || now - captureStartMs > 7000L) {
-                        capturing = false;
-                        byte[] pcm = speechBuf.toByteArray();
-                        speechBuf.reset();
-                        if (pcm.length >= 11200) {
-                            byte[] normPcm = normalizeAndPad(pcm, SAMPLE_RATE);
-                            byte[] payload = encodeAacOrWav(normPcm, SAMPLE_RATE);
-                            netPool.execute(() -> processVoiceClip(payload));
-                        }
-                    }
-                }
-            } catch (Exception e) { try { Thread.sleep(300); } catch (Exception ignored) {} }
-        }
-        if (recorder != null) {
-            releaseDspEffects(ns, agc, aec);
-            try { recorder.stop(); recorder.release(); } catch (Exception ignored) {}
-        }
+                glowView.setMode(mode);
+                glowView.setVisibility(View.VISIBLE);
+            } catch (Exception ignored) {}
+        });
     }
 
-    private byte[] normalizeAndPad(byte[] pcm, int rate) {
-        int maxAbs = 0;
-        for (int i = 0; i + 1 < pcm.length; i += 2) {
-            int s = Math.abs((short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8)));
-            if (s > maxAbs) maxAbs = s;
-        }
-        double gain = (maxAbs > 1200 && maxAbs < 24000) ? Math.min(1.75, 22000.0 / maxAbs) : 1.0;
-        byte[] out = new byte[pcm.length + (rate * 2 * 300) / 1000];
-        for (int i = 0; i + 1 < pcm.length; i += 2) {
-            short s = (short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8));
-            int boosted = Math.max(-32767, Math.min(32767, (int) Math.round(s * gain)));
-            out[i] = (byte) (boosted & 0xff);
-            out[i + 1] = (byte) ((boosted >> 8) & 0xff);
-        }
-        return out;
+    private void hideGlow() {
+        mainHandler.post(() -> { if (glowView != null) glowView.setVisibility(View.GONE); });
     }
 
-    // Compressão AAC-LC 24kbps no encoder de hardware Snapdragon (com fallback WAV)
-    private byte[] encodeAacOrWav(byte[] pcm, int rate) {
-        MediaCodec codec = null;
-        try {
-            MediaFormat fmt = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, rate, 1);
-            fmt.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
-            fmt.setInteger(MediaFormat.KEY_BIT_RATE, 24000);
-            fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384);
-            codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC);
-            codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-            codec.start();
-
-            ByteArrayOutputStream adtsOut = new ByteArrayOutputStream();
-            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-            int offset = 0;
-            boolean inputDone = false, outputDone = false;
-
-            while (!outputDone) {
-                if (!inputDone) {
-                    int inIdx = codec.dequeueInputBuffer(5000);
-                    if (inIdx >= 0) {
-                        ByteBuffer inBuf = codec.getInputBuffer(inIdx);
-                        if (inBuf != null) {
-                            inBuf.clear();
-                            if (offset >= pcm.length) {
-                                codec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                                inputDone = true;
-                            } else {
-                                int toCopy = Math.min(inBuf.remaining(), pcm.length - offset);
-                                inBuf.put(pcm, offset, toCopy);
-                                long ptsUs = (offset / 2L) * 1000000L / rate;
-                                codec.queueInputBuffer(inIdx, 0, toCopy, ptsUs, 0);
-                                offset += toCopy;
-                            }
-                        }
-                    }
-                }
-                int outIdx = codec.dequeueOutputBuffer(info, 5000);
-                if (outIdx >= 0) {
-                    ByteBuffer outBuf = codec.getOutputBuffer(outIdx);
-                    if (outBuf != null && info.size > 0 && (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
-                        int frameLen = info.size + 7;
-                        byte[] adts = new byte[frameLen];
-                        // Cabeçalho ADTS 16kHz (freqIdx=8) Mono (chanCfg=1)
-                        adts[0] = (byte) 0xFF;
-                        adts[1] = (byte) 0xF1;
-                        adts[2] = (byte) ((1 << 6) | (8 << 2) | (1 >> 2));
-                        adts[3] = (byte) (((1 & 3) << 6) | (frameLen >> 11));
-                        adts[4] = (byte) ((frameLen >> 3) & 0xFF);
-                        adts[5] = (byte) (((frameLen & 7) << 5) | 0x1F);
-                        adts[6] = (byte) 0xFC;
-                        outBuf.position(info.offset);
-                        outBuf.get(adts, 7, info.size);
-                        adtsOut.write(adts);
-                    }
-                    codec.releaseOutputBuffer(outIdx, false);
-                    if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true;
-                }
-            }
-            byte[] encoded = adtsOut.toByteArray();
-            if (encoded.length > 256) return encoded;
-        } catch (Exception ignored) {
-        } finally {
-            if (codec != null) { try { codec.stop(); codec.release(); } catch (Exception ignored) {} }
-        }
-        try { return wrapWav(pcm, rate); } catch (IOException e) { return pcm; }
-    }
-
-    private byte[] wrapWav(byte[] pcm, int rate) throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(44 + pcm.length);
-        int totalDataLen = pcm.length + 36, byteRate = rate * 2;
-        out.write(new byte[]{'R', 'I', 'F', 'F'});
-        out.write(new byte[]{(byte) (totalDataLen & 0xff), (byte) ((totalDataLen >> 8) & 0xff), (byte) ((totalDataLen >> 16) & 0xff), (byte) ((totalDataLen >> 24) & 0xff)});
-        out.write(new byte[]{'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0});
-        out.write(new byte[]{(byte) (rate & 0xff), (byte) ((rate >> 8) & 0xff), (byte) ((rate >> 16) & 0xff), (byte) ((rate >> 24) & 0xff)});
-        out.write(new byte[]{(byte) (byteRate & 0xff), (byte) ((byteRate >> 8) & 0xff), (byte) ((byteRate >> 16) & 0xff), (byte) ((byteRate >> 24) & 0xff)});
-        out.write(new byte[]{2, 0, 16, 0, 'd', 'a', 't', 'a'});
-        out.write(new byte[]{(byte) (pcm.length & 0xff), (byte) ((pcm.length >> 8) & 0xff), (byte) ((pcm.length >> 16) & 0xff), (byte) ((pcm.length >> 24) & 0xff)});
+    private byte[] buildWav(byte[] pcm, int sr) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        int totalDataLen = pcm.length + 36, byteRate = sr * 2;
+        out.write("RIFF".getBytes());
+        out.write(new byte[]{(byte)(totalDataLen & 0xff), (byte)((totalDataLen >> 8) & 0xff), (byte)((totalDataLen >> 16) & 0xff), (byte)((totalDataLen >> 24) & 0xff)});
+        out.write("WAVEfmt ".getBytes());
+        out.write(new byte[]{16, 0, 0, 0, 1, 0, 1, 0});
+        out.write(new byte[]{(byte)(sr & 0xff), (byte)((sr >> 8) & 0xff), (byte)((sr >> 16) & 0xff), (byte)((sr >> 24) & 0xff)});
+        out.write(new byte[]{(byte)(byteRate & 0xff), (byte)((byteRate >> 8) & 0xff), (byte)((byteRate >> 16) & 0xff), (byte)((byteRate >> 24) & 0xff)});
+        out.write(new byte[]{2, 0, 16, 0});
+        out.write("data".getBytes());
+        out.write(new byte[]{(byte)(pcm.length & 0xff), (byte)((pcm.length >> 8) & 0xff), (byte)((pcm.length >> 16) & 0xff), (byte)((pcm.length >> 24) & 0xff)});
         out.write(pcm);
         return out.toByteArray();
     }
 
-    private String normalizeText(String s) {
-        return Normalizer.normalize((s == null ? "" : s).toLowerCase(), Normalizer.Form.NFD)
-                .replaceAll("[\\p{InCombiningDiacriticalMarks}.?!,-]", " ").replaceAll("\\s+", " ").trim();
-    }
-
-    // Gatilho estrito para "Jarvis" (removidos falsos positivos como "já vi", "já viu", "chaves")
-    private boolean containsWakeWord(String norm) {
-        return norm.matches("(?s).*\\b(jarvis|javis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|jaires|jairbis|jarlb[iy]s?|gerbis|jorps|jar vis|ja vis)\\b.*");
-    }
-
-    private String stripWakeWord(String raw) {
-        return (raw == null ? "" : raw)
-                .replaceFirst("(?i)^(?:oi|ol[aá]|ei|ok|fala|al[oô]|e a[ií])?[,\\s.-]*(?:j\\.?a\\.?r\\.?v\\.?i\\.?s|j[aá]rvis|j[aá]vis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|jaires|jairbis|jarlb[iy]s?|gerbis|jorps|jar\\s+vis|j[aá]\\s+vis)[,\\s.:!?-]*", "").trim();
-    }
-
-    private void processVoiceClip(byte[] audioBytes) {
-        boolean isAwake = System.currentTimeMillis() < awakeUntil;
-        if (isAwake) showScreenGlow(2);
-        try {
-            String b64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP);
-            byte[] payload = ("{\"audioBase64\":" + JSONObject.quote(b64) + "}").getBytes("UTF-8");
-            HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/audio/transcribe").openConnection();
-            c.setRequestMethod("POST");
-            c.setRequestProperty("Content-Type", "application/json");
-            c.setRequestProperty("Connection", "keep-alive");
-            c.setFixedLengthStreamingMode(payload.length);
-            c.setConnectTimeout(4500);
-            c.setReadTimeout(12000);
-            c.setDoOutput(true);
-            c.getOutputStream().write(payload);
-
-            Scanner sc = new Scanner(c.getInputStream()).useDelimiter("\\A");
-            String text = new JSONObject(sc.hasNext() ? sc.next() : "{}").optString("text", "").trim();
-            String norm = normalizeText(text);
-            if (norm.length() < 2 || norm.matches(".*(obrigado por assistir|legendas pela comunidade|amara org|sous titres).*")) {
-                if (isAwake && System.currentTimeMillis() < awakeUntil) showScreenGlow(1);
-                else hideScreenGlow();
-                return;
-            }
-            if (!containsWakeWord(norm) && !isAwake) { hideScreenGlow(); return; }
-            String cmd = stripWakeWord(text);
-            if (cmd.isEmpty()) {
-                awakeUntil = System.currentTimeMillis() + Math.max(10000L, prefContinuousSec * 1000L);
-                wakeScreenOnce(); playChime(true); showScreenGlow(1);
-                return;
-            }
-            if (normalizeText(cmd).matches("^(obrigado|obrigada|valeu|so isso|pode descansar|dispensado|tchau|encerrar|parar)$")) {
-                awakeUntil = 0L; hideScreenGlow(); return;
-            }
-            awakeUntil = 0L; isProcessing = true; playChime(false); showScreenGlow(2);
-            executeCommandOnVm(cmd);
-        } catch (Exception e) { isProcessing = false; awakeUntil = 0L; hideScreenGlow(); }
-    }
-
-    private void executeCommandOnVm(String cmd) {
-        try {
-            String cNorm = normalizeText(cmd);
-            if (cNorm.matches("^(que horas sao|que hora e|horas|qual o horario)$")) {
-                isProcessing = false;
-                speakReply("Agora são " + new SimpleDateFormat("HH:mm", new Locale("pt", "BR")).format(new Date()) + ".");
-                return;
-            }
-            if (cNorm.matches("^(que dia e hoje|qual a data de hoje|data de hoje)$")) {
-                isProcessing = false;
-                speakReply("Hoje é " + new SimpleDateFormat("EEEE, d 'de' MMMM", new Locale("pt", "BR")).format(new Date()) + ".");
-                return;
-            }
-            String screenReply = JarvisScreenController.tryExecuteCommand(this, cmd);
-            if (screenReply != null) { isProcessing = false; speakReply(screenReply); return; }
-
-            JSONObject sd = new JSONObject();
-            String finalPrompt = cmd;
-            if (!prefPrivacyLockCamera && cNorm.matches(".*(esta me vendo|ta me vendo|consegue me ver|voce me ve|ative a camera|ativar a camera|olhe para mim|olha pra mim|camera traseira|o que estou segurando).*")) {
-                try {
-                    Class<?> camCls = Class.forName("com.matheus.jarvis.JarvisHeadlessCamera");
-                    Method cap = camCls.getMethod("captureFrameBase64", Context.class, boolean.class);
-                    String camB64 = (String) cap.invoke(null, this, cNorm.contains("traseira") || cNorm.contains("tras"));
-                    if (camB64 != null) { sd.put("webcamFrame", camB64); sd.put("hasVision", true); }
-                } catch (Exception ignored) {}
-            }
-            if (cNorm.matches(".*(olhe minha tela|olha minha tela|leia a tela|o que esta na tela|analise minha tela).*") && JarvisAccessibilityService.instance != null) {
-                String screenText = JarvisAccessibilityService.instance.readScreenText();
-                if (!screenText.isEmpty()) finalPrompt = cmd + "\n\n[CONTEÚDO VISÍVEL NA TELA DO CELULAR]: " + screenText;
-            }
-            sd.put("type", "voice_or_text"); sd.put("textPrompt", finalPrompt); sd.put("prompt", finalPrompt);
-
-            JSONObject body = new JSONObject();
-            body.put("identityToken", "Matheus-Admin"); body.put("sessionId", "sess_main_admin"); body.put("sensorData", sd);
-            byte[] reqBytes = body.toString().getBytes("UTF-8");
-
-            HttpURLConnection ic = (HttpURLConnection) new URL(BASE + "/api/v1/webhook/ingress").openConnection();
-            ic.setRequestMethod("POST"); ic.setRequestProperty("Content-Type", "application/json");
-            ic.setRequestProperty("Connection", "keep-alive");
-            ic.setFixedLengthStreamingMode(reqBytes.length);
-            ic.setConnectTimeout(5000); ic.setReadTimeout(25000); ic.setDoOutput(true);
-            ic.getOutputStream().write(reqBytes);
-
-            Scanner isc = new Scanner(ic.getInputStream()).useDelimiter("\\A");
-            JSONObject resp = new JSONObject(isc.hasNext() ? isc.next() : "{}");
-            JSONObject dataObj = resp.optJSONObject("data");
-            String reply = resp.optString("response", dataObj != null ? dataObj.optString("response", "Pronto.") : "Pronto.");
-            isProcessing = false;
-            speakReply(reply);
-        } catch (Exception e) { isProcessing = false; awakeUntil = 0L; hideScreenGlow(); }
-    }
-
-    private void speakReply(String text) {
-        String clean = (text == null ? "" : text)
-                .replaceAll("```[\\s\\S]*?```", "")
-                .replaceAll("\\(?\\*{1,4}\\s*\\+?\\d[\\d\\s().-]{6,}\\*{0,4}\\)?", "o número cadastrado")
-                .replaceAll("\\+?55\\s*\\(?\\d{2}\\)?\\s*9?\\d{4}[-\\s]?\\d{4}", "o número cadastrado")
-                .replaceAll("[*#_`~>|]+", " ")
-                .replaceAll("(?i)\\b(\\w+(?:\\s+\\w+){0,2})(?:\\s+\\1){1,}\\b", "$1")
-                .replaceAll("\\s+", " ")
-                .trim();
-        if (clean.isEmpty() || prefSilentTextOnly) { awakeUntil = 0L; hideScreenGlow(); return; }
-        isSpeaking = true; showScreenGlow(3);
-        Runnable safetyUnlock = () -> { isSpeaking = false; awakeUntil = 0L; hideScreenGlow(); };
-        mainHandler.postDelayed(safetyUnlock, 20000L);
-
-        String fetchedB64 = "";
-        try {
-            byte[] speakReq = ("{\"text\":" + JSONObject.quote(clean) + "}").getBytes("UTF-8");
-            HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/audio/speak").openConnection();
-            c.setRequestMethod("POST"); c.setRequestProperty("Content-Type", "application/json");
-            c.setRequestProperty("Connection", "keep-alive");
-            c.setFixedLengthStreamingMode(speakReq.length);
-            c.setConnectTimeout(4500); c.setReadTimeout(9000); c.setDoOutput(true);
-            c.getOutputStream().write(speakReq);
-            Scanner sc = new Scanner(c.getInputStream()).useDelimiter("\\A");
-            fetchedB64 = new JSONObject(sc.hasNext() ? sc.next() : "{}").optString("audioBase64", "");
-        } catch (Exception ignored) {}
-
-        final String finalB64 = fetchedB64;
-        mainHandler.post(() -> {
-            boolean useAlarm = audioManager != null && audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) <= 1;
-            int usage = useAlarm ? AudioAttributes.USAGE_ALARM : AudioAttributes.USAGE_MEDIA;
-            if (!finalB64.isEmpty()) {
-                try {
-                    File f = File.createTempFile("jv_", ".mp3", getCacheDir());
-                    try (FileOutputStream fos = new FileOutputStream(f)) { fos.write(Base64.decode(finalB64, Base64.DEFAULT)); }
-                    MediaPlayer mp = new MediaPlayer();
-                    mp.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
-                    mp.setAudioAttributes(new AudioAttributes.Builder().setUsage(usage).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
-                    mp.setVolume(1.0f, 1.0f); mp.setDataSource(f.getAbsolutePath());
-                    mp.setOnCompletionListener(m -> { mainHandler.removeCallbacks(safetyUnlock); try { m.release(); } catch (Exception ignored) {} f.delete(); finishSpeaking(clean); });
-                    mp.setOnErrorListener((m, w, ex) -> { mainHandler.removeCallbacks(safetyUnlock); try { m.release(); } catch (Exception ignored) {} f.delete(); speakWithNativeTts(clean, useAlarm, safetyUnlock); return true; });
-                    mp.prepare(); mp.start();
-                    return;
-                } catch (Exception ignored) {}
-            }
-            speakWithNativeTts(clean, useAlarm, safetyUnlock);
-        });
-    }
-
-    private void finishSpeaking(String clean) {
-        String cLow = normalizeText(clean);
-        boolean follow = clean.endsWith("?") || prefContinuousSec > 0
-                || cLow.matches(".*(repita|repetir|nao entendi|nao compreendi|pode dizer|diga novamente|qual deles|qual contato|qual aparelho|qual comodo|confirma|estou ouvindo).*");
-        if (follow) {
-            playChime(true);
-            showScreenGlow(1);
-        } else {
-            awakeUntil = 0L;
-            hideScreenGlow();
-        }
-        mainHandler.postDelayed(() -> {
-            if (follow) {
-                awakeUntil = System.currentTimeMillis() + Math.max(8000L, prefContinuousSec * 1000L);
-            }
-            isSpeaking = false;
-        }, 750L);
-    }
-
-    private void speakWithNativeTts(String text, boolean useAlarm, Runnable safetyUnlock) {
-        if (nativeTts != null && ttsReady && !text.isEmpty()) {
-            nativeTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                @Override public void onStart(String id) {}
-                @Override public void onDone(String id) { mainHandler.removeCallbacks(safetyUnlock); finishSpeaking(text); }
-                @Override public void onError(String id) { mainHandler.removeCallbacks(safetyUnlock); isSpeaking = false; awakeUntil = 0L; hideScreenGlow(); }
-            });
-            Bundle params = new Bundle();
-            params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, useAlarm ? AudioManager.STREAM_ALARM : AudioManager.STREAM_MUSIC);
-            nativeTts.speak(text, TextToSpeech.QUEUE_FLUSH, params, "jarvis_reply");
-        } else { mainHandler.removeCallbacks(safetyUnlock); isSpeaking = false; awakeUntil = 0L; hideScreenGlow(); }
-    }
-
-    @Override
-    public void onTaskRemoved(Intent rootIntent) {
-        Intent restart = new Intent(getApplicationContext(), JarvisVoiceService.class);
-        PendingIntent pi = PendingIntent.getService(this, 1, restart, PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE);
-        AlarmManager am = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
-        if (am != null) am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 800, pi);
-        super.onTaskRemoved(rootIntent);
-    }
-
-    @Override
-    public void onDestroy() {
-        running = false; hideScreenGlow();
-        if (nativeTts != null) { try { nativeTts.stop(); nativeTts.shutdown(); } catch (Exception ignored) {} }
-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        super.onDestroy();
-    }
-
-    @Override public int onStartCommand(Intent i, int f, int id) { return START_STICKY; }
+    @Override public void onDestroy() { running = false; hideGlow(); if (tts != null) tts.shutdown(); super.onDestroy(); }
     @Override public IBinder onBind(Intent i) { return null; }
 }

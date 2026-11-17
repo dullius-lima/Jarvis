@@ -1,4 +1,5 @@
 package com.matheus.jarvis;
+
 import android.os.Bundle;
 import android.service.voice.VoiceInteractionSession;
 import android.service.voice.VoiceInteractionSessionService;
@@ -6,6 +7,13 @@ import android.service.voice.VoiceInteractionSessionService;
 public class JarvisVoiceInteractionSessionService extends VoiceInteractionSessionService {
     @Override
     public VoiceInteractionSession onNewSession(Bundle args) {
-        return new JarvisVoiceInteractionSession(this);
+        return new VoiceInteractionSession(this) {
+            @Override
+            public void onShow(Bundle args, int showFlags) {
+                super.onShow(args, showFlags);
+                JarvisVoiceService.wakeNow();
+                hide();
+            }
+        };
     }
 }

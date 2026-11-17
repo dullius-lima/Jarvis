@@ -686,8 +686,7 @@ export async function testExternalConnector(req: Request, res: Response) {
 
     const method = String(cfg.http_method || body.http_method || 'GET').toUpperCase();
     const headers: Record<string, string> = {
-      Accept: 'application/json',
-      'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'
+            'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'
     };
 
     if (apiKey) {

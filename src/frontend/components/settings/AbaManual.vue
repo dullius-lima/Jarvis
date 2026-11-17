@@ -130,7 +130,37 @@
           <li><strong>Quando Reinstalar APK:</strong> Apenas se alterar permissões nativas no <code>AndroidManifest.xml</code>, plugins Java/Kotlin em <code>android/</code> ou o endereço <code>server.url</code> em <code>capacitor.config.json</code>.</li>
         </ul>
       </div>
-    </div>
+    
+    <section class="sens-manual-card">
+      <h3>🎙️ Guia de Sensibilidade do Microfone (50% a 250%)</h3>
+      <p class="sens-manual-desc">
+        O controle deslizante em <strong>Sensibilidade &amp; Áudio</strong> calibra em tempo real o ganho vocal e o piso de disparo do celular (filtro 300 Hz – 3.400 Hz), sem precisar reinstalar o aplicativo:
+      </p>
+      <div class="sens-grid">
+        <div class="sens-item">
+          <span class="sens-badge">50% a 80% • Anti-Ruído</span>
+          <strong>Ambiente barulhento (Recomendado: 70%)</strong>
+          <p>Indicado para sala com TV alta, música, ar-condicionado forte ou carro. Exige falar mais perto do celular (até 50 cm), evitando disparos acidentais.</p>
+        </div>
+        <div class="sens-item">
+          <span class="sens-badge">90% a 130% • Equilibrado</span>
+          <strong>Uso diário na mesa (Recomendado: 130%)</strong>
+          <p>Calibragem padrão para escritório ou ambientes com ruído moderado, captando voz em tom normal entre 0,5 m e 1,5 m de distância.</p>
+        </div>
+        <div class="sens-item">
+          <span class="sens-badge">140% a 180% • Voz Suave</span>
+          <strong>Quarto ou sala tranquila (Recomendado: 160%–170%)</strong>
+          <p>Permite chamar o JARVIS em tom natural ou baixo sem elevar a voz, cobrindo de 1,5 m a 3 metros em ambientes silenciosos.</p>
+        </div>
+        <div class="sens-item">
+          <span class="sens-badge">190% a 250% • Máxima</span>
+          <strong>Longo alcance ou sussurro (Recomendado: 230%)</strong>
+          <p>Capta comandos do outro lado do cômodo (3 m a 5 m) ou em voz bem baixa à noite. Combine com o <em>Bloqueio Anti-TV</em> se houver pessoas falando perto.</p>
+        </div>
+      </div>
+    </section>
+
+  </div>
   </section>
 </template>
 
@@ -158,4 +188,14 @@
 .badge.premium { background: rgba(244, 63, 94, 0.18); color: #fb7185; }
 .manual-card ul, .ladder-list { padding-left: 20px; color: #cbd5e1; font-size: 0.86rem; line-height: 1.6; }
 .manual-card code { background: #020617; color: #38bdf8; padding: 2px 6px; border-radius: 4px; font-size: 0.78rem; }
+
+.sens-manual-card { margin-top: 18px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 14px; padding: 16px; color: #f1f5f9; }
+.sens-manual-card h3 { margin: 0 0 6px; font-size: 1rem; color: #38bdf8; }
+.sens-manual-desc { font-size: 0.84rem; color: #94a3b8; margin: 0 0 12px; line-height: 1.45; }
+.sens-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.sens-item { background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 10px; padding: 11px; display: flex; flex-direction: column; gap: 4px; }
+.sens-badge { align-self: flex-start; background: rgba(2, 132, 199, 0.22); border: 1px solid rgba(56, 189, 248, 0.45); color: #7dd3fc; font-size: 0.74rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.sens-item strong { font-size: 0.86rem; color: #e2e8f0; margin-top: 2px; }
+.sens-item p { margin: 0; font-size: 0.78rem; color: #94a3b8; line-height: 1.4; }
+
 </style>

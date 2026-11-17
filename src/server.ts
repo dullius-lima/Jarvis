@@ -116,6 +116,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // 1. Módulos Principais de Rotas API
 
+app.get('/download/jarvis-tv.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis-tv.apk', 'jarvis-tv.apk'));
 app.get('/download/jarvis.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis.apk', 'jarvis.apk'));
 app.get('/download/jarvis-watch.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis-watch.apk', 'jarvis-watch.apk'));
 app.use('/api/v1/auth', authRoutes);
