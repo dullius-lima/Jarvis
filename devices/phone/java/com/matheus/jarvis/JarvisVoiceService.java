@@ -118,6 +118,7 @@ public class JarvisVoiceService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(101, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
         else startForeground(101, n);
 
+        try { PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE); PowerManager.WakeLock wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "jarvis:voice24h"); wl.acquire(); } catch (Exception ignored) {}
         new Thread(this::prefsLoop, "JarvisPrefs").start();
         new Thread(this::listenLoop, "JarvisPhoneAudio").start();
     }
@@ -126,6 +127,20 @@ public class JarvisVoiceService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && "ACTION_WAKE_NOW".equals(intent.getAction())) wakeNow();
         return START_STICKY;
+    }
+
+    
+    private void updateNotifStatus(String msg) {
+        try {
+            Notification n = new NotificationCompat.Builder(this, "jarvis_24h")
+                    .setContentTitle("JARVIS Escuta Ativa 24h")
+                    .setContentText(msg)
+                    .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                    .setOnlyAlertOnce(true)
+                    .setOngoing(true)
+                    .build();
+            getSystemService(NotificationManager.class).notify(101, n);
+        } catch (Exception ignored) {}
     }
 
     private void prefsLoop() {
@@ -153,7 +168,7 @@ public class JarvisVoiceService extends Service {
 
     private boolean canListenNow() {
         if (isSpeaking) return false;
-        if (MainActivity.isAppInForeground) return false; // Libera mic para o WebView dentro do app
+        // Escuta ativa tambem com app aberto // Libera mic para o WebView dentro do app
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false;
         if (System.currentTimeMillis() < forceAwakeUntil || System.currentTimeMillis() < continuousUntil) return true;
         if (prefOnlyAppOpen || prefPushToTalk) return false;
@@ -268,6 +283,7 @@ public class JarvisVoiceService extends Service {
 
     private void sendAudioTurn(byte[] pcm, int sr, boolean requireWake) {
         try {
+            updateNotifStatus("📤 Enviando fala para VM...");
             byte[] wav = buildWav(pcm, sr);
             JSONObject body = new JSONObject();
             body.put("audioBase64", Base64.encodeToString(wav, Base64.NO_WRAP));
@@ -291,6 +307,7 @@ public class JarvisVoiceService extends Service {
             String transcript = res.optString("transcript", "");
             String audioB64 = res.optString("audioBase64", "");
 
+            updateNotifStatus(transcript.isEmpty() ? "🎙️ Ouvindo 'Jarvis'..." : "👂 Ouviu: " + transcript);
             if (!woke && reply.isEmpty()) { hideGlow(); return; }
             forceAwakeUntil = 0L;
 
@@ -308,6 +325,7 @@ public class JarvisVoiceService extends Service {
 
             playReply(reply, audioB64);
         } catch (Exception e) {
+            updateNotifStatus("❌ Erro conexão VM: " + e.getClass().getSimpleName());
             hideGlow();
         }
     }

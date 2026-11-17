@@ -361,6 +361,74 @@ const DEFAULT_USER_PREFS = {
   mic_sensitivity: 'balanced'
 };
 
+
+app.post('/api/v1/voice/turn', async (req, res) => {
+  try {
+    const { audioBase64, mimeType, requireWakeWord, identityToken, sessionId } = req.body || {};
+    if (!audioBase64) return res.status(400).json({ success: false, error: 'audioBase64 ausente' });
+
+    const trResp = await fetch('http://127.0.0.1:3333/api/v1/audio/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audioBase64, mimeType: mimeType || 'audio/wav', modelSize: 'small' })
+    });
+    const trJson: any = await trResp.json().catch(() => ({}));
+    const transcript = String(trJson?.text || trJson?.transcript || '').trim();
+    console.log(`[VoiceTurn] Ouviu: "${transcript}"`);
+
+    if (!transcript) return res.json({ success: true, woke: false, transcript: '', reply: '' });
+
+    const norm = transcript.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const hasWake = /\b(jarvis|javis|jarves|iarvis|yarvis|djarvis|jarbas|chaves|jar\s*vis|ja\s*vis)\b/.test(norm);
+    if (requireWakeWord !== false && !hasWake) {
+      return res.json({ success: true, woke: false, transcript, reply: '' });
+    }
+
+    const cleanPrompt = transcript
+      .replace(/^(oi|olá|ola|ei|hey|ok|fala)?[,\s.-]*(jarvis|javis|jarves|iarvis|yarvis|djarvis|jarbas|chaves)[,\s.:!?-]*/i, '')
+      .trim();
+    if (!cleanPrompt) {
+      return res.json({ success: true, woke: true, transcript, reply: '' });
+    }
+
+    const ingResp = await fetch('http://127.0.0.1:3333/api/v1/webhook/ingress', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identityToken: identityToken || 'Matheus-Admin',
+        sessionId: sessionId || 'sess_main_admin',
+        prompt: cleanPrompt,
+        textPrompt: cleanPrompt,
+        sensorData: {
+          type: 'voice_or_text',
+          prompt: cleanPrompt,
+          textPrompt: cleanPrompt
+        }
+      })
+    });
+    const ingJson: any = await ingResp.json().catch(() => ({}));
+    const reply = String(ingJson?.data?.response || ingJson?.response || ingJson?.reply || ingJson?.message || 'Pronto.').trim();
+
+    let replyAudioB64 = '';
+    if (reply) {
+      try {
+        const spResp = await fetch('http://127.0.0.1:3333/api/v1/audio/speak', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: reply })
+        });
+        const spJson: any = await spResp.json().catch(() => ({}));
+        replyAudioB64 = String(spJson?.audioBase64 || '');
+      } catch {}
+    }
+
+    return res.json({ success: true, woke: true, transcript, reply, audioBase64: replyAudioB64 });
+  } catch (e: any) {
+    console.error('[VoiceTurn] Erro:', e?.message || e);
+    return res.status(500).json({ success: false, error: e?.message || 'Erro interno' });
+  }
+});
+
 app.get('/api/v1/preferences', async (_req: Request, res: Response) => {
   try {
     const prefPath = path.join(process.cwd(), 'assets', 'user_preferences.json');
