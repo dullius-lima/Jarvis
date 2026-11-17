@@ -504,48 +504,39 @@ export async function updateBrainConfig(req: Request, res: Response) {
     const body = req.body || {};
     const prevRes = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;");
     const prevCfg = prevRes.rows[0]?.value || {};
-
     const endpoints: Record<string, string> = {
       groq: 'https://api.groq.com/openai/v1',
       gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
       openai: 'https://api.openai.com/v1',
-      deepseek: 'https://api.deepseek.com',
+      deepseek: 'https://api.deepseek.com/v1',
       openrouter: 'https://openrouter.ai/api/v1',
       ollama: 'http://127.0.0.1:11434/v1'
     };
-
     const provider = String(body.provider || prevCfg.provider || 'groq').toLowerCase().trim();
-    const chosenModel = String(body.model || prevCfg.model || '').trim();
+    const chosenModel = sanitizeModelForProvider(provider, String(body.model || prevCfg.model || '').trim());
     if (!chosenModel || chosenModel === 'CUSTOM_INPUT') {
       return res.status(400).json({ success: false, error: 'Informe um ID de modelo válido antes de salvar.' });
     }
-
     const savedKeys: Record<string, string> = { ...(prevCfg.saved_keys || {}) };
-    let effectiveKey = savedKeys[provider] || (prevCfg.provider === provider ? prevCfg.api_key : '') || '';
+    let effectiveKey =
+      cleanAndNormalizeApiKey(savedKeys[provider]) ||
+      (prevCfg.provider === provider ? cleanAndNormalizeApiKey(prevCfg.api_key) : '') ||
+      getEnvKeyForProvider(provider);
 
-    const rawKey = String(body.api_key || '').trim();
-    if (rawKey && !rawKey.includes('•') && !rawKey.includes('***')) {
+    const rawKey = cleanAndNormalizeApiKey(body.api_key);
+    if (rawKey) {
       effectiveKey = rawKey;
       savedKeys[provider] = effectiveKey;
-      const envVarMap: Record<string, string> = {
-        groq: 'GROQ_API_KEY',
-        gemini: 'GEMINI_API_KEY',
-        openai: 'OPENAI_API_KEY',
-        deepseek: 'DEEPSEEK_API_KEY',
-        openrouter: 'OPENROUTER_API_KEY'
-      };
-      const varName = envVarMap[provider];
-      if (varName) {
-        process.env[varName] = effectiveKey;
-        try {
-          const envPath = path.resolve(process.cwd(), '.env');
-          let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-          const rx = new RegExp(`^${varName}=.*$`, 'm');
-          content = rx.test(content) ? content.replace(rx, `${varName}=${effectiveKey}`) : `${content}\n${varName}=${effectiveKey}\n`;
-          fs.writeFileSync(envPath, content, 'utf8');
-        } catch {}
-      }
+      syncKeyToEnvFile(provider, effectiveKey, chosenModel, endpoints[provider] || '');
     }
+    const rawUrl = String(body.base_url || '').trim();
+    const wrongUrl =
+      (provider === 'deepseek' && !rawUrl.includes('deepseek.com')) ||
+      (provider === 'groq' && !rawUrl.includes('groq.com')) ||
+      (provider === 'openai' && !rawUrl.includes('openai.com')) ||
+      (provider === 'openrouter' && !rawUrl.includes('openrouter.ai')) ||
+      (provider === 'gemini' && !rawUrl.includes('googleapis.com'));
+    const resolvedBaseUrl = (!rawUrl || wrongUrl ? endpoints[provider] : rawUrl).replace(/\/+$/, '');
 
     const newConfig = {
       ...prevCfg,
@@ -553,24 +544,17 @@ export async function updateBrainConfig(req: Request, res: Response) {
       provider,
       model: chosenModel,
       api_key: effectiveKey,
-      base_url: body.base_url?.trim() || endpoints[provider] || prevCfg.base_url || '',
+      base_url: resolvedBaseUrl,
       temperature: body.temperature ?? prevCfg.temperature ?? 0.2,
       system_prompt: body.system_prompt ?? prevCfg.system_prompt,
       saved_keys: savedKeys
     };
-
     await pool.query(
-      `INSERT INTO system_configs (key, value, updated_at)
-       VALUES ('brain_llm_config', $1::jsonb, NOW())
+      `INSERT INTO system_configs (key, value, updated_at) VALUES ('brain_llm_config', $1::jsonb, NOW())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
       [JSON.stringify(newConfig)]
     );
-
-    return res.status(200).json({
-      success: true,
-      message: `Modelo [${chosenModel}] (${provider}) salvo e cofre de créditos sincronizado!`,
-      data: newConfig
-    });
+    return res.status(200).json({ success: true, message: `Modelo [${chosenModel}] (${provider.toUpperCase()}) salvo!`, data: newConfig });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
@@ -580,65 +564,57 @@ export async function validateLLMConnection(req: Request, res: Response) {
   try {
     const { provider = 'groq', model, api_key, base_url } = req.body || {};
     const normalizedProvider = String(provider).toLowerCase().trim();
-    const targetModel = String(model || '').trim();
-
+    const targetModel = sanitizeModelForProvider(normalizedProvider, String(model || '').trim());
     if (!targetModel || targetModel === 'CUSTOM_INPUT') {
       return res.status(200).json({ success: false, error: 'Informe o ID do modelo que deseja testar.' });
     }
-
     const endpoints: Record<string, string> = {
       groq: 'https://api.groq.com/openai/v1',
       gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
       openai: 'https://api.openai.com/v1',
-      deepseek: 'https://api.deepseek.com',
+      deepseek: 'https://api.deepseek.com/v1',
       openrouter: 'https://openrouter.ai/api/v1',
       ollama: 'http://127.0.0.1:11434/v1'
     };
-
-    let apiKey = String(api_key || '').trim();
-    if (!apiKey || apiKey.includes('•') || apiKey.includes('***')) {
+    let apiKey = cleanAndNormalizeApiKey(api_key);
+    if (!apiKey) {
       const dbRes = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;");
       const cfg = dbRes.rows[0]?.value || {};
-      apiKey = cfg?.saved_keys?.[normalizedProvider] || (cfg?.provider === normalizedProvider ? cfg?.api_key : '') || '';
+      apiKey =
+        cleanAndNormalizeApiKey(cfg?.saved_keys?.[normalizedProvider]) ||
+        (cfg?.provider === normalizedProvider ? cleanAndNormalizeApiKey(cfg?.api_key) : '') ||
+        getEnvKeyForProvider(normalizedProvider);
     }
-
     if (!apiKey && normalizedProvider !== 'ollama') {
-      return res.status(200).json({
-        success: false,
-        error: `Chave de API não informada para [${normalizedProvider.toUpperCase()}].`
-      });
+      return res.status(200).json({ success: false, error: `Chave de API não informada para [${normalizedProvider.toUpperCase()}].` });
     }
-
-    const baseURL = (base_url?.trim() || endpoints[normalizedProvider] || endpoints.groq).replace(/\/+$/, '');
+    const rawUrl = String(base_url || '').trim();
+    const wrongUrl =
+      (normalizedProvider === 'deepseek' && !rawUrl.includes('deepseek.com')) ||
+      (normalizedProvider === 'groq' && !rawUrl.includes('groq.com')) ||
+      (normalizedProvider === 'openai' && !rawUrl.includes('openai.com')) ||
+      (normalizedProvider === 'openrouter' && !rawUrl.includes('openrouter.ai')) ||
+      (normalizedProvider === 'gemini' && !rawUrl.includes('googleapis.com'));
+    const baseURL = (!rawUrl || wrongUrl ? endpoints[normalizedProvider] : rawUrl).replace(/\/+$/, '');
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiKey && normalizedProvider !== 'ollama') {
-      headers['Authorization'] = `Bearer ${apiKey}`;
-    }
+    if (apiKey && normalizedProvider !== 'ollama') headers['Authorization'] = `Bearer ${apiKey}`;
 
     const response = await fetch(`${baseURL}/chat/completions`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model: targetModel,
-        messages: [{ role: 'user', content: 'Responda apenas: OK' }],
-        max_tokens: 10,
-        temperature: 0.1
-      }),
+      body: JSON.stringify({ model: targetModel, messages: [{ role: 'user', content: 'Responda apenas: OK' }], max_tokens: 10, temperature: 0.1 }),
       signal: AbortSignal.timeout(15000)
     });
-
     const data: any = await response.json();
     if (!response.ok) {
-      return res.status(200).json({
-        success: false,
-        error: `[${normalizedProvider.toUpperCase()} Recusou (${response.status})]: ${data?.error?.message || JSON.stringify(data)}`
-      });
+      const hint = response.status === 402 && normalizedProvider === 'deepseek'
+        ? ' (API oficial DeepSeek exige saldo. Para grátis use OpenRouter com deepseek/deepseek-chat:free).'
+        : '';
+      return res.status(200).json({ success: false, error: `[${normalizedProvider.toUpperCase()} (${response.status})]: ${data?.error?.message || JSON.stringify(data)}${hint}` });
     }
-
-    const reply = data?.choices?.[0]?.message?.content?.trim() || 'OK';
     return res.status(200).json({
       success: true,
-      message: `🟢 Conexão validada! ${normalizedProvider.toUpperCase()} / [${targetModel}] respondeu: "${reply}"`,
+      message: `🟢 Conexão validada! ${normalizedProvider.toUpperCase()} / [${targetModel}] respondeu: "${data?.choices?.[0]?.message?.content?.trim() || 'OK'}"`,
       provider: normalizedProvider,
       model: targetModel
     });
@@ -653,10 +629,7 @@ export async function listPromptVersions(_req: Request, res: Response) {
   try {
     await ensureSystemConfigsTable();
     const result = await pool.query("SELECT value FROM system_configs WHERE key = 'brain_prompt_versions';");
-    return res.status(200).json({
-      success: true,
-      data: result.rows.length > 0 ? result.rows[0].value : []
-    });
+    return res.status(200).json({ success: true, data: result.rows.length > 0 ? result.rows[0].value : [] });
   } catch (error: any) {
     return res.status(200).json({ success: true, data: [], error: error.message });
   }
@@ -668,45 +641,19 @@ export async function manageServerPortAndEnv(req: Request, res: Response) {
     if (!newPort || newPort < 1024 || newPort > 65535) {
       return res.status(200).json({ success: false, error: 'Informe uma porta TCP válida entre 1024 e 65535.' });
     }
-
     const currentPort = getEnvRegisteredPort();
     if (newPort === currentPort) {
-      return res.status(200).json({
-        success: true,
-        message: `O servidor já está operando na porta ${currentPort}.`,
-        port: currentPort
-      });
+      return res.status(200).json({ success: true, message: `O servidor já está operando na porta ${currentPort}.`, port: currentPort });
     }
-
     const isPortFree = await new Promise<boolean>((resolve) => {
-      const tester = net
-        .createServer()
-        .once('error', () => resolve(false))
-        .once('listening', () => tester.once('close', () => resolve(true)).close())
-        .listen(newPort, '127.0.0.1');
+      const tester = net.createServer().once('error', () => resolve(false)).once('listening', () => tester.once('close', () => resolve(true)).close()).listen(newPort, '127.0.0.1');
     });
-
-    if (!isPortFree) {
-      return res.status(200).json({
-        success: false,
-        error: `A porta ${newPort} já está em uso por outro processo neste computador.`
-      });
-    }
-
+    if (!isPortFree) return res.status(200).json({ success: false, error: `A porta ${newPort} já está em uso.` });
     const envPath = path.resolve(process.cwd(), '.env');
     let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
-    if (/^PORT=/m.test(envContent)) {
-      envContent = envContent.replace(/^PORT=.*$/m, `PORT=${newPort}`);
-    } else {
-      envContent += `\nPORT=${newPort}\n`;
-    }
+    envContent = /^PORT=/m.test(envContent) ? envContent.replace(/^PORT=.*$/m, `PORT=${newPort}`) : `${envContent}\nPORT=${newPort}\n`;
     fs.writeFileSync(envPath, envContent, 'utf-8');
-
-    return res.status(200).json({
-      success: true,
-      message: `Porta ${newPort} validada e gravada no .env! Reinicie o backend para aplicar.`,
-      port: newPort
-    });
+    return res.status(200).json({ success: true, message: `Porta ${newPort} gravada no .env!`, port: newPort });
   } catch (error: any) {
     return res.status(200).json({ success: false, error: error.message });
   }

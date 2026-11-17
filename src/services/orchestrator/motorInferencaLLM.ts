@@ -182,135 +182,65 @@ export async function chamarLLMCompativelOpenAI(options: {
   }
 
   // 2. SUPORTE GROQ, OPENROUTER, DEEPSEEK, OPENAI E OLLAMA
-  const client = new OpenAI({
-    apiKey: apiKey || 'ollama',
-    baseURL: creds.baseURL,
-    timeout: 30000,
-    defaultHeaders: provider === 'openrouter' ? { 'HTTP-Referer': 'https://jarvis.local', 'X-Title': 'JARVIS Neural Core' } : undefined
-  });
+  const resolvedBaseURL =
+    provider === 'deepseek' && !creds.baseURL.includes('deepseek.com')
+      ? 'https://api.deepseek.com/v1'
+      : creds.baseURL || 'https://api.groq.com/openai/v1';
 
-  const modeloInicial = creds.model || options.model;
-
-  const limparParaTexto = (msgs: any[]) => [
-    ...msgs
-      .filter((msg: any) => msg.role !== 'tool')
-      .map((msg: any) => {
-        if (msg.role === 'system' && typeof msg.content === 'string') {
-          return {
-            role: 'system',
-            content: msg.content
-              .replace(/REGRA CRÍTICA DE EXECUÇÃO:[\s\S]*?\n\n/g, '')
-              .replace(/\[REGRA IMPERATIVA[\s\S]*?\n\n/g, '')
-          };
-        }
-        if (msg.role === 'assistant' && Array.isArray(msg.tool_calls)) {
-          return { role: 'assistant', content: msg.content || 'A processar...' };
-        }
-        return { role: msg.role, content: msg.content };
-      }),
-    { role: 'system', content: 'Responda apenas em texto natural em português, sem chamar funções ou emitir tags <function>.' }
-  ];
-
-  const descobrirModeloAtivoNaConta = async (modeloAtual: string): Promise<string | null> => {
-    try {
-      const resp = await fetch(creds.baseURL.replace(/\/+$/, '') + '/models', {
-        headers: apiKey && provider !== 'ollama' ? { Authorization: 'Bearer ' + apiKey } : {}
-      });
-      if (!resp.ok) return null;
-      const json: any = await resp.json();
-      const ids: string[] = (Array.isArray(json?.data) ? json.data : [])
-        .map((item: any) => String(item?.id || ''))
-        .filter((id: string) =>
-          id &&
-          id !== modeloAtual &&
-          !/whisper|tts|guard|embed|orpheus|moderation|vision-preview/i.test(id)
-        );
-      if (ids.length === 0) return null;
-      const preferidos = [
-        'openai/gpt-oss-20b',
-        'meta-llama/llama-4-scout-17b-16e-instruct',
-        'qwen/qwen3-32b',
-        'llama-3.1-8b-instant',
-        'openai/gpt-oss-120b',
-        'openai/gpt-oss-20b'
-      ];
-      for (const pref of preferidos) {
-        if (ids.includes(pref)) return pref;
-      }
-      return ids[0];
-    } catch {
-      return null;
-    }
-  };
-
-  const executarComModelo = async (modeloAlvo: string, usarTools: boolean): Promise<any> => {
-    const payload: any = {
-      model: modeloAlvo,
-      messages: usarTools ? options.messages : limparParaTexto(options.messages),
-      temperature: options.temperature ?? 0.2
-    };
-    if (usarTools) {
-      payload.tools = options.tools;
-      payload.tool_choice = 'auto';
-      if (provider === 'groq') payload.parallel_tool_calls = false;
-    }
-    // __GUARD_TEXTO_PURO_V2__
-
-    if (!payload.tools) {
-
-      payload.messages = [
-
-        ...(payload.messages || []),
-
-        { role: 'system', content: 'MODO RESPOSTA TEXTUAL: Nenhuma ferramenta está ativa neste turno. NÃO chame funções nem emita tags <function>. Responda apenas em texto natural em português.' }
-
-      ];
-
-    }
-
-    return await client.chat.completions.create(payload);
-  };
-
-  try {
-    return await executarComModelo(modeloInicial, temTools);
-  } catch (err: any) {
-    const errMsg = String(err?.error?.message || err?.message || '');
-    const failedGen = String(err?.error?.failed_generation || errMsg);
-
-    if (temTools && failedGen.includes('<function=')) {
-      const fnMatch = failedGen.match(/<function=([a-zA-Z0-9_.-]+)[>\s]*([\s\S]*?)<\/function>/);
-      if (fnMatch) {
-        const rawArgs = (fnMatch[2] || '{}').trim();
-        return {
-          choices: [{
-            message: {
-              role: 'assistant',
-              content: '',
-              tool_calls: [{
-                id: 'call_' + Date.now(),
-                type: 'function',
-                function: { name: fnMatch[1].trim(), arguments: rawArgs.startsWith('{') ? rawArgs : '{}' }
-              }]
-            }
-          }]
-        };
-      }
-    }
-
-    if (/404|does not exist|do not have access|decommissioned|model_not_found/i.test(errMsg)) {
-      const modeloDescoberto = await descobrirModeloAtivoNaConta(modeloInicial);
-      if (modeloDescoberto) {
-        console.log('🔄 [Auto-Discovery LLM] Alternando para modelo ativo da chave: ' + modeloDescoberto);
-        try {
-          return await executarComModelo(modeloDescoberto, temTools);
-        } catch {
-          return await executarComModelo(modeloDescoberto, false);
-        }
-      }
-    }
-
-    return await executarComModelo(modeloInicial, false);
+  const client = new OpenAI({ apiKey: apiKey || 'ollama', baseURL: resolvedBaseURL, timeout: 35000 });
+  let modeloAlvo = creds.model;
+  if (provider === 'groq' && (!modeloAlvo || modeloAlvo.includes('8b-instant') || modeloAlvo.includes('deepseek-r1'))) {
+    modeloAlvo = 'llama-3.3-70b-versatile';
+  } else if (provider === 'deepseek' && (!modeloAlvo || !modeloAlvo.startsWith('deepseek'))) {
+    modeloAlvo = 'deepseek-chat';
   }
+
+  const modelosCandidatos =
+    provider === 'groq'
+      ? Array.from(new Set([modeloAlvo, 'llama-3.3-70b-versatile']))
+      : provider === 'deepseek'
+      ? Array.from(new Set([modeloAlvo, 'deepseek-chat']))
+      : [modeloAlvo];
+
+  let ultimoErro: any = null;
+  for (const modelo of modelosCandidatos) {
+    if (!modelo) continue;
+    try {
+      const payload: any = { model: modelo, messages: options.messages };
+      const ehSomenteRaciocinio = modelo.includes('gpt-oss') || modelo === 'deepseek-reasoner' || modelo.includes('o3-mini');
+      if (!ehSomenteRaciocinio) payload.temperature = options.temperature ?? 0.2;
+      if (options.tools && options.tools.length > 0 && !ehSomenteRaciocinio) {
+        payload.tools = options.tools;
+        payload.tool_choice = 'auto';
+      }
+      return await client.chat.completions.create(payload);
+    } catch (err: any) {
+      ultimoErro = err;
+      if (options.tools && options.tools.length > 0) {
+        try {
+          return await client.chat.completions.create({ model: modelo, messages: options.messages });
+        } catch (innerErr: any) {
+          ultimoErro = innerErr;
+        }
+      }
+    }
+  }
+
+  if (provider !== 'groq') {
+    const groqBackupKey = obterChaveContingenciaEnv('groq');
+    if (groqBackupKey) {
+      try {
+        const groqClient = new OpenAI({ apiKey: groqBackupKey, baseURL: 'https://api.groq.com/openai/v1', timeout: 30000 });
+        const backupPayload: any = { model: 'llama-3.3-70b-versatile', messages: options.messages, temperature: options.temperature ?? 0.2 };
+        if (options.tools && options.tools.length > 0) {
+          backupPayload.tools = options.tools;
+          backupPayload.tool_choice = 'auto';
+        }
+        return await groqClient.chat.completions.create(backupPayload);
+      } catch {}
+    }
+  }
+  throw ultimoErro || new Error(`Falha na comunicação com o provedor ${provider.toUpperCase()}`);
 }
 
 export const callOpenAICompatibleLLM = chamarLLMCompativelOpenAI;
