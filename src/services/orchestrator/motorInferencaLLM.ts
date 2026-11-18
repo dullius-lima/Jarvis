@@ -213,7 +213,9 @@ export async function chamarLLMCompativelOpenAI(options: {
         payload.tools = options.tools;
         payload.tool_choice = 'auto';
       }
-      return await client.chat.completions.create(payload);
+      const respLLM = await client.chat.completions.create(payload);
+      console.log(`🧠 [LLM Real] Provedor: ${provider.toUpperCase()} | Solicitado: ${modelo} | Respondido: ${respLLM?.model || modelo}`);
+      return respLLM;
     } catch (err: any) {
       ultimoErro = err;
       if (options.tools && options.tools.length > 0) {

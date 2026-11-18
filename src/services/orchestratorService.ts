@@ -353,7 +353,63 @@ export async function processarExecucaoWorkflow(
       }
     }
 
-    // 6. INTERCEPTAÇÃO DE CHAMADAS PSEUDO-TEXTO
+    // __XML_GLOBAL_GUARD__
+  if (textoRespostaFinal && textoRespostaFinal.includes('<function=')) {
+    const rxXml = new RegExp(
+      '<function=([a-zA-Z0-9_.-]+)[>\\s]*' +
+      '(\\{[\\s\\S]*?\\})?\\s*(?:</function>|$)',
+      'g'
+    );
+    const xmlCalls: any[] = [];
+    let xm: any;
+    while ((xm = rxXml.exec(textoRespostaFinal)) !== null) {
+      const rawNm = xm[1].trim();
+      const matchAg = encontrarAgenteResiliente(
+        rawNm,
+        dadosContexto.agentesAtivos
+      );
+      const finalNm = matchAg
+        ? sanitizeToolName(matchAg.slug)
+        : sanitizeToolName(rawNm);
+      let argStr = (xm[2] || '{}').trim().replace(/\\"/g, '"');
+      try { JSON.parse(argStr); } catch { argStr = '{}'; }
+      xmlCalls.push({
+        id: 'xml_' + Date.now() + '_' + xmlCalls.length,
+        type: 'function',
+        function: { name: finalNm, arguments: argStr }
+      });
+    }
+    if (xmlCalls.length > 0) {
+      const resXml = await processarChamadasDeFerramentas({
+        toolCalls: xmlCalls,
+        configuracaoCerebro: dadosContexto.configuracaoCerebro,
+        contextoTemporal: dadosContexto.contextoTemporal,
+        agentesAtivos: dadosContexto.agentesAtivos,
+        connectorsMap: dadosContexto.connectorsMap,
+        validToolSlugs: dadosContexto.validToolSlugs,
+        activeSpeakerName,
+        sessionId,
+        threadConversa: dadosContexto.threadConversa,
+        userPrompt,
+        mensagensBase
+      });
+      textoRespostaFinal = resXml.textoFinal;
+      triggeredAgentName = resXml.triggeredAgentName;
+      triggeredAgentId = resXml.triggeredAgentId;
+      triggeredNodeType = resXml.triggeredNodeType;
+      executedTools = resXml.executedTools || [];
+      if (Array.isArray(resXml.executionTrace)) {
+        for (const st of resXml.executionTrace) {
+          trilhaGlobalTurno.push({
+            ...st,
+            step: trilhaGlobalTurno.length + 1
+          });
+        }
+      }
+    }
+  }
+
+  // 6. INTERCEPTAÇÃO DE CHAMADAS PSEUDO-TEXTO
     const textoLimpoPrimeiraLinha = textoRespostaFinal.trim().split('\n')[0].trim();
     const ehPseudoComandoTexto =
       /^[a-z0-9_]{3,50}(?:\s+[a-z0-9_]+=[^\s]+.*|\s+list_events.*|\s+get_.*|---.*)?$/i.test(textoLimpoPrimeiraLinha) ||
