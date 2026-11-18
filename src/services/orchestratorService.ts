@@ -411,7 +411,11 @@ export async function processarExecucaoWorkflow(
 
   // 6. INTERCEPTAÇÃO DE CHAMADAS PSEUDO-TEXTO
     const textoLimpoPrimeiraLinha = textoRespostaFinal.trim().split('\n')[0].trim();
+    const matchColchete = textoRespostaFinal.match(
+      /\[\s*(?:acionando|executando|chamando|delegando\s+para)\s+(?:o|a)?\s*([^\]]+)\]/i
+    );
     const ehPseudoComandoTexto =
+      Boolean(matchColchete) ||
       /^[a-z0-9_]{3,50}(?:\s+[a-z0-9_]+=[^\s]+.*|\s+list_events.*|\s+get_.*|---.*)?$/i.test(textoLimpoPrimeiraLinha) ||
       textoLimpoPrimeiraLinha.includes('query=') ||
       textoLimpoPrimeiraLinha.includes('date=') ||
@@ -419,10 +423,15 @@ export async function processarExecucaoWorkflow(
       textoLimpoPrimeiraLinha.includes('home_detector');
 
     if (ehPseudoComandoTexto) {
-      const primeiroToken = sanitizeToolName(textoLimpoPrimeiraLinha.split(/[\s=]/)[0]);
+      const alvoBruto = matchColchete
+        ? matchColchete[1].trim()
+        : textoLimpoPrimeiraLinha.split(/[\s=]/)[0];
+      const primeiroToken = sanitizeToolName(alvoBruto);
 
       // Procura se esse comando pertence a um Subagente ou Conector
-      const agenteProprietario = dadosContexto.agentesAtivos.find((ag: any) => {
+      const agenteProprietario =
+        encontrarAgenteResiliente(alvoBruto, dadosContexto.agentesAtivos) ||
+        dadosContexto.agentesAtivos.find((ag: any) => {
         const slugNorm = sanitizeToolName(ag.slug);
         const toolsJson = JSON.stringify(ag.tools || []).toLowerCase();
         return slugNorm === primeiroToken || toolsJson.includes(primeiroToken);
@@ -454,7 +463,9 @@ export async function processarExecucaoWorkflow(
         executedTools.push(...toolsSub);
 
         const saidaElo = execCadeia[execCadeia.length - 1]?.output;
-        if (typeof saidaElo === 'string' && saidaElo.length > 0 && !saidaElo.startsWith('{')) {
+        if (saidaElo && typeof saidaElo === 'object' && typeof saidaElo.relatorio === 'string') {
+          textoRespostaFinal = saidaElo.relatorio;
+        } else if (typeof saidaElo === 'string' && saidaElo.length > 0 && !saidaElo.startsWith('{')) {
           textoRespostaFinal = saidaElo;
         } else {
           const sintese: any = await callOpenAICompatibleLLM({
