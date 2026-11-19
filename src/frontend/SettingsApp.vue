@@ -117,7 +117,7 @@ if (_urlAba) { abaAtiva.value = _urlAba as any; }
 
 registrarFerramentaWebMcp({
   name: "trocar_aba_configuracoes",
-  description: "Muda a aba visível no painel de configurações do JARVIS (brain, security, voices, agents, connectors, memory, prefs, manual).",
+  description: 'Muda a aba visível no painel APENAS quando o usuário ordenar explicitamente abrir ou navegar para uma aba. NUNCA acione em perguntas informativas.',
   inputSchema: {
     type: "object",
     properties: {

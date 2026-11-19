@@ -32,41 +32,43 @@ export const toolDelegarCriacaoSubagente = {
 // ============================================================================
 // 2. META-TOOL DE MEMÓRIA COGNITIVA (CURTO, MÉDIO E LONGO PRAZO)
 // ============================================================================
+const PRAZO_PADRAO_MEDIO_PRAZO: Record<string, number> = {
+  contexto_semanal: 21, // Faixa de 15 a 30 dias
+  tarefa_ativa: 45,     // Faixa de 45 a 60 dias
+  projeto: 180,         // Faixa de 90 a 180 dias (3 a 6 meses)
+  habito: 30
+};
+
 export const toolGerenciarMemoria = {
   type: 'function' as const,
   function: {
     name: 'gerenciar_memoria_cognitiva',
     description:
-      'Acione para salvar, consultar ou classificar informações na memória do JARVIS nos 3 níveis estruturados: curto_prazo (sessão imediata), medio_prazo (projetos/tarefas ativas de 7 a 90 dias com validade automática) ou longo_prazo (fatos imutáveis, diretrizes permanentes e contatos da agenda).',
+      'Acione OBRIGATORIAMENTE para salvar, atualizar, concluir ou consultar informações nos 3 níveis de memória do JARVIS: curto_prazo (sessão), medio_prazo (listas de compras, lembretes, tarefas ativas e projetos com validade de 15 a 180 dias) ou longo_prazo (regras permanentes e contatos). NUNCA crie arquivos .md ou .txt para listas ou anotações.',
     parameters: {
       type: 'object',
       properties: {
         acao: {
           type: 'string',
-          enum: ['salvar', 'consultar'],
-          description: 'Ação a ser executada: salvar nova memória ou consultar histórico armazenado.'
+          enum: ['salvar', 'atualizar', 'concluir', 'consultar'],
+          description: 'Use "salvar" para novo registro, "atualizar" para modificar/adicionar/remover itens de uma memória existente, "concluir" para encerrar uma tarefa finalizada, ou "consultar" para buscar.'
         },
         tipo_memoria: {
           type: 'string',
           enum: ['curto_prazo', 'medio_prazo', 'longo_prazo'],
-          description:
-            'Nível de persistência: curto_prazo (sessão), medio_prazo (episódica/projetos com expiração) ou longo_prazo (permanente).'
+          description: 'Nível de persistência: curto_prazo (sessão), medio_prazo (episódica de 15 a 180 dias) ou longo_prazo (permanente).'
         },
-        titulo: {
-          type: 'string',
-          description: 'Título ou identificador temático da memória (ex: "Rotina de Treino", "Projeto Reforma", "Telefone do João").'
-        },
-        conteudo: {
-          type: 'string',
-          description: 'O texto detalhado do fato, instrução, número ou regra a ser gravada ou localizada.'
-        },
+        id: { type: 'number', description: 'ID da memória episódica (para atualizar ou concluir).' },
+        titulo: { type: 'string', description: 'Título curto da memória (ex: "Lista de Compras", "Projeto Reforma").' },
+        conteudo: { type: 'string', description: 'Texto completo e atualizado do fato, lista ou instrução.' },
         categoria: {
           type: 'string',
-          description: 'Categoria de classificação (ex: "contato", "projeto", "habito", "financeiro", "rotina").'
+          enum: ['contexto_semanal', 'tarefa_ativa', 'projeto', 'habito', 'contato', 'geral'],
+          description: 'Para medio_prazo: "contexto_semanal" (15-30 dias), "tarefa_ativa" (45-60 dias) ou "projeto" (90-180 dias).'
         },
         dias_validade: {
           type: 'number',
-          description: 'Duração em dias caso seja medio_prazo (padrão: 30 dias).'
+          description: 'Validade em dias para medio_prazo (15-30 contexto_semanal, 45-60 tarefa_ativa, 90-180 projeto). Se omitido, usa o padrão da categoria.'
         }
       },
       required: ['acao', 'tipo_memoria', 'titulo']
@@ -102,160 +104,118 @@ export { construirOuEvoluirSubagente };
 // EXECUÇÃO DO GERENCIAMENTO DE MEMÓRIA (3 NÍVEIS)
 // ============================================================================
 export async function executarGerenciamentoMemoria(params: {
-  acao: 'salvar' | 'consultar';
+  acao: 'salvar' | 'atualizar' | 'concluir' | 'consultar';
   tipo_memoria: 'curto_prazo' | 'medio_prazo' | 'longo_prazo';
+  id?: number;
   titulo: string;
   conteudo?: string;
   categoria?: string;
   dias_validade?: number;
   session_id?: string;
 }) {
-  const {
-    acao,
-    tipo_memoria,
-    titulo,
-    conteudo = '',
-    categoria = 'geral',
-    dias_validade = 30,
-    session_id = 'default_session'
-  } = params;
+  const { acao, tipo_memoria, id, titulo, conteudo = '', categoria = 'contexto_semanal', dias_validade, session_id = 'default_session' } = params;
 
-  // 1. AÇÃO: SALVAR MEMÓRIA
+  const resolverDias = (cat: string, inf?: number) => {
+    if (inf && Number(inf) > 0) return Math.min(Math.max(Number(inf), 1), 180);
+    return PRAZO_PADRAO_MEDIO_PRAZO[cat] || 21;
+  };
+
   if (acao === 'salvar') {
     if (tipo_memoria === 'curto_prazo') {
       await pool.query(
-        `INSERT INTO jarvis_chat_memory (session_id, role, content)
-         VALUES ($1, 'system', $2);`,
+        `INSERT INTO jarvis_chat_memory (session_id, role, content) VALUES ($1, 'system', $2);`,
         [session_id, `[MEMÓRIA CURTO PRAZO - ${titulo}]: ${conteudo}`]
       ).catch(() => {});
-
-      return {
-        success: true,
-        tipo_memoria: 'curto_prazo',
-        titulo,
-        message: `Memória de curto prazo retida na sessão ativa: "${titulo}".`
-      };
+      return { success: true, tipo_memoria: 'curto_prazo', titulo, message: `Memória de curto prazo retida na sessão: "${titulo}".` };
     }
 
     if (tipo_memoria === 'medio_prazo') {
-      const dias = Number(dias_validade) > 0 ? Number(dias_validade) : 30;
-      await pool.query(
+      const catFinal = ['contexto_semanal', 'tarefa_ativa', 'projeto', 'habito'].includes(categoria) ? categoria : 'contexto_semanal';
+      const dias = resolverDias(catFinal, dias_validade);
+      const insRes = await pool.query(
         `INSERT INTO jarvis_episodic_memory (categoria, titulo, conteudo, expires_at, metadata)
-         VALUES ($1, $2, $3, NOW() + ($4 || ' days')::interval, $5::jsonb);`,
-        [
-          categoria,
-          titulo,
-          conteudo,
-          dias,
-          JSON.stringify({ origem: 'brainMetaTools', dias_validade: dias, salvo_em: new Date().toISOString() })
-        ]
+         VALUES ($1, $2, $3, NOW() + ($4 || ' days')::interval, $5::jsonb)
+         RETURNING id, expires_at;`,
+        [catFinal, titulo, conteudo, dias, JSON.stringify({ origem: 'brainMetaTools', categoria: catFinal, dias_validade: dias })]
       );
-
       return {
         success: true,
+        id: insRes.rows[0]?.id,
         tipo_memoria: 'medio_prazo',
+        categoria: catFinal,
         dias_validade: dias,
+        expires_at: insRes.rows[0]?.expires_at,
         titulo,
-        message: `Memória de médio prazo guardada na camada episódica por ${dias} dias: "${titulo}".`
+        message: `Memória de médio prazo (${catFinal}) salva por ${dias} dias: "${titulo}".`
       };
     }
 
     if (tipo_memoria === 'longo_prazo') {
-      // Sincronização automática com a tabela de contatos se o dado envolver contato/telefone
       if (categoria === 'contato' || /telefone|contato|whatsapp|celular/i.test(titulo)) {
         const digitos = conteudo.replace(/\D/g, '');
         if (digitos.length >= 8) {
           let fone = digitos;
-          if (fone.length === 8 || fone.length === 9) {
-            fone = `5567${fone.length === 8 ? '9' + fone : fone}`;
-          } else if (fone.length === 10 || fone.length === 11) {
-            fone = `55${fone}`;
-          }
-
-          const nomeNormalizado = titulo
-            .toLowerCase()
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .trim();
-
+          if (fone.length === 8 || fone.length === 9) fone = `5567${fone.length === 8 ? '9' + fone : fone}`;
+          else if (fone.length === 10 || fone.length === 11) fone = `55${fone}`;
+          const nomeNorm = titulo.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
           await pool.query(
-            `INSERT INTO contatos_agenda (nome, telefone, apelidos)
-             VALUES ($1, $2, ARRAY[$3])
+            `INSERT INTO contatos_agenda (nome, telefone, apelidos) VALUES ($1, $2, ARRAY[$3])
              ON CONFLICT (nome) DO UPDATE SET telefone = EXCLUDED.telefone, atualizado_em = NOW();`,
-            [nomeNormalizado, fone, titulo]
+            [nomeNorm, fone, titulo]
           ).catch(() => {});
         }
       }
-
-      // Ingestão no repositório de documentos vetoriais permanentes
-      await pool.query(
-        `INSERT INTO vector_documents (content, metadata)
-         VALUES ($1, $2::jsonb);`,
-        [
-          `[MEMÓRIA LONGO PRAZO - ${titulo}]: ${conteudo}`,
-          JSON.stringify({ titulo, categoria, nivel: 'longo_prazo', persistencia: 'permanente' })
-        ]
-      );
-
-      return {
-        success: true,
-        tipo_memoria: 'longo_prazo',
-        titulo,
-        message: `Fato gravado permanentemente na memória de longo prazo: "${titulo}".`
-      };
+      await pool.query(`INSERT INTO vector_documents (title, content, category) VALUES ($1, $2, 'permanente');`, [titulo, conteudo]);
+      return { success: true, tipo_memoria: 'longo_prazo', titulo, message: `Fato gravado permanentemente na memória de longo prazo: "${titulo}".` };
     }
   }
 
-  // 2. AÇÃO: CONSULTAR MEMÓRIA
+  if (acao === 'atualizar' && tipo_memoria === 'medio_prazo') {
+    const dias = resolverDias(categoria, dias_validade);
+    const updRes = id
+      ? await pool.query(
+          `UPDATE jarvis_episodic_memory SET conteudo = $1, titulo = COALESCE(NULLIF($2, ''), titulo), expires_at = NOW() + ($3 || ' days')::interval WHERE id = $4 RETURNING id, titulo, conteudo, expires_at;`,
+          [conteudo, titulo, dias, id]
+        )
+      : await pool.query(
+          `UPDATE jarvis_episodic_memory SET conteudo = $1, expires_at = NOW() + ($2 || ' days')::interval
+           WHERE id = (SELECT id FROM jarvis_episodic_memory WHERE expires_at > NOW() AND titulo ILIKE $3 ORDER BY id DESC LIMIT 1)
+           RETURNING id, titulo, conteudo, expires_at;`,
+          [conteudo, dias, `%${titulo}%`]
+        );
+    if (updRes.rows.length > 0) {
+      return { success: true, registro: updRes.rows[0], message: `Memória "${updRes.rows[0].titulo}" atualizada (válida por mais ${dias} dias).` };
+    }
+    return { success: false, message: `Nenhuma memória episódica ativa encontrada com "${titulo}".` };
+  }
+
+  if (acao === 'concluir' && tipo_memoria === 'medio_prazo') {
+    const delRes = id
+      ? await pool.query(`UPDATE jarvis_episodic_memory SET expires_at = NOW() WHERE id = $1 RETURNING id, titulo;`, [id])
+      : await pool.query(
+          `UPDATE jarvis_episodic_memory SET expires_at = NOW()
+           WHERE id = (SELECT id FROM jarvis_episodic_memory WHERE expires_at > NOW() AND titulo ILIKE $1 ORDER BY id DESC LIMIT 1)
+           RETURNING id, titulo;`,
+          [`%${titulo}%`]
+        );
+    return {
+      success: delRes.rows.length > 0,
+      message: delRes.rows.length > 0 ? `Memória "${delRes.rows[0].titulo}" concluída e encerrada.` : `Registro "${titulo}" já encerrado.`
+    };
+  }
+
   if (acao === 'consultar') {
     if (tipo_memoria === 'curto_prazo') {
-      const res = await pool.query(
-        `SELECT role, content, created_at FROM jarvis_chat_memory 
-         WHERE session_id = $1 AND content ILIKE $2 
-         ORDER BY id DESC LIMIT 5;`,
-        [session_id, `%${titulo}%`]
-      ).catch(() => ({ rows: [] as any[] }));
-
-      return {
-        success: true,
-        tipo_memoria: 'curto_prazo',
-        total: res.rows.length,
-        registros: res.rows
-      };
+      const res = await pool.query(`SELECT role, content, created_at FROM jarvis_chat_memory WHERE session_id = $1 AND content ILIKE $2 ORDER BY id DESC LIMIT 5;`, [session_id, `%${titulo}%`]).catch(() => ({ rows: [] as any[] }));
+      return { success: true, tipo_memoria: 'curto_prazo', total: res.rows.length, registros: res.rows };
     }
-
     if (tipo_memoria === 'medio_prazo') {
-      const res = await pool.query(
-        `SELECT id, categoria, titulo, conteudo, expires_at, created_at 
-         FROM jarvis_episodic_memory 
-         WHERE expires_at > NOW() AND (titulo ILIKE $1 OR conteudo ILIKE $1)
-         ORDER BY id DESC LIMIT 5;`,
-        [`%${titulo}%`]
-      ).catch(() => ({ rows: [] as any[] }));
-
-      return {
-        success: true,
-        tipo_memoria: 'medio_prazo',
-        total: res.rows.length,
-        registros: res.rows
-      };
+      const res = await pool.query(`SELECT id, categoria, titulo, conteudo, expires_at, created_at FROM jarvis_episodic_memory WHERE expires_at > NOW() AND (titulo ILIKE $1 OR conteudo ILIKE $1) ORDER BY id DESC LIMIT 10;`, [`%${titulo}%`]).catch(() => ({ rows: [] as any[] }));
+      return { success: true, tipo_memoria: 'medio_prazo', total: res.rows.length, registros: res.rows };
     }
-
     if (tipo_memoria === 'longo_prazo') {
-      const res = await pool.query(
-        `SELECT id, content, metadata, created_at 
-         FROM vector_documents 
-         WHERE content ILIKE $1 
-         ORDER BY id DESC LIMIT 5;`,
-        [`%${titulo}%`]
-      ).catch(() => ({ rows: [] as any[] }));
-
-      return {
-        success: true,
-        tipo_memoria: 'longo_prazo',
-        total: res.rows.length,
-        registros: res.rows
-      };
+      const res = await pool.query(`SELECT id, title, content, metadata, created_at FROM vector_documents WHERE content ILIKE $1 OR title ILIKE $1 ORDER BY id DESC LIMIT 5;`, [`%${titulo}%`]).catch(() => ({ rows: [] as any[] }));
+      return { success: true, tipo_memoria: 'longo_prazo', total: res.rows.length, registros: res.rows };
     }
   }
 

@@ -1,3 +1,4 @@
+import { callWebMcpTool, ensureActiveWebMcpTools, tryUniversalWebMcpAutoExec } from "./webMcpService.js";
 // src/services/orchestratorService.ts
 import { pool } from '../config/database.js';
 import { ingestDocumentToRag } from './ragService.js';
@@ -72,48 +73,28 @@ export {
 /**
  * Localização flexível e resiliente de Agentes Especialistas
  */
-function encontrarAgenteResiliente(fnName: string, agentes: any[]): any | undefined {
+function encontrarAgenteResiliente(fnName: string, agentes: any[]) {
   if (!fnName || !Array.isArray(agentes)) return undefined;
-
-  const normalizar = (str: string) =>
-    (str || '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9]/g, '');
-
-  const alvo = normalizar(fnName);
-  if (!alvo) return undefined;
-
-  let correspondente = agentes.find((a: any) => normalizar(a.slug) === alvo);
-  if (correspondente) return correspondente;
-
-  correspondente = agentes.find((a: any) => normalizar(a.name) === alvo);
-  if (correspondente) return correspondente;
-
-  correspondente = agentes.find((a: any) => {
-    const slugNorm = normalizar(a.slug);
-    const nomeNorm = normalizar(a.name);
-    return (
-      (slugNorm.length >= 4 && alvo.includes(slugNorm)) ||
-      (alvo.length >= 4 && slugNorm.includes(alvo)) ||
-      (nomeNorm.length >= 4 && alvo.includes(nomeNorm)) ||
-      (alvo.length >= 4 && nomeNorm.includes(alvo))
-    );
-  });
-
-  return correspondente;
+  const n = (x: string) => (x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+  const alvo = n(fnName);
+  const blk = new Set(['jarvis','agente','especialista','mcp','webmcp','tool','core','sistema']);
+  if (!alvo || blk.has(alvo)) return undefined;
+  return agentes.find((a: any) => n(a.slug) === alvo || n(a.name) === alvo)
+    || agentes.find((a: any) => { const sl = n(a.slug); return sl.length >= 6 && !blk.has(sl) && alvo.includes(sl); });
 }
 
 /**
  * Processamento principal do fluxo cognitivo, sensorial e execução de ferramentas
  */
+
+
 export async function processarExecucaoWorkflow(
   identityToken: string,
   userPrompt: string,
   sessionId = `sess_${Date.now()}`,
   sensoryInput?: SensorPayload | SensoryAttachments | any
 ) {
+
   const trilhaGlobalTurno: any[] = [];
   let passosRotaFinal: any[] = [];
   let rotaCompletaTexto = '🧠 JARVIS';
@@ -248,6 +229,113 @@ export async function processarExecucaoWorkflow(
     let executedTools: string[] = [];
 
     // 5. Execução de Ferramentas Nativas / Especialistas
+    // [WEBMCP_STEP5_START]
+    // 5.0 Converte qualquer bloco <tool_call>...</tool_call> emitido em texto para tool_calls nativas
+    if (typeof textoRespostaFinal === 'string' && textoRespostaFinal.includes('<tool_call>')) {
+      const _rxTc = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+      const _extractedCalls: any[] = [];
+      let _mTc: RegExpExecArray | null;
+      while ((_mTc = _rxTc.exec(textoRespostaFinal)) !== null) {
+        const _inner = String(_mTc[1] || '').trim();
+        let _fn = '';
+        let _argsObj: Record<string, any> = {};
+        if (_inner.startsWith('{')) {
+          try {
+            const _o = JSON.parse(_inner);
+            _fn = String(_o.name || _o.tool || _o.tool_name || _o.function || '').trim();
+            const _ra = _o.arguments ?? _o.args ?? _o.params ?? _o.parameters ?? {};
+            _argsObj = typeof _ra === 'string' ? JSON.parse(_ra) : (_ra || {});
+          } catch {}
+        } else {
+          const _bIdx = _inner.indexOf('{');
+          if (_bIdx !== -1) {
+            _fn = _inner.slice(0, _bIdx).trim().replace(/\(.*$/, '').trim();
+            const _jPart = _inner.slice(_bIdx).replace(/\)\s*$/, '').trim();
+            try { _argsObj = JSON.parse(_jPart); } catch {}
+          } else {
+            _fn = _inner.replace(/\(\s*\)\s*$/, '').trim();
+          }
+        }
+        if (_fn) {
+          _extractedCalls.push({
+            id: `call_wmcp_${Date.now()}_${_extractedCalls.length}`,
+            type: 'function',
+            function: { name: _fn, arguments: JSON.stringify(_argsObj) }
+          });
+        }
+      }
+      if (_extractedCalls.length > 0 && mensagemEscolha) {
+        mensagemEscolha.tool_calls = [
+          ...(Array.isArray(mensagemEscolha.tool_calls) ? mensagemEscolha.tool_calls : []),
+          ..._extractedCalls
+        ];
+        textoRespostaFinal = textoRespostaFinal.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim();
+        mensagemEscolha.content = textoRespostaFinal;
+      }
+    }
+
+    // 5.0.1 Execução Universal Direta para ferramentas WebMCP ativas na tela (descoberta via schema vivo)
+    if (Array.isArray(mensagemEscolha?.tool_calls) && mensagemEscolha.tool_calls.length > 0) {
+      const _liveWmcp = await ensureActiveWebMcpTools(350);
+      if (_liveWmcp.length > 0) {
+        const _remainingCalls: any[] = [];
+        for (const _tc of mensagemEscolha.tool_calls) {
+          const _rawName = String(_tc?.function?.name || '').trim();
+          const _cleanName = sanitizeToolName(_rawName);
+          const _matchedWmcp = _liveWmcp.find(
+            (wt) => wt.name === _rawName || sanitizeToolName(wt.name) === _cleanName
+          );
+          if (_matchedWmcp) {
+            let _wArgs: Record<string, any> = {};
+            try {
+              const _ra = _tc?.function?.arguments;
+              _wArgs = typeof _ra === 'string' ? JSON.parse(_ra || '{}') : (_ra || {});
+            } catch {}
+            const _wmcpOut = await callWebMcpTool(_matchedWmcp.name, _wArgs);
+            textoRespostaFinal =
+              typeof _wmcpOut === 'string'
+                ? _wmcpOut
+                : _wmcpOut?.mensagem || `✅ Ação '${_matchedWmcp.name}' executada na interface.`;
+            triggeredAgentName = 'Controlador de Interface (WebMCP)';
+            triggeredAgentId = _matchedWmcp.name;
+            triggeredNodeType = 'api';
+            executedTools.push(_matchedWmcp.name);
+            trilhaGlobalTurno.push({
+              step: trilhaGlobalTurno.length + 1,
+              kind: 'tool',
+              slug: _matchedWmcp.name,
+              name: _matchedWmcp.name,
+              parentSlug: 'jarvis_core',
+              status: 'ok'
+            });
+          } else {
+            _remainingCalls.push(_tc);
+          }
+        }
+        mensagemEscolha.tool_calls = _remainingCalls;
+      }
+    }
+
+    // 5.0.2 Contingência semântica universal caso a LLM apenas narre a ação ("Vou abrir a aba...") sem emitir tool_call
+    if (executedTools.length === 0 && (!Array.isArray(mensagemEscolha?.tool_calls) || mensagemEscolha.tool_calls.length === 0)) {
+      try {
+        const _autoWmcp = await tryUniversalWebMcpAutoExec(String(userPrompt || ''), String(textoRespostaFinal || ''));
+        if (_autoWmcp) {
+          textoRespostaFinal =
+            typeof _autoWmcp.result === 'string'
+              ? _autoWmcp.result
+              : _autoWmcp.result?.mensagem || `✅ Ação '${_autoWmcp.toolName}' executada na interface.`;
+          triggeredAgentName = 'Controlador de Interface (WebMCP)';
+          triggeredAgentId = _autoWmcp.toolName;
+          triggeredNodeType = 'api';
+          executedTools.push(_autoWmcp.toolName);
+        }
+      } catch (_wErr: any) {
+        console.warn('[WebMCP AutoExec]', _wErr?.message || _wErr);
+      }
+    }
+    // [WEBMCP_STEP5_END]
+
     if (Array.isArray(mensagemEscolha?.tool_calls) && mensagemEscolha.tool_calls.length > 0) {
       const callMemoria = mensagemEscolha.tool_calls.find(
         (tc: any) => sanitizeToolName(tc.function?.name) === 'salvar_memoria_permanente'
@@ -434,7 +522,7 @@ export async function processarExecucaoWorkflow(
         dadosContexto.agentesAtivos.find((ag: any) => {
         const slugNorm = sanitizeToolName(ag.slug);
         const toolsJson = JSON.stringify(ag.tools || []).toLowerCase();
-        return slugNorm === primeiroToken || toolsJson.includes(primeiroToken);
+        return slugNorm === primeiroToken || (Array.isArray(ag.tools) && ag.tools.map((t: any) => sanitizeToolName(String(t))).includes(primeiroToken));
       });
 
       // Extrai ticker ou query do comando

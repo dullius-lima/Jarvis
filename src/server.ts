@@ -1,3 +1,4 @@
+import { handleWebMcpJsonRpc } from "./services/webMcpService.js";
 import crypto from 'crypto';
 // src/server.ts
 import dotenv from 'dotenv';
@@ -472,6 +473,8 @@ app.all('/api/v1/webhook/global/:key', handleGlobalWebhookTrigger);
 app.all('/api/v1/webhook-test/global/:key', handleGlobalWebhookTrigger);
 
 // 9. Health Check
+app.post(["/api/v1/webmcp", "/api/v1/webmcp/mcp"], handleWebMcpJsonRpc);
+
 app.get('/health', (_req: Request, res: Response) => {
   return res.json({
     status: 'online',

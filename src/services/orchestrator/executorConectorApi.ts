@@ -224,7 +224,11 @@ export async function executarConectorApiUniversal(
     ).trim(),
     symbol: String(
       taskArgs?.symbol || taskArgs?.ticker || (tickerMatch ? tickerMatch[1] : taskArgs?.query || '')
-    ).trim()
+    ).trim(),
+    prontuario: String(taskArgs?.prontuario || taskArgs?.nr_prontuario || taskArgs?.query || "").trim(),
+    atendimento: String(taskArgs?.atendimento || taskArgs?.nr_atendimento || "").trim(),
+    cpf: String(taskArgs?.cpf || "").replace(/\D/g, ""),
+    setor: String(taskArgs?.setor || taskArgs?.cd_setor || "").trim()
   };
 
   for (const [chave, val] of Object.entries(taskArgs || {})) {

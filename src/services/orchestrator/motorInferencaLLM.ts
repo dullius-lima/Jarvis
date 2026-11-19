@@ -1,3 +1,57 @@
+// [WEBMCP_TOOLCALL_PARSER_START]
+function _converterXmlToolCallsParaNativo(completion: any, permitirTools: boolean) {
+  const msg = completion?.choices?.[0]?.message;
+  const rawContent = typeof msg?.content === 'string' ? msg.content : '';
+  if (!rawContent || !rawContent.includes('<tool_call>')) return completion;
+
+  const rx = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+  const parsedCalls: any[] = [];
+  let m: RegExpExecArray | null;
+
+  while ((m = rx.exec(rawContent)) !== null) {
+    const inner = String(m[1] || '').trim();
+    let fnName = '';
+    let fnArgsObj: Record<string, any> = {};
+
+    if (inner.startsWith('{')) {
+      try {
+        const obj = JSON.parse(inner);
+        fnName = String(obj.name || obj.tool || obj.tool_name || obj.function || '').trim();
+        const rawA = obj.arguments ?? obj.args ?? obj.params ?? obj.parameters ?? {};
+        fnArgsObj = typeof rawA === 'string' ? JSON.parse(rawA) : (rawA || {});
+      } catch {}
+    } else {
+      const braceIdx = inner.indexOf('{');
+      if (braceIdx !== -1) {
+        fnName = inner.slice(0, braceIdx).trim().replace(/\(.*$/, '').trim();
+        const jsonPart = inner.slice(braceIdx).replace(/\)\s*$/, '').trim();
+        try {
+          fnArgsObj = JSON.parse(jsonPart);
+        } catch {}
+      } else {
+        fnName = inner.replace(/\(\s*\)\s*$/, '').trim();
+      }
+    }
+
+    if (fnName) {
+      parsedCalls.push({
+        id: `call_wmcp_${Date.now()}_${parsedCalls.length}`,
+        type: 'function',
+        function: {
+          name: fnName,
+          arguments: JSON.stringify(fnArgsObj)
+        }
+      });
+    }
+  }
+
+  if (permitirTools && parsedCalls.length > 0) {
+    msg.tool_calls = [...(Array.isArray(msg.tool_calls) ? msg.tool_calls : []), ...parsedCalls];
+  }
+  msg.content = rawContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim();
+  return completion;
+}
+// [WEBMCP_TOOLCALL_PARSER_END]
 // src/services/orchestrator/motorInferencaLLM.ts
 import OpenAI from 'openai';
 import { resolveProviderCredentials } from './brainConfigAndUtils.js';
@@ -82,6 +136,15 @@ export async function chamarLLMCompativelOpenAI(options: {
     );
   }
 
+  if (Array.isArray(options.tools) && options.tools.length > 0) {
+    const _v = new Set<string>();
+    options.tools = options.tools.filter((t: any) => {
+      const n = t?.function?.name;
+      if (!n || _v.has(n)) return false;
+      _v.add(n);
+      return true;
+    });
+  }
   const temTools = Array.isArray(options.tools) && options.tools.length > 0;
 
   // 1. SUPORTE GOOGLE GEMINI NATIVO
@@ -122,7 +185,7 @@ export async function chamarLLMCompativelOpenAI(options: {
                 parameters: (() => {
               const p = JSON.parse(JSON.stringify(t.function.parameters || { type: 'object', properties: {} }));
               delete p.additionalProperties;
-              delete p.$schema;
+              delete p.$schema; if (!p.properties || Object.keys(p.properties).length === 0) { p.properties = { confirmar: { type: 'boolean' } }; }
               return p;
             })()
               }))
@@ -213,11 +276,12 @@ export async function chamarLLMCompativelOpenAI(options: {
         payload.tools = options.tools;
         payload.tool_choice = 'auto';
       }
-      const respLLM = await client.chat.completions.create(payload);
+    return _converterXmlToolCallsParaNativo(await client.chat.completions.create(payload), Boolean(typeof temTools !== "undefined" ? temTools : payload?.tools?.length));
       console.log(`🧠 [LLM Real] Provedor: ${provider.toUpperCase()} | Solicitado: ${modelo} | Respondido: ${respLLM?.model || modelo}`);
       return respLLM;
     } catch (err: any) {
       ultimoErro = err;
+      console.warn('[LLM Tools Falhou]', modelo, err?.status || '', String(err?.message || err).slice(0, 220));
       if (options.tools && options.tools.length > 0) {
         try {
           return await client.chat.completions.create({ model: modelo, messages: options.messages });

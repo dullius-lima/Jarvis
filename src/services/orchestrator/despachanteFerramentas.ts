@@ -1,3 +1,4 @@
+import { callWebMcpTool, ensureActiveWebMcpTools } from "../webMcpService.js";
 // src/services/orchestrator/despachanteFerramentas.ts
 import { sanitizeToolName } from './brainConfigAndUtils.js';
 import {
@@ -115,11 +116,54 @@ export async function processarChamadasDeFerramentas(params: {
     cicloOrquestrador++;
 
     for (const toolCall of filaToolCallsAtual) {
+    // [WEBMCP_DESP_START]
+    {
+      const _rawFnName = String(toolCall?.function?.name || '').trim();
+      const _cleanFnName = sanitizeToolName(_rawFnName);
+      const _wmcpTools = await ensureActiveWebMcpTools(350);
+      const _matchedWmcp = _wmcpTools.find(
+        (wt) => wt.name === _rawFnName || sanitizeToolName(wt.name) === _cleanFnName
+      );
+      if (_matchedWmcp) {
+        let _wmcpArgs: Record<string, any> = {};
+        try {
+          const _rawA = toolCall?.function?.arguments;
+          _wmcpArgs = typeof _rawA === 'string' ? JSON.parse(_rawA || '{}') : (_rawA || {});
+        } catch {}
+        const _wmcpOut = await callWebMcpTool(_matchedWmcp.name, _wmcpArgs);
+        triggeredAgentName = 'Controlador de Interface (WebMCP)';
+        triggeredAgentId = _matchedWmcp.name;
+        triggeredNodeType = 'api';
+        toolsUsadas.push(_matchedWmcp.name);
+        trilhaExecucao.push({
+          step: trilhaExecucao.length + 1,
+          kind: 'tool',
+          slug: _matchedWmcp.name,
+          name: _matchedWmcp.name,
+          parentSlug: 'jarvis_core',
+          status: 'ok'
+        });
+        const _resText =
+          typeof _wmcpOut === 'string'
+            ? _wmcpOut
+            : _wmcpOut?.mensagem || `✅ Ação '${_matchedWmcp.name}' executada na interface.`;
+        saidasFerramentasParaSintese.push({
+          step: saidasFerramentasParaSintese.length + 1,
+          toolName: _matchedWmcp.name,
+          agentName: 'Controlador de Interface (WebMCP)',
+          result: _resText,
+          isReadySpecialistText: true
+        });
+        continue;
+      }
+    }
+    // [WEBMCP_DESP_END]
       if (toolCall.type !== 'function') continue;
 
       const fnName = sanitizeToolName(toolCall.function?.name);
       const rawArgs = toolCall.function?.arguments || '{}';
-      let argsParsed: Record<string, any> = {};
+      let argsParsed: Record<string, any> = {}
+      ;
       try {
         argsParsed = JSON.parse(rawArgs);
       } catch {
@@ -327,21 +371,14 @@ export async function processarChamadasDeFerramentas(params: {
         continue;
       }
 
-      // 3. Subagentes Especialistas Ativos (Busca Tolerante e Resiliente)
+      
+    // 3. Subagentes Especialistas Ativos (Busca Tolerante e Resiliente)
       const alvo = normalizar(fnName);
 
-      const agenteCorrespondente = agentesAtivos.find((a: any) => {
-        const slugNorm = normalizar(a.slug);
-        const nomeNorm = normalizar(a.name);
-        return (
-          slugNorm === alvo ||
-          nomeNorm === alvo ||
-          (slugNorm.length >= 4 && alvo.includes(slugNorm)) ||
-          (alvo.length >= 4 && slugNorm.includes(alvo)) ||
-          (nomeNorm.length >= 4 && alvo.includes(nomeNorm)) ||
-          (alvo.length >= 4 && nomeNorm.includes(alvo))
-        );
-      });
+      const blk = new Set(['jarvis','agente','especialista','mcp','webmcp','tool','core','sistema']);
+  const agenteCorrespondente =
+    agentesAtivos.find((a: any) => normalizar(a.slug) === alvo || normalizar(a.name) === alvo) ||
+    (!blk.has(alvo) ? agentesAtivos.find((a: any) => { const sl = normalizar(a.slug); return sl.length >= 6 && !blk.has(sl) && alvo.includes(sl); }) : undefined);
 
       if (agenteCorrespondente) {
         const agenteComTempo = {
