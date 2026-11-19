@@ -30,6 +30,24 @@
           <label v-pre>Endpoint / URL (Aceita {{BASE_URL}}, {{query}})</label>
           <input type="text" v-model="conn.endpoint_url" class="input-field" placeholder="https://..." />
         </div>
+<!-- HTTP_METHOD_BOX_START -->
+<div v-if="conn" style="margin-top: 8px;">
+  <label style="font-size: 11px; color: #94a3b8; font-weight: 600; display: block; margin-bottom: 4px;">
+    Método HTTP (APIs Customizadas / Webhooks)
+  </label>
+  <select
+    :value="(conn.http_method || (conn.config && conn.config.http_method) || 'GET').toUpperCase()"
+    @change="atualizarMetodoHttpConector(conn, $event)"
+    style="width: 100%; padding: 7px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; font-family: monospace; font-size: 12px; cursor: pointer;"
+  >
+    <option value="GET">GET (Consultar / Listar)</option>
+    <option value="POST">POST (Criar / Disparar Webhook)</option>
+    <option value="PUT">PUT (Atualizar Registro Completo)</option>
+    <option value="PATCH">PATCH (Atualizar Parcialmente)</option>
+    <option value="DELETE">DELETE (Remover Registro)</option>
+  </select>
+</div>
+<!-- HTTP_METHOD_BOX_END -->
 
         <div class="agent-card-actions">
           <button @click="testarConexaoExistente(conn)" class="btn-test" style="flex: 1;">
@@ -201,6 +219,19 @@ async function excluirConexaoDoCofre(chaveProvedor: string, nome?: string) {
 onMounted(async () => {
   await buscarConexoesExternas();
 });
+
+// HTTP_METHOD_SCRIPT_START
+function atualizarMetodoHttpConector(item: any, ev: Event) {
+  if (!item) return;
+  const el = ev?.target as HTMLSelectElement | null;
+  const method = (el?.value || 'GET').toUpperCase();
+  item.http_method = method;
+  if (item.config && typeof item.config === 'object') {
+    item.config.http_method = method;
+  }
+}
+// HTTP_METHOD_SCRIPT_END
+
 </script>
 
 <style scoped>

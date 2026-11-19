@@ -173,6 +173,7 @@
 </template>
 
 <script setup lang="ts">
+import { registrarFerramentaWebMcp } from "./services/webMcpBridge";
 import { ref, onMounted, onUnmounted, watchEffect } from 'vue';
 
 // Composables do Ecossistema
@@ -417,6 +418,34 @@ onMounted(async () => {
 });
 
 onUnmounted(() => { stopAllEngines(); });
+
+registrarFerramentaWebMcp({
+  name: "abrir_painel_configuracoes",
+  description: "Abre o painel de configurações do JARVIS (settings.html) no dispositivo ativo.",
+  inputSchema: { type: "object", properties: {} },
+  execute: () => {
+    window.location.href = "/settings.html";
+    return { success: true, mensagem: "Navegando para o painel de configurações." };
+  }
+});
+
+
+registrarFerramentaWebMcp({
+  name: "trocar_aba_configuracoes",
+  description: "Abre o painel de configurações do JARVIS diretamente na aba solicitada (brain, security, voices, agents, connectors, memory, prefs, manual).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      aba: { type: "string", enum: ["brain", "security", "voices", "agents", "connectors", "memory", "prefs", "manual"] }
+    },
+    required: ["aba"]
+  },
+  execute: ({ aba }) => {
+    try { localStorage.setItem("jarvis_active_tab", aba); } catch {}
+    setTimeout(() => { window.location.href = `/settings.html?aba=${encodeURIComponent(aba)}`; }, 150);
+    return { success: true, mensagem: `Abrindo painel na aba ${aba}.` };
+  }
+});
 </script>
 
 <style scoped>

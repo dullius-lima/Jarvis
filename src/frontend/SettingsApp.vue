@@ -94,6 +94,7 @@
 </template>
 
 <script setup lang="ts">
+import { registrarFerramentaWebMcp } from "./services/webMcpBridge";
 import { ref, watch } from 'vue';
 import AbaCerebro from './components/settings/AbaCerebro.vue';
 import AbaSeguranca from './components/settings/AbaSeguranca.vue';
@@ -110,9 +111,39 @@ const abaSalva = localStorage.getItem('jarvis_settings_tab') as TipoAba;
 const abaInicial: TipoAba = abasValidas.includes(abaSalva) ? abaSalva : 'brain';
 
 const abaAtiva = ref<TipoAba>(abaInicial);
+const _urlAba = new URLSearchParams(window.location.search).get("aba");
+if (_urlAba) { abaAtiva.value = _urlAba as any; }
+
+
+registrarFerramentaWebMcp({
+  name: "trocar_aba_configuracoes",
+  description: "Muda a aba visível no painel de configurações do JARVIS (brain, security, voices, agents, connectors, memory, prefs, manual).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      aba: { type: "string", enum: ["brain", "security", "voices", "agents", "connectors", "memory", "prefs", "manual"] }
+    },
+    required: ["aba"]
+  },
+  execute: ({ aba }) => {
+    abaAtiva.value = aba;
+    return { success: true, abaAberta: aba };
+  }
+});
+
 
 watch(abaAtiva, (novaAba) => {
   localStorage.setItem('jarvis_settings_tab', novaAba);
+});
+
+registrarFerramentaWebMcp({
+  name: "voltar_cerebro_3d",
+  description: "Fecha o painel de configurações e retorna para a tela principal do Cérebro 3D (index.html).",
+  inputSchema: { type: "object", properties: {} },
+  execute: () => {
+    setTimeout(() => { window.location.href = "/"; }, 150);
+    return { success: true, mensagem: "Retornando ao Cérebro 3D." };
+  }
 });
 </script>
 

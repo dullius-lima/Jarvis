@@ -2,6 +2,8 @@
 // Desenha as bolinhas azuis de memória e gerencia o estado luminoso do agente e das tools acionadas no 3D
 import { ref } from 'vue';
 
+export const liveTrace3D = ref<any[]>([]);
+
 export interface MemoryOrb3D {
   id: number;
   angle: number;
@@ -125,6 +127,8 @@ export function useMemoryOrbs() {
             ]
           : []);
 
+    liveTrace3D.value = fallbackTrace;
+
     lastTelemetry.value = {
       
       agentName: name,
@@ -154,6 +158,7 @@ export function useMemoryOrbs() {
         }
         // Limpa o realce das ferramentas junto com o agente
         highlightedToolSlugs.value.clear();
+        liveTrace3D.value = [];
       }, 6500);
     } else {
       // Se a chamada partiu diretamente do Core ou sem slug específico, desliga as tools após 6.5s
@@ -168,27 +173,32 @@ export function useMemoryOrbs() {
     ctx: CanvasRenderingContext2D,
     centerX: number,
     centerY: number,
-    rotationY = 0
+    rotationY = 0,
+    coreRadius = 54
   ) {
+    const baseBand = coreRadius * 1.46;
+
     for (const orb of memoryOrbs.value) {
       orb.angle += orb.speed;
-      const effectiveAngle = orb.angle + rotationY * 0.5;
-      const x3d = Math.cos(effectiveAngle) * orb.radius;
-      const z3d = Math.sin(effectiveAngle) * orb.radius;
-      const y3d = orb.yOffset + Math.sin(orb.angle * 2) * 7;
+      const effectiveAngle = orb.angle + rotationY * 0.45;
+      const bandRadius = baseBand + (orb.id % 3) * 6;
 
-      const perspective = 520 / (520 + z3d);
+      const x3d = Math.cos(effectiveAngle) * bandRadius;
+      const z3d = Math.sin(effectiveAngle) * bandRadius;
+      const y3d = (orb.yOffset * 0.45) + Math.sin(orb.angle * 2) * 4;
+
+      const perspective = 560 / (560 + z3d);
       const screenX = centerX + x3d * perspective;
       const screenY = centerY + y3d * perspective;
-      const radius = Math.max(1.8, orb.size * perspective);
+      const radius = Math.max(1.4, (orb.isNew ? 4.2 : 2.1) * perspective);
 
       ctx.save();
       ctx.beginPath();
       ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
-      ctx.fillStyle = orb.isNew ? '#00ffff' : '#38bdf8';
-      ctx.shadowColor = orb.isNew ? '#00ffff' : '#0284c7';
-      ctx.shadowBlur = orb.isNew ? 18 : 9;
-      ctx.globalAlpha = z3d > 0 ? 0.45 : orb.isNew ? 1 : 0.82;
+      ctx.fillStyle = orb.isNew ? '#67e8f9' : '#38bdf8';
+      ctx.shadowColor = orb.isNew ? '#22d3ee' : '#0284c7';
+      ctx.shadowBlur = orb.isNew ? 14 : 6;
+      ctx.globalAlpha = z3d > 0 ? 0.25 : orb.isNew ? 0.95 : 0.65;
       ctx.fill();
       ctx.restore();
     }
