@@ -20,7 +20,9 @@
           <div style="font-size: 11px; color: #38bdf8; font-weight: 600; margin-top: 3px;">📌 {{ item.sched.label || 'Rotina Programada' }}</div>
           <div style="font-size: 11px; color: #cbd5e1; margin-top: 4px; background: #0f172a; padding: 5px 8px; border-radius: 5px;">💬 {{ item.sched.schedule_prompt || 'Rotina padrão' }}</div>
         </div>
-        <div style="display: flex; gap: 6px; justify-content: flex-end;">
+        
+<div v-if="item?.slug" style="margin: 10px 0; padding: 8px 10px; background: #020617; border: 1px solid #0284c7; border-radius: 8px;"><div style="font-size: 11px; color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🪝 Webhook Direto (POST/GET)</div><div style="display: flex; gap: 6px; align-items: center;"><input type="text" readonly :value="getAgentWebhookUrl(item.slug)" @click.stop="($event.target as HTMLInputElement)?.select()" style="flex: 1; min-width: 0; padding: 5px 8px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; font-family: monospace; font-size: 11px;" /><button type="button" @click.stop="copyAgentWebhook(item.slug)" :style="{ padding: '5px 10px', background: copiedWebhookSlug === item.slug ? '#059669' : '#0284c7', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '11px', fontWeight: '600', cursor: 'pointer', whiteSpace: 'nowrap' }">{{ copiedWebhookSlug === item.slug ? '✅ Copiado' : '📋 Copiar' }}</button></div></div>
+<div style="display: flex; gap: 6px; justify-content: flex-end;">
           <button type="button" @click="dispararCronAgora(item.agent.slug, item.sched.schedule_prompt, item.sched.id)" style="background: #0284c7; color: #fff; border: none; padding: 4px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer;">▶ Disparar Agora</button>
           <button type="button" @click="abrirModalEditarAgente(item.agent)" style="background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer;">✏️ Configurar</button>
         </div>
@@ -43,6 +45,15 @@
             <span class="agent-type-tag">{{ (ag.agent_type || 'llm').toUpperCase() }}</span>
             <h3>{{ ag.icon || '🤖' }} {{ ag.name }}</h3>
             <code class="slug-code">slug: {{ ag.slug }}</code>
+<div v-if="ag?.slug" style="margin: 10px 0; padding: 8px 10px; background: #020617; border: 1px solid #0284c7; border-radius: 8px;">
+  <div style="font-size: 11px; color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🪝 Webhook Direto (POST/GET)</div>
+  <div style="display: flex; gap: 6px; align-items: center;">
+    <input type="text" readonly :value="getAgentWebhookUrl(ag.slug)" @click.stop="($event.target as HTMLInputElement)?.select()" style="flex: 1; min-width: 0; padding: 6px 8px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; font-family: monospace; font-size: 11px;" />
+    <button type="button" @click.stop="copyAgentWebhook(ag.slug)" :style="{ padding: '6px 10px', background: copiedWebhookSlug === ag.slug ? '#059669' : '#0284c7', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '11px', fontWeight: '600', cursor: 'pointer', whiteSpace: 'nowrap' }">
+      {{ copiedWebhookSlug === ag.slug ? '✅ Copiado' : '📋 Copiar' }}
+    </button>
+  </div>
+</div>
           </div>
           <span :class="['status-dot', ag.is_active !== false ? 'online' : 'offline']"></span>
         </div>
