@@ -45,15 +45,17 @@
             <span class="agent-type-tag">{{ (ag.agent_type || 'llm').toUpperCase() }}</span>
             <h3>{{ ag.icon || '🤖' }} {{ ag.name }}</h3>
             <code class="slug-code">slug: {{ ag.slug }}</code>
-<div v-if="ag?.slug" style="margin: 10px 0; padding: 8px 10px; background: #020617; border: 1px solid #0284c7; border-radius: 8px;">
+<!-- WEBHOOK_BOX_START -->
+<div v-if="ag && ag.slug" style="margin: 10px 0; padding: 8px 10px; background: #020617; border: 1px solid #0284c7; border-radius: 8px;">
   <div style="font-size: 11px; color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🪝 Webhook Direto (POST/GET)</div>
   <div style="display: flex; gap: 6px; align-items: center;">
-    <input type="text" readonly :value="getAgentWebhookUrl(ag.slug)" @click.stop="($event.target as HTMLInputElement)?.select()" style="flex: 1; min-width: 0; padding: 6px 8px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; font-family: monospace; font-size: 11px;" />
+    <input type="text" readonly :value="getAgentWebhookUrl(ag.slug)" @click.stop="selecionarInputWebhook($event)" style="flex: 1; min-width: 0; padding: 6px 8px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; font-family: monospace; font-size: 11px;" />
     <button type="button" @click.stop="copyAgentWebhook(ag.slug)" :style="{ padding: '6px 10px', background: copiedWebhookSlug === ag.slug ? '#059669' : '#0284c7', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '11px', fontWeight: '600', cursor: 'pointer', whiteSpace: 'nowrap' }">
       {{ copiedWebhookSlug === ag.slug ? '✅ Copiado' : '📋 Copiar' }}
     </button>
   </div>
 </div>
+<!-- WEBHOOK_BOX_END -->
           </div>
           <span :class="['status-dot', ag.is_active !== false ? 'online' : 'offline']"></span>
         </div>
@@ -1325,6 +1327,52 @@ async function executarOperacaoHacker(mode: string, slug?: string) {
     relatorioHacker.value = j.success ? JSON.stringify(j.data, null, 2) : `❌ ${j.error}`;
   } catch (e: any) { relatorioHacker.value = `❌ ${e.message}`; } finally { rodandoHacker.value = false; }
 }
+
+// WEBHOOK_SCRIPT_START
+const copiedWebhookSlug = ref('');
+
+function selecionarInputWebhook(ev: Event) {
+  const el = ev?.target as HTMLInputElement | null;
+  if (el && typeof el.select === 'function') el.select();
+}
+
+function getAgentWebhookUrl(slug?: string): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const clean = (slug || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return clean ? `${origin}/api/v1/webhook/agents/${clean}` : `${origin}/api/v1/webhook/agents/[preencha-o-slug]`;
+}
+
+async function copyAgentWebhook(slug?: string) {
+  if (!slug) return;
+  const url = getAgentWebhookUrl(slug);
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    copiedWebhookSlug.value = slug;
+    setTimeout(() => { if (copiedWebhookSlug.value === slug) copiedWebhookSlug.value = ''; }, 2200);
+  } catch {
+    alert(url);
+  }
+}
+// WEBHOOK_SCRIPT_END
+
 </script>
 
 <style scoped>
