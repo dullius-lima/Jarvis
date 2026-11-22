@@ -1,16 +1,21 @@
 // [MCP_ARGS_NORMALIZER_START]
-function normalizarChamadaMcp(slugStr: string, urlStr: string, argsObj: Record<string, any>) {
+function normalizarChamadaMcp(
+  slugStr: string,
+  urlStr: string,
+  argsObj: Record<string, any>,
+  currentToolName: string,
+  currentToolArgs: Record<string, any>
+) {
+  let toolName = currentToolName;
+  let toolArgs = currentToolArgs || {};
   const isFetch = String(slugStr || '').toLowerCase().includes('fetch') || String(urlStr || '').includes(':8013');
-  let { toolName, toolArgs } = normalizarChamadaMcp(_slug, targetUrl, argsObj);
-
   if (isFetch) {
     toolName = 'fetch';
     const candidatoUrl = String(toolArgs?.url || argsObj?.url || argsObj?.endpoint || argsObj?.query || '').trim();
     const termo = String(argsObj?.symbol || argsObj?.ticker || (!candidatoUrl.startsWith('http') ? candidatoUrl : '') || 'CMIN3').trim();
     const rawUrl = candidatoUrl.startsWith('http')
       ? candidatoUrl
-      : `https://news.google.com/rss/search?q=${encodeURIComponent(termo + ' B3')}&hl=pt-BR&gl=BR&ceid=BR:pt-419`;
-
+      : 'https://news.google.com/rss/search?q=' + encodeURIComponent(termo + ' B3') + '&hl=pt-BR&gl=BR&ceid=BR:pt-419';
     toolArgs = {
       url: rawUrl,
       max_length: Number(toolArgs?.max_length || argsObj?.max_length || 4500),
@@ -105,6 +110,10 @@ export async function executarConectorApiUniversal(
           toolArgs = toolArgs || {};
         }
       }
+
+      const normMcp = normalizarChamadaMcp(_slug, targetUrl, argsObj, toolName, toolArgs || {});
+      toolName = normMcp.toolName;
+      toolArgs = normMcp.toolArgs;
 
       const mcpRes = await fetch(targetUrl, {
         method: "POST",

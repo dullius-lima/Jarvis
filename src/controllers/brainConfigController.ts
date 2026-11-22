@@ -4,62 +4,6 @@ import { pool } from '../config/database.js';
 import fs from 'fs';
 import path from 'path';
 import net from 'net';
-import OpenAI from 'openai';
-// src/controllers/agentController.ts (secção da rota hacker)
-import { Request, Response } from 'express';
-import { runHackerAgent, HackerTaskInput } from '../services/agents/hackerAgent.js';
-
-/**
- * Invoca a LLM da Groq de forma direta e sem dependências externas
- */
-async function callGroqDirectly(systemPrompt: string, userPrompt: string): Promise<string> {
-  const apiKey = process.env.GROQ_API_KEY || '';
-  if (!apiKey) {
-    return 'Chave GROQ_API_KEY não configurada no ficheiro .env.';
-  }
-
-  try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: 'openai/gpt-oss-20b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.1,
-        max_tokens: 1024
-      })
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      return `Erro na API da Groq (${res.status}): ${errText}`;
-    }
-
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content || 'Sem resposta da LLM.';
-  } catch (err: any) {
-    return `Falha de rede ao consultar a Groq: ${err.message}`;
-  }
-}
-
-/**
- * POST /api/v1/agents/hacker/audit
- */
-export async function runHackerAuditController(req: Request, res: Response) {
-  try {
-    const input: HackerTaskInput = req.body || { mode: 'self_healing_debug' };
-    const resultado = await runHackerAgent(input, callGroqDirectly);
-    return res.status(200).json({ success: true, data: resultado });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
-  }
-}
 
 export const KNOWN_ENDPOINTS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
@@ -71,8 +15,8 @@ export const KNOWN_ENDPOINTS: Record<string, string> = {
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  groq: 'openai/gpt-oss-20b',
-  gemini: 'gemini-3.8-flash',
+  groq: 'llama-3.3-70b-versatile',
+  gemini: 'gemini-2.5-flash',
   openai: 'gpt-4o-mini',
   deepseek: 'deepseek-chat',
   openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
@@ -82,25 +26,24 @@ export const DEFAULT_MODELS: Record<string, string> = {
 export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string }>> = {
   groq: [
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
-    { label: 'Llama 3.3 70B Versatile (Free Tier Recomendado)', value: 'openai/gpt-oss-20b' },
-    { label: 'Llama 3.1 8B Instant (Free Tier Ultra-Rápido)', value: 'llama-3.1-8b-instant' },
-    { label: 'GPT-OSS 120B (Reasoning)', value: 'openai/gpt-oss-120b' }
+    { label: 'Llama 3.3 70B Versatile (Recomendado / Tools)', value: 'llama-3.3-70b-versatile' },
+    { label: 'GPT-OSS 120B (Reasoning / Tools)', value: 'openai/gpt-oss-120b' },
+    { label: 'GPT-OSS 20B (Ultra-Rápido)', value: 'openai/gpt-oss-20b' },
+    { label: 'Qwen 3 32B (Tool Calling)', value: 'qwen/qwen3-32b' },
+    { label: 'Llama 3.1 8B Instant (Ultra-Rápido)', value: 'llama-3.1-8b-instant' }
   ],
   gemini: [
     { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' },
-    { label: 'Gemini 2.5 Flash (Free Tier Recomendado)', value: 'gemini-3.8-flash' },
-    { label: 'Gemini 2.0 Flash (Free Tier)', value: 'gemini-2.0-flash' },
-    { label: 'Gemini 2.0 Flash-Lite (Free Tier)', value: 'gemini-2.0-flash-lite' },
-    { label: 'Gemini 1.5 Flash (Free Tier Estável)', value: 'gemini-1.5-flash' },
-    { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' }
+    { label: 'Gemini 2.5 Flash (Free Tier Recomendado)', value: 'gemini-2.5-flash' },
+    { label: 'Gemini 2.5 Flash-Lite (Ultra-Leve)', value: 'gemini-2.5-flash-lite' },
+    { label: 'Gemini 2.5 Pro (Análise Profunda)', value: 'gemini-2.5-pro' },
+    { label: 'Gemini 2.0 Flash (Free Tier)', value: 'gemini-2.0-flash' }
   ],
   openrouter: [
     { label: '✍️ Inserir ID Manual do OpenRouter', value: 'CUSTOM_INPUT' },
     { label: 'Llama 3.3 70B Instruct (100% Gratuito :free)', value: 'meta-llama/llama-3.3-70b-instruct:free' },
     { label: 'DeepSeek R1 (100% Gratuito :free)', value: 'deepseek/deepseek-r1:free' },
     { label: 'DeepSeek V3 Chat (100% Gratuito :free)', value: 'deepseek/deepseek-chat:free' },
-    { label: 'Google Gemini 2.0 Flash (100% Gratuito :free)', value: 'google/gemini-2.0-flash-exp:free' },
-    { label: 'Qwen 2.5 72B Instruct (100% Gratuito :free)', value: 'qwen/qwen-2.5-72b-instruct:free' },
     { label: 'Auto-Router Gratuito OpenRouter', value: 'openrouter/free' },
     { label: 'Anthropic Claude 3.5 Sonnet (Pago)', value: 'anthropic/claude-3.5-sonnet' }
   ],
@@ -204,18 +147,15 @@ function detectProviderFromKeyAndInput(rawProvider: string, apiKey: string, base
 function sanitizeModelForProvider(provider: string, rawModel?: string): string {
   const m = (rawModel || '').trim().replace(/^models\//, '');
   if (!m || m === 'CUSTOM_INPUT') {
-    return DEFAULT_MODELS[provider] || 'openai/gpt-oss-20b';
+    return DEFAULT_MODELS[provider] || 'llama-3.3-70b-versatile';
   }
-
   if (provider === 'gemini') {
-    if (m.includes('3.8') || m.includes('4-argon')) {
+    if (m.includes('3.8') || m.includes('4-argon') || !m.startsWith('gemini')) {
       return DEFAULT_MODELS.gemini;
     }
     return m;
   }
-
   if (provider === 'groq') {
-    // Permite explicitamente gpt-oss-120b, llama, deepseek-r1 e modelos homologados da Groq
     if (
       m.startsWith('gemini') ||
       m.startsWith('claude') ||
@@ -227,7 +167,6 @@ function sanitizeModelForProvider(provider: string, rawModel?: string): string {
     }
     return m;
   }
-
   return m;
 }
 
@@ -320,43 +259,9 @@ export async function syncModelsFromGistAndHealAgents(): Promise<{
 }
 
 export async function getSupportedModels(_req: Request, res: Response) {
-  const GIST_URL = 'https://gist.githubusercontent.com/dullius-lima/f672db978789103941a45d2968e386e5/raw/models.json';
-  const fallbackCatalog: Record<string, { label: string; value: string }[]> = {
-    groq: [
-      { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
-      { label: 'GPT-OSS 120B (Ativo na Organização)', value: 'openai/gpt-oss-120b' },
-      { label: 'Qwen 3.8 27B', value: 'qwen/qwen3.8-27b' },
-      { label: 'GPT-OSS 20B (Ultra-Económico)', value: 'openai/gpt-oss-20b' },
-      { label: 'Llama 3.3 70B Versatile', value: 'openai/gpt-oss-20b' }
-    ],
-    gemini: [
-      { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' },
-      { label: 'Gemini 3.8 Flash (Oficial Ativo)', value: 'gemini-3.8-flash' },
-      { label: 'Gemini 3.8 Pro', value: 'gemini-3.8-pro' }
-    ],
-    openai: [
-      { label: '✍️ Inserir ID Manual da OpenAI', value: 'CUSTOM_INPUT' },
-      { label: 'GPT-4o Mini (Económico)', value: 'gpt-4o-mini' },
-      { label: 'GPT-4o (Completo)', value: 'gpt-4o' }
-    ],
-    deepseek: [
-      { label: '✍️ Inserir ID Manual da DeepSeek', value: 'CUSTOM_INPUT' },
-      { label: 'DeepSeek V3 (Chat)', value: 'deepseek-chat' },
-      { label: 'DeepSeek R1 (Reasoner)', value: 'deepseek-reasoner' }
-    ],
-    openrouter: [
-      { label: '✍️ Inserir ID Manual do OpenRouter', value: 'CUSTOM_INPUT' },
-      { label: 'DeepSeek Chat (Económico)', value: 'deepseek/deepseek-chat' },
-      { label: 'Claude 3.5 Sonnet', value: 'anthropic/claude-3.5-sonnet' }
-    ],
-    ollama: [
-      { label: '✍️ Inserir ID Manual Local (Ollama)', value: 'CUSTOM_INPUT' },
-      { label: 'Llama 3.1 8B (Offline)', value: 'llama3.1:8b' }
-    ]
-  };
-
+  const fallbackCatalog: Record<string, { label: string; value: string }[]> = { ...CATALOG_MODELS };
   try {
-    const resp = await fetch(`${GIST_URL}?t=${Date.now()}`, {
+    const resp = await fetch(DEFAULT_GIST_RAW_URL + '?t=' + Date.now(), {
       cache: 'no-store',
       headers: { 'Cache-Control': 'no-cache' },
       signal: AbortSignal.timeout(6000)
@@ -372,30 +277,31 @@ export async function getSupportedModels(_req: Request, res: Response) {
             .filter((item: any) => item && item.value)
             .map((item: any) => ({
               label: String(item.label || item.value),
-              value: String(item.value).replace('gemini-2.5-flash', 'gemini-3.8-flash')
-            }));
-          let finalList = cleaned;
-          if (key === 'groq') {
-            const blocked = new Set(['openai/gpt-oss-20b', 'llama-3.1-8b-instant', 'qwen/qwen3.6-27b', 'mixtral-8x7b-32768', 'gemma2-9b-it']);
-            finalList = cleaned.filter((m) => !blocked.has(m.value));
-            for (const reqModel of fallbackCatalog.groq) {
+              value: String(item.value)
+                .replace(/^models\//, '')
+                .replace('gemini-3.8-flash', 'gemini-2.5-flash')
+                .replace('gemini-3.8-pro', 'gemini-2.5-pro')
+                .trim()
+            }))
+            .filter((item) => item.value !== 'gemini-4-argon');
+
+          const finalList = [...cleaned];
+          if (fallbackCatalog[key]) {
+            for (const reqModel of fallbackCatalog[key]) {
               if (!finalList.some((m) => m.value === reqModel.value)) {
                 finalList.push(reqModel);
               }
             }
           }
           if (!finalList.some((m) => m.value === 'CUSTOM_INPUT')) {
-            finalList.unshift({ label: `✍️ Inserir ID Manual (${key.toUpperCase()})`, value: 'CUSTOM_INPUT' });
+            finalList.unshift({ label: '✍️ Inserir ID Manual (' + key.toUpperCase() + ')', value: 'CUSTOM_INPUT' });
           }
           merged[key] = finalList;
         }
         return res.status(200).json({ success: true, catalog: merged, source: 'github-gist-live' });
       }
     }
-  } catch {
-    // Contingência offline mantém o catálogo local
-  }
-
+  } catch {}
   return res.status(200).json({ success: true, catalog: fallbackCatalog, source: 'local-fallback' });
 }
 
@@ -597,7 +503,8 @@ export async function validateLLMConnection(req: Request, res: Response) {
       (normalizedProvider === 'gemini' && !rawUrl.includes('googleapis.com'));
     const baseURL = (!rawUrl || wrongUrl ? endpoints[normalizedProvider] : rawUrl).replace(/\/+$/, '');
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiKey && normalizedProvider !== 'ollama') headers['Authorization'] = `Bearer ${apiKey}`;
+    if (apiKey && normalizedProvider !== 'ollama') headers['Authorization'] = 'Bearer ' + apiKey;
+  if (normalizedProvider === 'openrouter') { headers['HTTP-Referer'] = 'https://jarvis.local'; headers['X-Title'] = 'JARVIS Neural Core'; }
 
     const response = await fetch(`${baseURL}/chat/completions`, {
       method: 'POST',

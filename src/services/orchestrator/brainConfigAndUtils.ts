@@ -269,8 +269,8 @@ export function resolveProviderCredentials(
   baseURL = baseURL.replace(/\/+$/, '');
 
   const defaultByProvider: Record<string, string> = {
-    groq: 'openai/gpt-oss-20b',
-    gemini: 'gemini-3.8-flash',
+    groq: 'llama-3.3-70b-versatile',
+    gemini: 'gemini-2.5-flash',
     openrouter: 'openrouter/free',
     deepseek: 'deepseek-chat',
     openai: 'gpt-4o-mini',
@@ -280,11 +280,10 @@ export function resolveProviderCredentials(
   let model =
     customModel && customModel.trim() && customModel !== 'CUSTOM_INPUT'
       ? customModel.trim()
-      : defaultByProvider[p] || 'openai/gpt-oss-20b';
+      : defaultByProvider[p] || 'llama-3.3-70b-versatile';
 
-  // Impede que um modelo de outro provedor (ex: gpt-oss-120b ou llama) quebre Gemini, DeepSeek, OpenAI ou OpenRouter
   if (p === 'gemini' && (!model.startsWith('gemini') || model.includes('argon') || model.includes('3.8'))) {
-    model = 'gemini-3.8-flash';
+    model = 'gemini-2.5-flash';
   } else if (p === 'deepseek' && !model.startsWith('deepseek')) {
     model = 'deepseek-chat';
   } else if (p === 'openrouter' && !model.includes('/') && model !== 'openrouter/free') {
@@ -292,7 +291,7 @@ export function resolveProviderCredentials(
   } else if (p === 'openai' && (model.includes('llama') || model.includes('gpt-oss') || model.includes('gemini') || model.includes('deepseek'))) {
     model = 'gpt-4o-mini';
   } else if (p === 'groq' && (model.startsWith('gemini') || model.startsWith('gpt-4') || model.startsWith('claude'))) {
-    model = 'openai/gpt-oss-20b';
+    model = 'llama-3.3-70b-versatile';
   }
 
   return { provider: p, apiKey: apiKey || (p === 'ollama' ? 'ollama' : ''), baseURL, model };

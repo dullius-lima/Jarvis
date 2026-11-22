@@ -16,14 +16,15 @@ export const ECONOMIC_FAILOVER_LADDER: Array<{
   model: string;
   tier: string;
 }> = [
-  { provider: 'gemini', model: 'gemini-3.8-flash', tier: 'Cota Gratuita Google Gemini (Ativo)' },
-  { provider: 'groq', model: 'openai/gpt-oss-120b', tier: 'Groq LPU Ativo (Organização Liberada)' },
-  { provider: 'groq', model: 'qwen/qwen3.8-27b', tier: 'Groq Alternativo' },
-  { provider: 'groq', model: 'openai/gpt-oss-20b', tier: 'Groq Ultra-Económico (se liberado na org)' },
+  { provider: 'gemini', model: 'gemini-2.5-flash', tier: 'Cota Gratuita Google Gemini (Ativo)' },
+  { provider: 'groq', model: 'llama-3.3-70b-versatile', tier: 'Groq LPU Principal (Tool Calling)' },
+  { provider: 'groq', model: 'openai/gpt-oss-120b', tier: 'Groq LPU Reasoning (Organização Liberada)' },
+  { provider: 'groq', model: 'qwen/qwen3-32b', tier: 'Groq Alternativo (Tool Calling)' },
+  { provider: 'groq', model: 'openai/gpt-oss-20b', tier: 'Groq Ultra-Econômico' },
   { provider: 'deepseek', model: 'deepseek-chat', tier: 'Baixo Custo V3 (DeepSeek)' },
-  { provider: 'openai', model: 'gpt-4o-mini', tier: 'Económico Estável (OpenAI)' },
-  { provider: 'gemini', model: 'gemini-3.8-pro', tier: 'Raciocínio Avançado (Google)' },
-  { provider: 'openrouter', model: 'deepseek/deepseek-chat', tier: 'Multi-Hub Económico (OpenRouter)' },
+  { provider: 'openai', model: 'gpt-4o-mini', tier: 'Econômico Estável (OpenAI)' },
+  { provider: 'gemini', model: 'gemini-2.5-pro', tier: 'Raciocínio Avançado (Google)' },
+  { provider: 'openrouter', model: 'deepseek/deepseek-chat:free', tier: 'Multi-Hub Gratuito (OpenRouter)' },
   { provider: 'openrouter', model: 'anthropic/claude-3.5-sonnet', tier: 'Alta Precisão (Claude)' },
   { provider: 'openai', model: 'gpt-4o', tier: 'Reserva Premium (OpenAI)' },
   { provider: 'ollama', model: 'llama3.1:8b', tier: 'Contingência Local Offline' }

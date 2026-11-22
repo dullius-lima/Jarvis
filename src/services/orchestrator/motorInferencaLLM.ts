@@ -149,28 +149,27 @@ export async function chamarLLMCompativelOpenAI(options: {
 
   // 1. SUPORTE GOOGLE GEMINI NATIVO
   if (provider === 'gemini') {
-    const rawGemModel = (creds.model || options.model || 'gemini-3.8-flash').trim();
+    const rawGemModel = (creds.model || options.model || 'gemini-2.5-flash').trim();
     const modeloPrimario =
       !rawGemModel.startsWith('gemini') ||
       rawGemModel.includes('argon') ||
-      rawGemModel.includes('3.8') ||
-      rawGemModel.includes('2.0-flash')
-        ? 'gemini-3.8-flash'
+      rawGemModel.includes('3.8')
+        ? 'gemini-2.5-flash'
         : rawGemModel;
 
     const partesFormatadas: any[] = [];
     for (const msg of options.messages) {
       if (Array.isArray(msg.content)) {
-        for (const p of msg.content) {
-          if (p.type === 'text') {
-            partesFormatadas.push({ text: `[${msg.role}]: ${p.text}` });
-          } else if (p.type === 'image_url' && p.image_url?.url) {
-            const base64Limpo = p.image_url.url.replace(/^data:image\/\w+;base64,/, '');
+        for (const pt of msg.content) {
+          if (pt.type === 'text') {
+            partesFormatadas.push({ text: '[' + msg.role + ']: ' + pt.text });
+          } else if (pt.type === 'image_url' && pt.image_url?.url) {
+            const base64Limpo = pt.image_url.url.replace(/^data:image\/\w+;base64,/, '');
             partesFormatadas.push({ inline_data: { mime_type: 'image/jpeg', data: base64Limpo } });
           }
         }
       } else {
-        partesFormatadas.push({ text: `[${msg.role}]: ${msg.content}` });
+        partesFormatadas.push({ text: '[' + msg.role + ']: ' + msg.content });
       }
     }
 
@@ -181,19 +180,22 @@ export async function chamarLLMCompativelOpenAI(options: {
               .filter((t: any) => t?.function?.name)
               .map((t: any) => ({
                 name: t.function.name,
-                description: t.function.description || `Ferramenta ${t.function.name}`,
+                description: t.function.description || 'Ferramenta ' + t.function.name,
                 parameters: (() => {
-              const p = JSON.parse(JSON.stringify(t.function.parameters || { type: 'object', properties: {} }));
-              delete p.additionalProperties;
-              delete p.$schema; if (!p.properties || Object.keys(p.properties).length === 0) { p.properties = { confirmar: { type: 'boolean' } }; }
-              return p;
-            })()
+                  const pr = JSON.parse(JSON.stringify(t.function.parameters || { type: 'object', properties: {} }));
+                  delete pr.additionalProperties;
+                  delete pr.$schema;
+                  if (!pr.properties || Object.keys(pr.properties).length === 0) {
+                    pr.properties = { confirmar: { type: 'boolean' } };
+                  }
+                  return pr;
+                })()
               }))
           }
         ]
       : undefined;
 
-    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/${modeloPrimario}:generateContent?key=${apiKey}`;
+    const urlGemini = 'https://generativelanguage.googleapis.com/v1beta/models/' + modeloPrimario + ':generateContent?key=' + apiKey;
     const payloadGemini: any = {
       contents: [{ parts: partesFormatadas }],
       generationConfig: { temperature: options.temperature ?? 0.2 }
@@ -211,37 +213,35 @@ export async function chamarLLMCompativelOpenAI(options: {
     if (resp.ok) {
       const data: any = await resp.json();
       const candidateParts = data?.candidates?.[0]?.content?.parts || [];
-      const fnCallPart = candidateParts.find((p: any) => p.functionCall);
+      const fnCallParts = candidateParts.filter((pt: any) => pt.functionCall);
 
-      if (fnCallPart && fnCallPart.functionCall) {
+      if (fnCallParts.length > 0) {
         return {
           choices: [
             {
               message: {
                 role: 'assistant',
                 content: '',
-                tool_calls: [
-                  {
-                    id: `call_${Date.now()}`,
-                    type: 'function',
-                    function: {
-                      name: fnCallPart.functionCall.name,
-                      arguments: JSON.stringify(fnCallPart.functionCall.args || {})
-                    }
+                tool_calls: fnCallParts.map((pt: any, idx: number) => ({
+                  id: 'call_' + Date.now() + '_' + idx,
+                  type: 'function',
+                  function: {
+                    name: pt.functionCall.name,
+                    arguments: JSON.stringify(pt.functionCall.args || {})
                   }
-                ]
+                }))
               }
             }
           ]
         };
       }
 
-      const contentText = candidateParts.map((p: any) => p.text || '').join('\n').trim();
+      const contentText = candidateParts.map((pt: any) => pt.text || '').join('\n').trim();
       return { choices: [{ message: { content: contentText, role: 'assistant' } }] };
     }
 
     const erroTxt = await resp.text();
-    throw new Error(`Gemini indisponível: ${erroTxt.slice(0, 180)}`);
+    throw new Error('Gemini (' + modeloPrimario + ') indisponível: ' + erroTxt.slice(0, 180));
   }
 
   // 2. SUPORTE GROQ, OPENROUTER, DEEPSEEK, OPENAI E OLLAMA
@@ -250,9 +250,20 @@ export async function chamarLLMCompativelOpenAI(options: {
       ? 'https://api.deepseek.com/v1'
       : creds.baseURL || 'https://api.groq.com/openai/v1';
 
-  const client = new OpenAI({ apiKey: apiKey || 'ollama', baseURL: resolvedBaseURL, timeout: 35000 });
+  const defaultHeaders: Record<string, string> =
+    provider === 'openrouter'
+      ? { 'HTTP-Referer': 'https://jarvis.local', 'X-Title': 'JARVIS Neural Core' }
+      : {};
+
+  const client = new OpenAI({
+    apiKey: apiKey || 'ollama',
+    baseURL: resolvedBaseURL,
+    defaultHeaders,
+    timeout: 35000
+  });
+
   let modeloAlvo = creds.model;
-  if (provider === 'groq' && (!modeloAlvo || modeloAlvo.includes('8b-instant') || modeloAlvo.includes('deepseek-r1'))) {
+  if (provider === 'groq' && (!modeloAlvo || modeloAlvo.includes('deepseek-r1'))) {
     modeloAlvo = 'llama-3.3-70b-versatile';
   } else if (provider === 'deepseek' && (!modeloAlvo || !modeloAlvo.startsWith('deepseek'))) {
     modeloAlvo = 'deepseek-chat';
@@ -260,7 +271,7 @@ export async function chamarLLMCompativelOpenAI(options: {
 
   const modelosCandidatos =
     provider === 'groq'
-      ? Array.from(new Set([modeloAlvo, 'llama-3.3-70b-versatile']))
+      ? Array.from(new Set([modeloAlvo, 'llama-3.3-70b-versatile', 'openai/gpt-oss-120b']))
       : provider === 'deepseek'
       ? Array.from(new Set([modeloAlvo, 'deepseek-chat']))
       : [modeloAlvo];
@@ -270,14 +281,24 @@ export async function chamarLLMCompativelOpenAI(options: {
     if (!modelo) continue;
     try {
       const payload: any = { model: modelo, messages: options.messages };
-      const ehSomenteRaciocinio = modelo.includes('gpt-oss') || modelo === 'deepseek-reasoner' || modelo.includes('o3-mini');
-      if (!ehSomenteRaciocinio) payload.temperature = options.temperature ?? 0.2;
-      if (options.tools && options.tools.length > 0 && !ehSomenteRaciocinio) {
+      const semTemperatura = modelo === 'deepseek-reasoner' || modelo.includes('o3-mini');
+      const semTools = modelo === 'deepseek-reasoner';
+
+      if (!semTemperatura) payload.temperature = options.temperature ?? 0.2;
+      if (options.tools && options.tools.length > 0 && !semTools) {
         payload.tools = options.tools;
         payload.tool_choice = 'auto';
+        if (provider === 'groq') {
+          payload.parallel_tool_calls = false;
+        }
       }
-    return _converterXmlToolCallsParaNativo(await client.chat.completions.create(payload), Boolean(typeof temTools !== "undefined" ? temTools : payload?.tools?.length));
-      console.log(`🧠 [LLM Real] Provedor: ${provider.toUpperCase()} | Solicitado: ${modelo} | Respondido: ${respLLM?.model || modelo}`);
+
+      const rawResp = await client.chat.completions.create(payload);
+      const respLLM = _converterXmlToolCallsParaNativo(
+        rawResp,
+        Boolean(temTools || payload?.tools?.length)
+      );
+      console.log('🧠 [LLM Real] Provedor: ' + provider.toUpperCase() + ' | Solicitado: ' + modelo + ' | Respondido: ' + (respLLM?.model || modelo));
       return respLLM;
     } catch (err: any) {
       ultimoErro = err;

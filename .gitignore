@@ -5,6 +5,10 @@ whisper-env/
 .env.local
 backups/
 .backup_*
+models/
+__pycache__/
+*.pyc
+*.bak
 *.enc
 *.log
 .DS_Store
@@ -12,13 +16,3 @@ Thumbs.db
 android/.gradle/
 android/app/build/
 android/build/
-models/
-*.onnx
-*.bin
-backups_voice_*/
-*.bak
-models/
-*.onnx
-*.bin
-backups_voice_*/
-*.bak

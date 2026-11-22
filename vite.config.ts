@@ -19,7 +19,7 @@ export default defineConfig({
   },
   optimizeDeps: { exclude: ['.git'] },
   build: {
-    emptyOutDir: true,
+    emptyOutDir: false,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),

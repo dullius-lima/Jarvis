@@ -452,7 +452,7 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
           provider: credenciaisResolvidas.provider,
           model: credenciaisResolvidas.model,
           apiKey: credenciaisResolvidas.apiKey,
-          baseUrl: credenciaisResolvidas.baseUrl,
+          baseUrl: credenciaisResolvidas.baseURL,
           messages: mensagensEspecialista,
           tools: specialistTools.length > 0 ? specialistTools : undefined,
           temperature: Number(currentAgent.temperature ?? 0.2)
@@ -482,6 +482,21 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
             }
 
             if (currentPayload?.symbol && !fnArgs.symbol) fnArgs.symbol = currentPayload.symbol;
+
+          const sigChamada = currentAgent.slug + '::' + fnName + '::' + JSON.stringify(fnArgs);
+          if (__chamadasExecutadasNoTurno.has(sigChamada)) {
+            mensagensEspecialista.push({
+              role: 'tool',
+              tool_call_id: tc.id,
+              name: fnName,
+              content: JSON.stringify({
+                status: 'skipped_duplicate',
+                message: 'A ferramenta ' + fnName + ' já foi executada com os mesmos parâmetros neste turno. Use o resultado anterior.'
+              })
+            });
+            continue;
+          }
+          __chamadasExecutadasNoTurno.add(sigChamada);
 
             try {
               emitBrainLinkEvent({
@@ -624,7 +639,7 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
           provider: credenciaisResolvidas.provider,
           model: credenciaisResolvidas.model,
           apiKey: credenciaisResolvidas.apiKey,
-          baseUrl: credenciaisResolvidas.baseUrl,
+          baseUrl: credenciaisResolvidas.baseURL,
           messages: [
             ...mensagensEspecialista,
             {
