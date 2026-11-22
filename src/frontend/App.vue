@@ -432,7 +432,7 @@ registrarFerramentaWebMcp({
 
 registrarFerramentaWebMcp({
   name: "trocar_aba_configuracoes",
-  description: "Abre o painel de configurações do JARVIS diretamente na aba solicitada (brain, security, voices, agents, connectors, memory, prefs, manual).",
+  description: 'Muda a aba visível no painel APENAS quando o usuário ordenar explicitamente abrir ou navegar para uma aba. NUNCA acione em perguntas informativas.',
   inputSchema: {
     type: "object",
     properties: {

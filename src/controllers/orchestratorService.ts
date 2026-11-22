@@ -569,10 +569,12 @@ export async function processarExecucaoWorkflow(
           tempoExecucaoMs
         ]
       ),
-      ingestDocumentToRag(
-        `Pergunta (${activeSpeakerName}): ${userPrompt} | Resposta (${triggeredAgentName}): ${textoRespostaFinal}`,
-        { sessionId, agent: triggeredAgentName, speaker: activeSpeakerName }
-      )
+      (process.env.AUTO_SAVE_CHAT_TO_RAG === 'true'
+          ? ingestDocumentToRag(
+              `Pergunta (${activeSpeakerName}): ${userPrompt} | Resposta (${triggeredAgentName}): ${textoRespostaFinal}`,
+              { sessionId, agent: triggeredAgentName, speaker: activeSpeakerName }
+            )
+          : Promise.resolve())
     ]).catch(() => {});
 
     emitBrainLinkEvent({

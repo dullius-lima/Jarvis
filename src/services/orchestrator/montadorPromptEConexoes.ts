@@ -1,3 +1,4 @@
+import { ensureActiveWebMcpTools } from "../webMcpService.js";
 // src/services/orchestrator/montadorPromptEConexoes.ts
 import { pool } from '../../config/database.js';
 import { searchVectorDocuments } from '../ragService.js';
@@ -62,13 +63,20 @@ export async function montarContextoEConexoes(
 
   const textoMedioPrazo = episodicaRes.rows.length > 0
     ? episodicaRes.rows
-        .map((e: any) => `- [${e.categoria}] ${e.titulo}: ${e.conteudo}`)
+        .map((e: any) => {
+          const expira = e.expires_at ? new Date(e.expires_at).toLocaleDateString('pt-BR') : '21d';
+          return `- [ID:${e.id} | ${e.categoria} | expira em ${expira}] ${e.titulo}: ${e.conteudo}`;
+        })
         .join('\n')
     : '';
-
   // Anexa Agenda + Médio Prazo + Longo Prazo (RAG) de forma visível para o Orquestrador
   contextoRagTexto = [
-    `[AGENDA PERMANENTE DE CONTATOS E IDENTIDADES]:\n${textoAgenda}`,
+    `[GOVERNANÇA DE MEMÓRIA E INTERFACE - OBRIGATÓRIO]:
+1. LISTAS, LEMBRETES E TAREFAS TEMPORÁRIAS: Use SEMPRE a ferramenta "gerenciar_memoria_cognitiva" com tipo_memoria="medio_prazo" (contexto_semanal: 15-30 dias; tarefa_ativa: 45-60 dias; projeto: 90-180 dias). NUNCA crie arquivos .md/.txt na VM nem tente salvar listas no Notion sem pedido explícito.
+2. ATUALIZAÇÃO DE LISTAS ATIVAS: Se já existir registro em [MEMÓRIA EPISÓDICA ATIVA] sobre o assunto, use acao="atualizar" com o ID para incluir/remover itens, ou acao="concluir" ao finalizar.
+3. NAVEGAÇÃO DE INTERFACE (WebMCP): NUNCA acione trocar_aba_configuracoes ou abrir_painel_configuracoes em perguntas informativas. Só navegue com ordem explícita para abrir tela.
+
+[AGENDA PERMANENTE DE CONTATOS E IDENTIDADES]:\n${textoAgenda}`,
     textoMedioPrazo ? `[MEMÓRIA EPISÓDICA ATIVA (MÉDIO PRAZO)]:\n${textoMedioPrazo}` : '',
     contextoRagTexto ? `[DOCUMENTOS E FATOS DE LONGO PRAZO (RAG)]:\n${contextoRagTexto}` : ''
   ].filter(Boolean).join('\n\n');
@@ -263,7 +271,7 @@ export async function montarContextoEConexoes(
   );
 
   // Diretrizes Centrais do JARVIS
-  const promptSistemaCompleto = `${configuracaoCerebro.system_prompt}
+  let promptSistemaCompleto = `${configuracaoCerebro.system_prompt}
 ${contextoTemporal}
 Identidade Autenticada / Locutor: ${activeSpeakerName} (${speakerRole})
 URL Base do Servidor: ${configuracaoCerebro.server_base_url}${instrucaoVisual}
@@ -303,6 +311,41 @@ ${contextoRagTexto ? `\n--- MEMÓRIA E CONHECIMENTO DO SISTEMA (AGENDA, MÉDIO E
     }
   } catch {}
 
+
+    // [WEBMCP_MONTADOR_START]
+  try {
+    const _liveWmcp = await ensureActiveWebMcpTools(300);
+    if (_liveWmcp.length > 0 && typeof tools !== 'undefined' && Array.isArray(tools)) {
+      for (const _wt of _liveWmcp) {
+        const _wName = sanitizeToolName(_wt.name);
+        if (!tools.some((t: any) => t?.function?.name === _wName)) {
+          tools.push({
+            type: 'function',
+            function: {
+              name: _wName,
+              description: `[Interface Aberta / WebMCP] ${_wt.description}`,
+              parameters: (_wt.inputSchema?.properties && Object.keys(_wt.inputSchema.properties).length > 0)
+                ? _wt.inputSchema
+                : { type: 'object', properties: { confirmar: { type: 'boolean', description: 'Confirmar ação na interface' } } }
+            }
+          });
+        }
+      }
+      if (typeof promptSistemaCompleto === 'string') {
+        promptSistemaCompleto += `\n\n[FERRAMENTAS DE TELA ATIVAS (WEBMCP)]:\n${_liveWmcp.map(t => `- ${sanitizeToolName(t.name)}: ${t.description}`).join('\n')}\nREGRA CRÍTICA: Para executar qualquer ação visual acima, CHAME A FERRAMENTA NATIVA correspondente. Nunca responda apenas "Vou abrir..." em texto sem chamar a ferramenta.`;
+      }
+    }
+  } catch {}
+  // [WEBMCP_MONTADOR_END]
+    const _seenTools = new Set<string>();
+  const toolsUnicas = tools.filter((t: any) => {
+    const nm = t?.function?.name;
+    if (!nm || _seenTools.has(nm)) return false;
+    _seenTools.add(nm);
+    return true;
+  });
+  tools.length = 0;
+  tools.push(...toolsUnicas);
 
   return {
     configuracaoCerebro,

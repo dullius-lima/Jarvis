@@ -1,3 +1,4 @@
+import { callWebMcpTool, listActiveWebMcpTools } from "../webMcpService.js";
 // Motor OpenAI/Groq/Gemini/Ollama e Pipeline de Especialistas (Fachada Unificada)
 // src/services/orchestrator/llmAndPipelineRunner.ts
 

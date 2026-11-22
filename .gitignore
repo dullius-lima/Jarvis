@@ -17,3 +17,8 @@ models/
 *.bin
 backups_voice_*/
 *.bak
+models/
+*.onnx
+*.bin
+backups_voice_*/
+*.bak

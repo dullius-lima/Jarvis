@@ -1,3 +1,4 @@
+import { bindWebMcpWss, handleWebMcpSocketMessage, unregisterWebMcpClient } from "./webMcpService.js";
 // src/services/brainSocketService.ts
 import { Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -50,8 +51,17 @@ export function normalizeNeurotransmitter(raw?: string): NeurotransmitterType {
 
 export function initBrainWebSocketServer(server: HttpServer): WebSocketServer {
   wss = new WebSocketServer({ server });
+  bindWebMcpWss(wss);
 
   wss.on('connection', (ws: WebSocket) => {
+    // [WEBMCP_WS_HOOK]
+    ws.on("message", (rawWebMcpMsg: any) => {
+      try {
+        const parsedWebMcp = JSON.parse(rawWebMcpMsg.toString());
+        handleWebMcpSocketMessage(ws, parsedWebMcp);
+      } catch {}
+    });
+    ws.on("close", () => unregisterWebMcpClient(ws));
     clients.add(ws);
     console.log(`🔌 [BrainWebSocket] Nó conectado. Total de conexões: ${clients.size}`);
 

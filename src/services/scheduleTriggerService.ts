@@ -88,7 +88,16 @@ ${tarefa}
 
 REGRAS: Acione imediatamente "${agent.slug}" com suas ferramentas (${JSON.stringify(agent.tools || [])}) e conclua toda a cadeia até o destino final sem fazer perguntas.`;
 
-  const res: any = await processOrchestratorWorkflow({
+  let res: any;
+  if (agent.agent_type === 'code' && agent.code_snippet) {
+    const AF = Object.getPrototypeOf(async function () {}).constructor;
+    const out = await new AF('payload', 'env', agent.code_snippet)(
+      { query: tarefa, prompt: tarefa, input: tarefa, trigger: isManual ? 'manual_ui' : 'cron_schedule' },
+      { BASE_URL: 'http://127.0.0.1:3333' }
+    );
+    res = { response: typeof out === 'string' ? out : JSON.stringify(out), rota_completa: agent.name + ' (Code 0-Tokens)' };
+  } else {
+    res = await processOrchestratorWorkflow({
     identityToken: 'Matheus-Admin',
     sessionId: `cron_${agent.slug}_${target?.id || 'main'}_${Date.now()}`,
     sensorData: {
@@ -100,6 +109,7 @@ REGRAS: Acione imediatamente "${agent.slug}" com suas ferramentas (${JSON.string
     }
   });
 
+  }
   const finalOutput = res?.response || res?.data?.response || JSON.stringify(res);
   const nowIso = new Date().toISOString();
 

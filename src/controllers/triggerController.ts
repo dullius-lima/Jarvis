@@ -46,7 +46,7 @@ export async function runManualScheduleTrigger(req: Request, res: Response) {
     }
 
     const agent = resAgent.rows[0];
-    const execResult = await executeScheduledAgent(agent, true);
+    const execResult = await executeScheduledAgent(agent, true, req.body?.schedule_prompt || req.body?.prompt, req.body?.schedule_id || req.body?.scheduleId || req.body?.id);
 
     return res.status(200).json({
       success: true,

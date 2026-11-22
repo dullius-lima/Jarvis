@@ -1,3 +1,25 @@
+// [MCP_ARGS_NORMALIZER_START]
+function normalizarChamadaMcp(slugStr: string, urlStr: string, argsObj: Record<string, any>) {
+  const isFetch = String(slugStr || '').toLowerCase().includes('fetch') || String(urlStr || '').includes(':8013');
+  let { toolName, toolArgs } = normalizarChamadaMcp(_slug, targetUrl, argsObj);
+
+  if (isFetch) {
+    toolName = 'fetch';
+    const candidatoUrl = String(toolArgs?.url || argsObj?.url || argsObj?.endpoint || argsObj?.query || '').trim();
+    const termo = String(argsObj?.symbol || argsObj?.ticker || (!candidatoUrl.startsWith('http') ? candidatoUrl : '') || 'CMIN3').trim();
+    const rawUrl = candidatoUrl.startsWith('http')
+      ? candidatoUrl
+      : `https://news.google.com/rss/search?q=${encodeURIComponent(termo + ' B3')}&hl=pt-BR&gl=BR&ceid=BR:pt-419`;
+
+    toolArgs = {
+      url: rawUrl,
+      max_length: Number(toolArgs?.max_length || argsObj?.max_length || 4500),
+      raw: true
+    };
+  }
+  return { toolName, toolArgs };
+}
+// [MCP_ARGS_NORMALIZER_END]
 // src/services/orchestrator/executorConectorApi.ts
 import { pool } from '../../config/database.js';
 import { limparMascaraChave } from './motorInferencaLLM.js';
@@ -224,7 +246,11 @@ export async function executarConectorApiUniversal(
     ).trim(),
     symbol: String(
       taskArgs?.symbol || taskArgs?.ticker || (tickerMatch ? tickerMatch[1] : taskArgs?.query || '')
-    ).trim()
+    ).trim(),
+    prontuario: String(taskArgs?.prontuario || taskArgs?.nr_prontuario || taskArgs?.query || "").trim(),
+    atendimento: String(taskArgs?.atendimento || taskArgs?.nr_atendimento || "").trim(),
+    cpf: String(taskArgs?.cpf || "").replace(/\D/g, ""),
+    setor: String(taskArgs?.setor || taskArgs?.cd_setor || "").trim()
   };
 
   for (const [chave, val] of Object.entries(taskArgs || {})) {

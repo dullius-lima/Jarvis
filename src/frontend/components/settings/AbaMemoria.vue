@@ -190,12 +190,12 @@
           <div class="form-row">
             <div class="form-group">
               <label>Categoria</label>
-              <select v-model="novaEpisodica.categoria" class="input-field">
-                <option value="tarefa_ativa">Tarefa Ativa</option>
-                <option value="projeto">Projeto em Andamento</option>
-                <option value="habito">Hábito / Rotina</option>
-                <option value="contexto_semanal">Contexto Semanal</option>
-              </select>
+              <select v-model="novaEpisodica.categoria" @change="novaEpisodica.dias = ({ contexto_semanal: 21, tarefa_ativa: 45, projeto: 180, habito: 30 } as any)[novaEpisodica.categoria] || 21" class="input-field">
+            <option value="contexto_semanal">Contexto Semanal (15 a 30 dias)</option>
+            <option value="tarefa_ativa">Tarefa Ativa (45 a 60 dias)</option>
+            <option value="projeto">Projeto em Andamento (90 a 180 dias)</option>
+            <option value="habito">Hábito / Rotina (30 dias)</option>
+          </select>
             </div>
             <div class="form-group" style="max-width: 140px;">
               <label>Validade (Dias)</label>
@@ -313,12 +313,7 @@ function exportarSessaoParaJson() {
 const memoriasEpisodicas = ref<any[]>([]);
 const carregandoEpisodicas = ref(false);
 const exibirModalNovaEpisodica = ref(false);
-const novaEpisodica = reactive({
-  titulo: '',
-  conteudo: '',
-  categoria: 'tarefa_ativa',
-  dias: 30
-});
+const novaEpisodica = reactive({ titulo: '', conteudo: '', categoria: 'contexto_semanal', dias: 21 });
 
 async function carregarMemoriasEpisodicas() {
   carregandoEpisodicas.value = true;
