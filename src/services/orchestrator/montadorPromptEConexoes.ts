@@ -27,16 +27,16 @@ export async function montarContextoEConexoes(
   ] = await Promise.all([
     getCentralBrainConfig(),
     pool
-      .query(`SELECT role, content FROM jarvis_chat_memory WHERE session_id = $1 ORDER BY id DESC LIMIT 20;`, [sessionId])
+      .query(`SELECT role, content FROM jarvis_chat_memory WHERE session_id = $1 ORDER BY id DESC LIMIT 8;`, [sessionId])
       .catch(() => ({ rows: [] as any[] })),
-    searchVectorDocuments(userPrompt, 6).catch(() => []),
+    searchVectorDocuments(userPrompt, 3).catch(() => []),
     pool
       .query(
         `SELECT id, title, category, content
          FROM vector_documents
          WHERE category IN ('contatos', 'permanente')
          ORDER BY id DESC
-         LIMIT 30;`
+         LIMIT 8;`
       )
       .catch(() => ({ rows: [] as any[] })),
     pool
@@ -46,9 +46,7 @@ export async function montarContextoEConexoes(
       .query(
         `SELECT id, categoria, titulo, conteudo, expires_at
          FROM jarvis_episodic_memory
-         WHERE expires_at > NOW()
-         ORDER BY created_at DESC
-         LIMIT 20;`
+         WHERE expires_at > NOW() ORDER BY created_at DESC LIMIT 10;`
       )
       .catch(() => ({ rows: [] as any[] })),
     pool
@@ -362,7 +360,7 @@ ${contextoMemoriaCompleto}`;
 
   // [WEBMCP_MONTADOR_START]
   try {
-    const _liveWmcp = await ensureActiveWebMcpTools(300);
+    const _liveWmcp = await ensureActiveWebMcpTools(0);
     if (_liveWmcp.length > 0 && typeof tools !== 'undefined' && Array.isArray(tools)) {
       for (const _wt of _liveWmcp) {
         const _wName = sanitizeToolName(_wt.name);

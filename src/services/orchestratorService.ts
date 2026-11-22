@@ -134,6 +134,38 @@ export async function processarExecucaoWorkflow(
       userPrompt = filtroSensorial.promptTranscrito.trim();
     }
 
+    // 1.1 Fast-Path instantâneo (< 5ms) para hora local sem viagem externa à LLM
+    const _normFast = userPrompt
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f.?!,-]/g, '')
+      .replace(/\bjarvis\b/g, '')
+      .trim();
+    if (/^(que horas sao|que hora e|horas|qual o horario|me diga as horas)$/.test(_normFast)) {
+      const _hora = new Date().toLocaleTimeString('pt-BR', {
+        timeZone: 'America/Campo_Grande',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      const _respHora: any = {
+        success: true,
+        triggeredSuccess: true,
+        agent: 'JARVIS (Núcleo Instantâneo)',
+        agentId: 'jarvis_core',
+        nodeType: 'core',
+        executedTools: [],
+        memoryStored: false,
+        memoryCount: 0,
+        identity: activeSpeakerName,
+        sessionId,
+        response: `Agora são ${_hora}, ${activeSpeakerName}.`,
+        executionTimeMs: Date.now() - inicioExecucao,
+        data: null as any
+      };
+      _respHora.data = { ..._respHora };
+      return _respHora;
+    }
+
     // 2. Visão Multimodal
     const visual = processarEntradaVisual(sensoryInput, userPrompt, activeSpeakerName);
     if (visual.ehPerguntaVisual && !visual.frameAtivo) {
@@ -276,7 +308,7 @@ export async function processarExecucaoWorkflow(
 
     // 5.0.1 Execução Universal Direta para ferramentas WebMCP ativas na tela (descoberta via schema vivo)
     if (Array.isArray(mensagemEscolha?.tool_calls) && mensagemEscolha.tool_calls.length > 0) {
-      const _liveWmcp = await ensureActiveWebMcpTools(350);
+      const _liveWmcp = await ensureActiveWebMcpTools(0);
       if (_liveWmcp.length > 0) {
         const _remainingCalls: any[] = [];
         for (const _tc of mensagemEscolha.tool_calls) {
@@ -317,7 +349,7 @@ export async function processarExecucaoWorkflow(
     }
 
     // 5.0.2 Contingência semântica universal caso a LLM apenas narre a ação ("Vou abrir a aba...") sem emitir tool_call
-    if (executedTools.length === 0 && (!Array.isArray(mensagemEscolha?.tool_calls) || mensagemEscolha.tool_calls.length === 0)) {
+    if (executedTools.length === 0 && (!Array.isArray(mensagemEscolha?.tool_calls) || mensagemEscolha.tool_calls.length === 0) && (await ensureActiveWebMcpTools(0)).length > 0) {
       try {
         const _autoWmcp = await tryUniversalWebMcpAutoExec(String(userPrompt || ''), String(textoRespostaFinal || ''));
         if (_autoWmcp) {

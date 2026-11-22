@@ -28,32 +28,17 @@ export function bindWebMcpWss(wss: any) {
   boundWss = wss;
 }
 
-export async function ensureActiveWebMcpTools(waitMs = 350): Promise<WebMcpToolMeta[]> {
+export async function ensureActiveWebMcpTools(_waitMs = 0): Promise<WebMcpToolMeta[]> {
   const current = listActiveWebMcpTools();
   if (current.length > 0) return current;
 
   if (boundWss && boundWss.clients) {
-    let sent = 0;
     for (const client of boundWss.clients) {
       if (client.readyState === 1) {
         try {
           client.send(JSON.stringify({ type: 'webmcp:discover' }));
-          sent++;
         } catch {}
       }
-    }
-    if (sent > 0) {
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          discoverWaiters = discoverWaiters.filter((fn) => fn !== done);
-          resolve();
-        }, waitMs);
-        const done = () => {
-          clearTimeout(timer);
-          resolve();
-        };
-        discoverWaiters.push(done);
-      });
     }
   }
   return listActiveWebMcpTools();

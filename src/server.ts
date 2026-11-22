@@ -9,6 +9,9 @@ import path from 'path';
 import fs from 'fs';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import { transcribeWithLocalWhisper } from './services/whisperLocalService.js';
+import { processarExecucaoWorkflow } from './services/orchestratorService.js';
+
 import {
   requireJwtAuth,
   createRateLimiter,
@@ -403,17 +406,12 @@ const DEFAULT_USER_PREFS = {
 
 app.post('/api/v1/voice/turn', async (req, res) => {
   try {
-    const { audioBase64, mimeType, requireWakeWord, identityToken, sessionId } = req.body || {};
+    const { audioBase64, requireWakeWord, identityToken, sessionId } = req.body || {};
     if (!audioBase64) return res.status(400).json({ success: false, error: 'audioBase64 ausente' });
 
-    const localBase = `http://127.0.0.1:${PORT}`;
-    const trResp = await fetch(`${localBase}/api/v1/audio/transcribe`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ audioBase64, mimeType: mimeType || 'audio/wav', modelSize: 'small' })
-    });
-    const trJson: any = await trResp.json().catch(() => ({}));
-    const transcript = String(trJson?.text || trJson?.transcript || '').trim();
+    const whisperModel = process.env.WHISPER_MODEL_SIZE || 'base';
+    const trJson = await transcribeWithLocalWhisper(audioBase64, whisperModel);
+    const transcript = String(trJson?.text || '').trim();
     console.log(`[VoiceTurn] Ouviu: "${transcript}"`);
 
     if (!transcript) return res.json({ success: true, woke: false, transcript: '', reply: '' });
@@ -431,28 +429,23 @@ app.post('/api/v1/voice/turn', async (req, res) => {
       return res.json({ success: true, woke: true, transcript, reply: '' });
     }
 
-    const ingResp = await fetch(`${localBase}/api/v1/webhook/ingress`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        identityToken: identityToken || 'Matheus-Admin',
-        sessionId: sessionId || 'sess_main_admin',
+    const ingJson: any = await processarExecucaoWorkflow(
+      identityToken || 'Matheus-Admin',
+      cleanPrompt,
+      sessionId || 'sess_main_admin',
+      {
+        type: 'voice_or_text',
+        inputSource: 'android_voice_service',
         prompt: cleanPrompt,
-        textPrompt: cleanPrompt,
-        sensorData: {
-          type: 'voice_or_text',
-          inputSource: 'android_voice_service',
-          prompt: cleanPrompt,
-          textPrompt: cleanPrompt
-        }
-      })
-    });
-    const ingJson: any = await ingResp.json().catch(() => ({}));
-    const reply = String(ingJson?.data?.response || ingJson?.response || ingJson?.reply || ingJson?.message || 'Pronto.').trim();
+        textPrompt: cleanPrompt
+      }
+    );
+    const reply = String(ingJson?.data?.response || ingJson?.response || 'Pronto.').trim();
 
     let replyAudioB64 = '';
     if (reply) {
       try {
+        const localBase = `http://127.0.0.1:${PORT}`;
         const spResp = await fetch(`${localBase}/api/v1/audio/speak`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
