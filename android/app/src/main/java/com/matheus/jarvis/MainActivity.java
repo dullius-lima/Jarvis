@@ -3,55 +3,62 @@ package com.matheus.jarvis;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import com.getcapacitor.BridgeActivity;
+import android.provider.Settings;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import java.util.ArrayList;
 import java.util.List;
 
-public class MainActivity extends BridgeActivity {
+public class MainActivity extends AppCompatActivity {
+    public static volatile boolean isAppInForeground = false;
+
     @Override
-    public void onCreate(Bundle savedInstanceState) {
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        try {
-            startForegroundService(new Intent(this, JarvisVoiceService.class));
-        } catch (Throwable ignored) {}
-        requestJarvisPermissionsAndSync();
+        launchFloatingOrbAndExit();
     }
 
     @Override
-    public void onResume() {
+    protected void onResume() {
         super.onResume();
-        DeviceCommandExecutor.startMesh(this, "galaxy_s25");
-        DeviceCommandExecutor.triggerSyncNow(this);
+        isAppInForeground = false;
+        launchFloatingOrbAndExit();
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        DeviceCommandExecutor.triggerSyncNow(this);
-    }
-
-    private void requestJarvisPermissionsAndSync() {
-        List<String> req = new ArrayList<>();
-        String[] basePerms = {
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.CAMERA,
-            Manifest.permission.READ_CONTACTS,
-            Manifest.permission.WRITE_CONTACTS
-        };
-        for (String p : basePerms) {
-            if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) req.add(p);
+    private void launchFloatingOrbAndExit() {
+        List<String> perms = new ArrayList<>();
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            perms.add(Manifest.permission.RECORD_AUDIO);
         }
-        String mediaPerm = Build.VERSION.SDK_INT >= 33
-            ? Manifest.permission.READ_MEDIA_IMAGES
-            : Manifest.permission.READ_EXTERNAL_STORAGE;
-        if (checkSelfPermission(mediaPerm) != PackageManager.PERMISSION_GRANTED) req.add(mediaPerm);
-
-        if (!req.isEmpty()) {
-            requestPermissions(req.toArray(new String[0]), 9021);
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            perms.add(Manifest.permission.CAMERA);
         }
-        DeviceCommandExecutor.startMesh(this, "galaxy_s25");
-        DeviceCommandExecutor.triggerSyncNow(this);
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            perms.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+        if (!perms.isEmpty()) {
+            ActivityCompat.requestPermissions(this, perms.toArray(new String[0]), 9021);
+            return;
+        }
+
+        if (!Settings.canDrawOverlays(this)) {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+            return;
+        }
+
+        Intent svc = new Intent(this, JarvisVoiceService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(svc);
+        } else {
+            startService(svc);
+        }
+        JarvisFloatingOrbManager.attach(this);
+        moveTaskToBack(true);
+        finish();
     }
 }

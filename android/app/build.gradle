@@ -4,6 +4,9 @@ android {
     namespace = "com.matheus.jarvis"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
         applicationId "com.matheus.jarvis"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion

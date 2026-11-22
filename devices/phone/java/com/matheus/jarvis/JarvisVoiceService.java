@@ -50,7 +50,7 @@ public class JarvisVoiceService extends Service {
         if (instance != null) {
             instance.forceAwakeUntil = System.currentTimeMillis() + 9000L;
             instance.playChime(true);
-            instance.showGlow(1);
+            JarvisFloatingOrbManager.setOrbState("active");
         }
     }
 
@@ -100,6 +100,7 @@ public class JarvisVoiceService extends Service {
         super.onCreate();
         owwDetector = new OpenWakeWordDetector(this);
         DeviceCommandExecutor.startMesh(this, "galaxy_s25");
+        JarvisFloatingOrbManager.attach(this);
         instance = this;
         mainHandler = new Handler(Looper.getMainLooper());
         tts = new TextToSpeech(getApplicationContext(), st -> {
@@ -197,7 +198,7 @@ public class JarvisVoiceService extends Service {
         while (running) {
             if (!canListenNow()) {
                 if (rec != null) { try { rec.stop(); rec.release(); } catch (Exception ignored) {} rec = null; }
-                hideGlow();
+                JarvisFloatingOrbManager.setOrbState("idle");
                 try { Thread.sleep(250L); } catch (InterruptedException ignored) {}
                 continue;
             }
@@ -251,7 +252,7 @@ public class JarvisVoiceService extends Service {
                 preRoll.clear();
                 utterance.write(pcmBytes);
 
-                if (forced) showGlow(1);
+                if (forced) JarvisFloatingOrbManager.setOrbState("active");
                 long startSpeak = System.currentTimeMillis();
                 long lastVoice = startSpeak;
 
@@ -273,9 +274,9 @@ public class JarvisVoiceService extends Service {
                 }
 
                 byte[] fullPcm = utterance.toByteArray();
-                if (fullPcm.length < 11000) { hideGlow(); continue; }
+                if (fullPcm.length < 11000) { JarvisFloatingOrbManager.setOrbState("idle"); continue; }
 
-                if (forced) showGlow(2);
+                if (forced) JarvisFloatingOrbManager.setOrbState("active");
                 sendAudioTurn(fullPcm, sr, !forced);
             } catch (Exception e) {
                 if (rec != null) { try { rec.stop(); rec.release(); } catch (Exception ignored) {} rec = null; }
@@ -312,7 +313,7 @@ public class JarvisVoiceService extends Service {
             String audioB64 = res.optString("audioBase64", "");
 
             updateNotifStatus(transcript.isEmpty() ? "🎙️ Ouvindo 'Jarvis'..." : "👂 Ouviu: " + transcript);
-            if (!woke && reply.isEmpty()) { hideGlow(); return; }
+            if (!woke && reply.isEmpty()) { JarvisFloatingOrbManager.setOrbState("idle"); return; }
             forceAwakeUntil = 0L;
 
             if (transcript.toLowerCase().matches(".*(obrigado|pode descansar|encerrar|tchau).*")) {
@@ -323,30 +324,30 @@ public class JarvisVoiceService extends Service {
 
             if (reply.isEmpty() && woke) {
                 playChime(true);
-                showGlow(1);
+                JarvisFloatingOrbManager.setOrbState("active");
                 return;
             }
 
             playReply(reply, audioB64);
         } catch (Exception e) {
             updateNotifStatus("❌ Erro conexão VM: " + e.getClass().getSimpleName());
-            hideGlow();
+            JarvisFloatingOrbManager.setOrbState("idle");
         }
     }
 
     private void playReply(String text, String audioB64) {
         String clean = (text == null ? "" : text).replaceAll("[*#_`~>|]", "").trim();
         if (prefSilent || (clean.isEmpty() && (audioB64 == null || audioB64.isEmpty()))) {
-            if (System.currentTimeMillis() < continuousUntil) showGlow(1); else hideGlow();
+            if (System.currentTimeMillis() < continuousUntil) JarvisFloatingOrbManager.setOrbState("active"); else JarvisFloatingOrbManager.setOrbState("idle");
             return;
         }
         isSpeaking = true;
-        showGlow(3);
+        JarvisFloatingOrbManager.setOrbState("active");
         mainHandler.post(() -> {
             Runnable onDone = () -> {
                 isSpeaking = false;
-                if (System.currentTimeMillis() < continuousUntil) showGlow(1);
-                else hideGlow();
+                if (System.currentTimeMillis() < continuousUntil) JarvisFloatingOrbManager.setOrbState("active");
+                else JarvisFloatingOrbManager.setOrbState("idle");
             };
             if (audioB64 != null && !audioB64.isEmpty()) {
                 try {
@@ -428,6 +429,7 @@ public class JarvisVoiceService extends Service {
         return out.toByteArray();
     }
 
-    @Override public void onDestroy() { running = false; hideGlow(); if (tts != null) tts.shutdown(); super.onDestroy(); }
+    @Override public void onDestroy() { running = false; JarvisFloatingOrbManager.setOrbState("idle"); if (tts != null) tts.shutdown(); JarvisFloatingOrbManager.detach();
+        super.onDestroy(); }
     @Override public IBinder onBind(Intent i) { return null; }
 }

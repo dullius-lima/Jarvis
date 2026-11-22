@@ -70,9 +70,7 @@ public class JarvisSensoryHelper {
 
     public static void handleCaptureRequest(Context ctx, String deviceId, String requestId, String modality, String facing) {
         boolean isScreen = "screen".equalsIgnoreCase(modality);
-        showIdentificationPill(ctx, isScreen
-                ? "🖥️ TELA ATIVA • Galaxy S25 | Sob demanda (0 tokens)"
-                : "📷 CÂMERA ATIVA (" + ("back".equalsIgnoreCase(facing) ? "Traseira" : "Frontal") + ") • Galaxy S25");
+        
 
         new Thread(() -> {
             String frame = isScreen
