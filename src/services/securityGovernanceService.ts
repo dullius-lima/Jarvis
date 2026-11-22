@@ -108,3 +108,34 @@ export function startMemoryAndBackupScheduler() {
 
   console.log('🔐 [Segurança] Agendador de Backups Criptografados (AES-256) ativado.');
 }
+// Limpeza automática da Memória de Curto Prazo a cada 6 horas
+if (!(globalThis as any).__jarvisShortTermGcStarted) {
+  (globalThis as any).__jarvisShortTermGcStarted = true;
+  setInterval(async () => {
+    try {
+      await pool.query(`
+        DELETE FROM jarvis_chat_memory
+        WHERE session_id LIKE 'sess_%'
+          AND session_id <> 'sess_main_admin'
+          AND created_at < NOW() - INTERVAL '24 hours';
+      `);
+      await pool.query(`
+        DELETE FROM jarvis_chat_memory
+        WHERE id NOT IN (
+          SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) AS rn
+            FROM jarvis_chat_memory
+          ) sub
+          WHERE rn <= 50
+        );
+      `);
+      await pool.query(`
+        DELETE FROM specialist_context_memory
+        WHERE created_at < NOW() - INTERVAL '48 hours';
+      `);
+      console.log('🧹 [Garbage Collector] Memória de curto prazo higienizada.');
+    } catch (err: any) {
+      console.error('❌ [Garbage Collector] Erro ao limpar curto prazo:', err.message);
+    }
+  }, 6 * 60 * 60 * 1000).unref?.();
+}
