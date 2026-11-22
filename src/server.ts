@@ -358,17 +358,17 @@ const DEFAULT_USER_PREFS = {
   edge_glow_enabled: true,
   wake_screen_on_call: true,
   privacy_lock_camera: false,
-  continuous_chat_seconds: 0,
+  continuous_chat_seconds: 15,
   mic_sensitivity: 'balanced'
 };
-
 
 app.post('/api/v1/voice/turn', async (req, res) => {
   try {
     const { audioBase64, mimeType, requireWakeWord, identityToken, sessionId } = req.body || {};
     if (!audioBase64) return res.status(400).json({ success: false, error: 'audioBase64 ausente' });
 
-    const trResp = await fetch('http://127.0.0.1:3333/api/v1/audio/transcribe', {
+    const localBase = `http://127.0.0.1:${PORT}`;
+    const trResp = await fetch(`${localBase}/api/v1/audio/transcribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ audioBase64, mimeType: mimeType || 'audio/wav', modelSize: 'small' })
@@ -380,19 +380,19 @@ app.post('/api/v1/voice/turn', async (req, res) => {
     if (!transcript) return res.json({ success: true, woke: false, transcript: '', reply: '' });
 
     const norm = transcript.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const hasWake = /\b(jarvis|javis|jarves|iarvis|yarvis|djarvis|jarbas|chaves|jar\s*vis|ja\s*vis)\b/.test(norm);
+    const hasWake = /\b(jarvis|javis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|jar\s*vis|ja\s*vis)\b/.test(norm);
     if (requireWakeWord !== false && !hasWake) {
       return res.json({ success: true, woke: false, transcript, reply: '' });
     }
 
     const cleanPrompt = transcript
-      .replace(/^(oi|olá|ola|ei|hey|ok|fala)?[,\s.-]*(jarvis|javis|jarves|iarvis|yarvis|djarvis|jarbas|chaves)[,\s.:!?-]*/i, '')
+      .replace(/^(oi|olá|ola|ei|hey|ok|fala|e\s*a[ií])?[,\s.-]*(jarvis|j[aá]vis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|j\.a\.r\.v\.i\.s\.?)\s*[,\s.:!?-]*/i, '')
       .trim();
     if (!cleanPrompt) {
       return res.json({ success: true, woke: true, transcript, reply: '' });
     }
 
-    const ingResp = await fetch('http://127.0.0.1:3333/api/v1/webhook/ingress', {
+    const ingResp = await fetch(`${localBase}/api/v1/webhook/ingress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -402,6 +402,7 @@ app.post('/api/v1/voice/turn', async (req, res) => {
         textPrompt: cleanPrompt,
         sensorData: {
           type: 'voice_or_text',
+          inputSource: 'android_voice_service',
           prompt: cleanPrompt,
           textPrompt: cleanPrompt
         }
@@ -413,7 +414,7 @@ app.post('/api/v1/voice/turn', async (req, res) => {
     let replyAudioB64 = '';
     if (reply) {
       try {
-        const spResp = await fetch('http://127.0.0.1:3333/api/v1/audio/speak', {
+        const spResp = await fetch(`${localBase}/api/v1/audio/speak`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: reply })

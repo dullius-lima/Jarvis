@@ -11,7 +11,7 @@ export interface JarvisAudioPrefs {
   wake_screen_on_call: boolean;
   privacy_lock_camera: boolean;
   continuous_chat_seconds: number;
-  mic_sensitivity: 'high' | 'balanced' | 'noisy';
+  mic_sensitivity: 'high' | 'balanced' | 'noisy' | number;
 }
 
 const DEFAULT_PREFS: JarvisAudioPrefs = {
@@ -50,6 +50,7 @@ export function useVoiceAndAudio(
   let currentTtsAudio: HTMLAudioElement | null = null;
   let shouldBeListening = true;
   let userPrefs: JarvisAudioPrefs = { ...DEFAULT_PREFS };
+  let activeTranscriptCallback: ((text: string) => void) | null = null;
 
   function loadCachedPrefs() {
     try {
@@ -168,9 +169,10 @@ export function useVoiceAndAudio(
   }
 
   function keepAwakeWindow(seconds?: number) {
-    const windowSec = typeof seconds === 'number'
-      ? seconds
-      : Math.max(10, Number(userPrefs.continuous_chat_seconds ?? 15));
+    const windowSec =
+      typeof seconds === 'number' && seconds > 0
+        ? seconds
+        : Math.max(10, Number(userPrefs.continuous_chat_seconds ?? 15));
 
     isJarvisAwake.value = true;
     isRecordingAudio.value = true;
@@ -184,18 +186,23 @@ export function useVoiceAndAudio(
 
   function stopAllAudio() {
     if (currentTtsAudio) {
-      try { currentTtsAudio.pause(); currentTtsAudio = null; } catch {}
+      try {
+        currentTtsAudio.pause();
+        currentTtsAudio = null;
+      } catch {}
     }
     if ('speechSynthesis' in window) {
-      try { window.speechSynthesis.cancel(); } catch {}
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
     }
     isJarvisSpeaking.value = false;
   }
 
-  async function speakJarvisResponse(rawText: string) {
+  async function speakJarvisResponse(rawText: string, forceKeepAwake?: boolean) {
     const cleanText = (rawText || '')
       .replace(/```[\s\S]*?```/g, '')
-      .replace(/[*#_`~>|]/g, '')
+      .replace(/[*#_~`>|]/g, '')
       .replace(/https?:\/\/\S+/g, '')
       .replace(/\s+/g, ' ')
       .trim();
@@ -208,8 +215,8 @@ export function useVoiceAndAudio(
         cleanText.endsWith('?') ||
         /\b(qual deles|qual contato|qual aparelho|qual comodo|confirma|deseja|quer que eu|pode repetir)\b/.test(normReply);
 
-      // Mantém conversa aberta pelo tempo configurado (padrão 15s) ou 12s se JARVIS fez uma pergunta
-      const nextWindowSec = configuredSec > 0 ? configuredSec : (jarvisAskedQuestion ? 12 : 0);
+      const nextWindowSec =
+        configuredSec > 0 ? configuredSec : jarvisAskedQuestion || forceKeepAwake ? 12 : 0;
 
       if (nextWindowSec > 0 && !document.hidden) {
         keepAwakeWindow(nextWindowSec);
@@ -267,9 +274,16 @@ export function useVoiceAndAudio(
   }
 
   function stopRecognitionInstance() {
-    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
     if (recognition) {
-      try { recognition.onend = null; recognition.onerror = null; recognition.stop(); } catch {}
+      try {
+        recognition.onend = null;
+        recognition.onerror = null;
+        recognition.stop();
+      } catch {}
       recognition = null;
     }
     isListening.value = false;
@@ -317,37 +331,40 @@ export function useVoiceAndAudio(
           .normalize('NFD')
           .replace(/[\u0300-\u036f]/g, '');
 
-        // Gatilho limpo: removidas palavras comuns como "chaves"
-        const hasWakeWord = /\b(jarvis|javis|jarves|jaives|javes|iarvis|yarvis|jarbas)\b/i.test(normalized);
+        const hasWakeWord = /\b(jarvis|javis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas)\b/i.test(normalized);
 
         if (hasWakeWord && !isJarvisAwake.value) {
           playActivationSignal('wake');
           keepAwakeWindow();
         }
 
+        if (isJarvisAwake.value && activeTranscriptCallback && rawTranscript) {
+          activeTranscriptCallback(rawTranscript);
+        }
+
         if (result.isFinal && (hasWakeWord || isJarvisAwake.value)) {
           const cleanedCommand = rawTranscript
-            .replace(/^(?:oi|ol[aá]|ei|ok|fala|e\s*a[ií])?[\s,.-]*(?:jarvis|j[aá]vis|jarves|jaives|javes|iarvis|yarvis|jarbas|j\.a\.r\.v\.i\.s\.?)[\s,.:!?-]*/i, '')
+            .replace(/^(?:oi|ol[aá]|ei|ok|fala|e\s*a[ií])?[\s,.-]*(?:jarvis|j[aá]vis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|j\.a\.r\.v\.i\.s\.?)[\s,.:!?-]*/i, '')
             .trim();
 
-          // Chamou apenas "Jarvis": abre a janela de conversa sem repetir frase robótica
           if (cleanedCommand.length < 2) {
             playActivationSignal('wake');
             keepAwakeWindow();
             return;
           }
 
-          // Frases de encerramento fecham a conversa contínua na hora
           const normCmd = cleanedCommand
             .toLowerCase()
             .normalize('NFD')
             .replace(/[\u0300-\u036f?!.]/g, '')
             .trim();
           if (/^(obrigado|obrigada|valeu|so isso|pode descansar|dispensado|tchau|encerrar|parar)$/.test(normCmd)) {
+            activeTranscriptCallback = null;
             closeAwakeWindow();
             return;
           }
 
+          activeTranscriptCallback = null;
           playActivationSignal('confirm');
           keepAwakeWindow();
           voiceStatusText.value = `⚡ Executando: "${cleanedCommand}"`;
@@ -383,12 +400,16 @@ export function useVoiceAndAudio(
 
   function stopContinuousVigilance() {
     shouldBeListening = false;
+    activeTranscriptCallback = null;
     closeAwakeWindow();
     stopRecognitionInstance();
   }
 
-  function toggleMicrophone() {
+  function toggleMicrophone(onInterimTranscript?: (text: string) => void) {
     ensureAudioUnlocked();
+    if (onInterimTranscript) {
+      activeTranscriptCallback = onInterimTranscript;
+    }
     playActivationSignal('wake');
     keepAwakeWindow(Math.max(15, Number(userPrefs.continuous_chat_seconds || 15)));
     startContinuousVigilance(true);
@@ -441,10 +462,10 @@ export function useVoiceAndAudio(
     stopContinuousVigilance,
     stopMicrophoneSession: stopContinuousVigilance,
     toggleMicrophone,
-    onJarvisCoreClick: () => toggleMicrophone(),
+    onJarvisCoreClick: (cb?: (text: string) => void) => toggleMicrophone(cb),
     speakJarvisResponse,
     stopAllAudio,
     playActivationSignal,
-    playJarvisChime: playActivationSignal
+    playJarvisChime: () => playActivationSignal('wake')
   };
 }

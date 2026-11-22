@@ -53,7 +53,18 @@ export function useEcosystem(sid: string) {
 
   async function loadEcosystemData() {
     try {
-      try { const sr = await fetch('/api/v1/memory/sessions'); const sj = await sr.json(); const ss = sj.data || sj.sessions || []; if (ss[0]?.session_id) sessionId = ss[0].session_id; } catch {}
+      try {
+        const storedSid = localStorage.getItem('jarvis_active_session_id');
+        if (storedSid) {
+          sessionId = storedSid;
+        } else {
+          const sr = await fetch('/api/v1/memory/sessions');
+          const sj = await sr.json();
+          const ss = sj.data || sj.sessions || [];
+          const humanSession = ss.find((s: any) => s?.session_id && !String(s.session_id).startsWith('cron_'));
+          if (humanSession?.session_id) sessionId = humanSession.session_id;
+        }
+      } catch {}
       const [agentsRes, connRes, memRes] = await Promise.all([
         fetch('/api/v1/agents').catch(() => null),
         fetch('/api/v1/connectors').catch(() => null),

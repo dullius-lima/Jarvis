@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.webkit.WebSettings;
+import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
@@ -23,7 +24,8 @@ public class MainActivity extends BridgeActivity {
         if (classExists("com.matheus.jarvis.JarvisDevicePlugin")) {
             try {
                 @SuppressWarnings("unchecked")
-                Class<? extends com.getcapacitor.Plugin> cls = (Class<? extends com.getcapacitor.Plugin>) Class.forName("com.matheus.jarvis.JarvisDevicePlugin");
+                Class<? extends com.getcapacitor.Plugin> cls =
+                    (Class<? extends com.getcapacitor.Plugin>) Class.forName("com.matheus.jarvis.JarvisDevicePlugin");
                 registerPlugin(cls);
             } catch (Exception ignored) {}
         }
@@ -34,9 +36,19 @@ public class MainActivity extends BridgeActivity {
         }
 
         requestAllPhonePermissions();
-        startPhoneVoiceService();
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startPhoneVoiceService();
+        }
 
         new Handler(Looper.getMainLooper()).postDelayed(this::promptAssistantRoleIfNeeded, 1400L);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startPhoneVoiceService();
+        }
     }
 
     private boolean classExists(String name) {
@@ -73,9 +85,11 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void startPhoneVoiceService() {
-        Intent svc = new Intent(this, JarvisVoiceService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc);
-        else startService(svc);
+        try {
+            Intent svc = new Intent(this, JarvisVoiceService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc);
+            else startService(svc);
+        } catch (Exception ignored) {}
     }
 
     @Override public void onResume() { super.onResume(); isAppInForeground = true; }
