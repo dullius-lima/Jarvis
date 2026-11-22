@@ -1,3 +1,32 @@
+
+// [JWT_FETCH_INTERCEPTOR]
+if (typeof window !== 'undefined' && !(window as any).__jarvisJwtFetchPatched) {
+  (window as any).__jarvisJwtFetchPatched = true;
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const isApiCall = urlStr.startsWith('/api/') || urlStr.includes('/api/v1/');
+    const token = localStorage.getItem('jarvis_auth_jwt_token') || '';
+    let nextInit = init;
+    if (isApiCall && token) {
+      const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+      if (!headers.has('Authorization')) {
+        headers.set('Authorization', 'Bearer ' + token);
+      }
+      nextInit = { ...init, headers };
+    }
+    const resp = await _origFetch(input, nextInit);
+    if (isApiCall && resp.status === 401 && !urlStr.includes('/api/v1/auth/login')) {
+      localStorage.removeItem('jarvis_authenticated_session');
+      localStorage.removeItem('jarvis_auth_jwt_token');
+      if (window.location.pathname.includes('settings')) {
+        window.location.href = '/';
+      }
+    }
+    return resp;
+  };
+}
+
 if (typeof window !== 'undefined' && !(window as any).__jarvisGlobalSync) {
   (window as any).__jarvisGlobalSync = true;
   const origFetch = window.fetch.bind(window);

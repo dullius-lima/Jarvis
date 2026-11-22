@@ -94,6 +94,9 @@
 </template>
 
 <script setup lang="ts">
+if (typeof window !== 'undefined' && (localStorage.getItem('jarvis_authenticated_session') !== 'true' || !localStorage.getItem('jarvis_auth_jwt_token'))) {
+  window.location.href = '/';
+}
 import { registrarFerramentaWebMcp } from "./services/webMcpBridge";
 import { ref, watch } from 'vue';
 import AbaCerebro from './components/settings/AbaCerebro.vue';

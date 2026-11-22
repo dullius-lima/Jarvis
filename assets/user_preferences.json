@@ -1,15 +1,15 @@
 {
   "listen_screen_off": false,
   "listen_only_unlocked": false,
-  "listen_only_app_open": true,
-  "push_to_talk_only": false,
+  "listen_only_app_open": false,
+  "push_to_talk_only": true,
   "silent_text_only": false,
   "chime_enabled": true,
   "edge_glow_enabled": true,
   "wake_screen_on_call": true,
   "privacy_lock_camera": false,
   "continuous_chat_seconds": 0,
-  "mic_sensitivity": 2.5,
+  "mic_sensitivity": 2.3,
   "whisper_model": "tiny",
   "voice_lock_only_registered": false
 }

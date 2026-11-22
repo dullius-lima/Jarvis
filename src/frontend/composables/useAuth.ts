@@ -1,5 +1,4 @@
-// Sessão, token JWT, login e troca de credenciais
-
+// Sessão, token JWT, login real e troca de credenciais
 import { ref, nextTick } from 'vue';
 
 const STORAGE_AUTH_KEY = 'jarvis_authenticated_session';
@@ -7,8 +6,12 @@ const STORAGE_EMAIL_KEY = 'jarvis_authenticated_email';
 const STORAGE_TOKEN_KEY = 'jarvis_auth_jwt_token';
 
 export function useAuth(onLoginSuccess?: () => Promise<void> | void) {
-  const isAuthenticated = ref<boolean>(localStorage.getItem(STORAGE_AUTH_KEY) === 'true');
-  const loginEmail = ref<string>(localStorage.getItem(STORAGE_EMAIL_KEY) || 'matheus_dullius@hotmail.com');
+  const hasStoredSession =
+    localStorage.getItem(STORAGE_AUTH_KEY) === 'true' &&
+    Boolean(localStorage.getItem(STORAGE_TOKEN_KEY));
+
+  const isAuthenticated = ref<boolean>(hasStoredSession);
+  const loginEmail = ref<string>(localStorage.getItem(STORAGE_EMAIL_KEY) || '');
   const loginPassword = ref<string>('');
   const loginError = ref<string>('');
   const isLoggingIn = ref<boolean>(false);
@@ -32,15 +35,11 @@ export function useAuth(onLoginSuccess?: () => Promise<void> | void) {
       });
       const data = await res.json().catch(() => ({}));
 
-      const isDefaultAdminMatch =
-        (emailTrimmed === 'matheus_dullius@hotmail.com' || emailTrimmed === 'matheus_dulius@hotmail.com') &&
-        passTrimmed === '123456';
-
-      if ((res.ok && data.success) || isDefaultAdminMatch) {
+      if (res.ok && data.success && data.token) {
         isAuthenticated.value = true;
         localStorage.setItem(STORAGE_AUTH_KEY, 'true');
         localStorage.setItem(STORAGE_EMAIL_KEY, emailTrimmed);
-        if (data.token) localStorage.setItem(STORAGE_TOKEN_KEY, data.token);
+        localStorage.setItem(STORAGE_TOKEN_KEY, data.token);
         loginPassword.value = '';
         await nextTick();
         if (onLoginSuccess) await onLoginSuccess();
@@ -48,18 +47,7 @@ export function useAuth(onLoginSuccess?: () => Promise<void> | void) {
         loginError.value = data.error || 'E-mail ou senha incorretos.';
       }
     } catch {
-      if (
-        (emailTrimmed === 'matheus_dullius@hotmail.com' || emailTrimmed === 'matheus_dulius@hotmail.com') &&
-        passTrimmed === '123456'
-      ) {
-        isAuthenticated.value = true;
-        localStorage.setItem(STORAGE_AUTH_KEY, 'true');
-        localStorage.setItem(STORAGE_EMAIL_KEY, emailTrimmed);
-        await nextTick();
-        if (onLoginSuccess) await onLoginSuccess();
-      } else {
-        loginError.value = 'Falha ao conectar com o servidor.';
-      }
+      loginError.value = 'Falha ao conectar com o servidor.';
     } finally {
       isLoggingIn.value = false;
     }
@@ -72,9 +60,13 @@ export function useAuth(onLoginSuccess?: () => Promise<void> | void) {
       return;
     }
     try {
+      const token = localStorage.getItem(STORAGE_TOKEN_KEY) || '';
       const res = await fetch('/api/v1/auth/update-credentials', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({
           currentEmail: loginEmail.value,
           newEmail: newEmailInput.value.trim(),
@@ -98,6 +90,7 @@ export function useAuth(onLoginSuccess?: () => Promise<void> | void) {
   function handleLogout(onLogoutCallback?: () => void) {
     isAuthenticated.value = false;
     localStorage.removeItem(STORAGE_AUTH_KEY);
+    localStorage.removeItem(STORAGE_TOKEN_KEY);
     if (onLogoutCallback) onLogoutCallback();
   }
 

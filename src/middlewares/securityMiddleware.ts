@@ -41,8 +41,9 @@ export function verifyJwtToken(token: string): any | null {
     }
 
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-    if (payload.exp && Date.now() > payload.exp * 1000 && Date.now() > payload.exp) {
-      return null;
+    if (payload.exp) {
+      const expMs = payload.exp > 1e12 ? payload.exp : payload.exp * 1000;
+      if (Date.now() > expMs) return null;
     }
     return payload;
   } catch {
@@ -58,11 +59,14 @@ export function requireJwtAuth(req: Request, res: Response, next: NextFunction) 
     return next();
   }
 
-  const isLocalOrigin =
-    req.hostname === 'localhost' ||
-    req.hostname === '127.0.0.1' ||
-    req.ip === '::1' ||
-    req.ip === '127.0.0.1';
+  // Requisição vinda de proxy externo (Nginx) nunca é considerada local
+  const forwardedFor = req.headers['x-forwarded-for'];
+  const realIp = req.headers['x-real-ip'];
+  const remoteAddr = req.socket?.remoteAddress || '';
+  const isDirectLoopback =
+    !forwardedFor &&
+    !realIp &&
+    (remoteAddr === '127.0.0.1' || remoteAddr === '::1' || remoteAddr === '::ffff:127.0.0.1');
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
@@ -77,14 +81,14 @@ export function requireJwtAuth(req: Request, res: Response, next: NextFunction) 
     return next();
   }
 
-  if (process.env.NODE_ENV === 'production' || !isLocalOrigin) {
-    return res.status(401).json({
-      success: false,
-      error: 'Acesso negado: Token JWT obrigatório para esta rota administrativa.'
-    });
+  if (isDirectLoopback) {
+    return next();
   }
 
-  next();
+  return res.status(401).json({
+    success: false,
+    error: 'Acesso negado: Token JWT obrigatório para esta rota administrativa.'
+  });
 }
 
 // ============================================================================

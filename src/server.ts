@@ -9,6 +9,12 @@ import path from 'path';
 import fs from 'fs';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import {
+  requireJwtAuth,
+  createRateLimiter,
+  validateWebhookIngress
+} from './middlewares/securityMiddleware.js';
+
 import { pool, testConnection } from './config/database.js';
 import { initializeDatabaseSchema } from './models/databaseSetup.js';
 import { initBrainWebSocketServer } from './services/brainSocketService.js';
@@ -109,6 +115,7 @@ const ragRoutes = resolveRouter(ragRoutesMod);
 const messagingRoutes = resolveRouter(messagingRoutesMod);
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = Number(process.env.PORT || 3333);
 
 app.use(cors());
@@ -120,10 +127,13 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.get('/download/jarvis-tv.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis-tv.apk', 'jarvis-tv.apk'));
 app.get('/download/jarvis.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis.apk', 'jarvis.apk'));
 app.get('/download/jarvis-watch.apk', (_req, res) => res.download('/home/ubuntu/jarvis_releases/jarvis-watch.apk', 'jarvis-watch.apk'));
-app.use('/api/v1/auth', authRoutes);
+const authRateLimiter = createRateLimiter(15, 60 * 1000);
+const webhookRateLimiter = createRateLimiter(120, 60 * 1000);
+
+app.use('/api/v1/auth', authRateLimiter, authRoutes);
 
 // __SYNC_AGENT_SCHEDULE_FIELDS__
-app.use('/api/v1/agents', (req: Request, res: Response, next: NextFunction) => {
+app.use('/api/v1/agents', requireJwtAuth, (req: Request, res: Response, next: NextFunction) => {
   if ((req.method === 'POST' || req.method === 'PUT') && req.body && req.body.slug) {
     const b = req.body;
     const schedList = Array.isArray(b.schedules) ? b.schedules : [];
@@ -141,37 +151,56 @@ app.use('/api/v1/agents', (req: Request, res: Response, next: NextFunction) => {
   next();
 });
 app.use('/api/v1/agents', agentRoutes);
-app.use('/api/v1/rag', ragRoutes);
-app.use('/api/v1/messaging', messagingRoutes);
-app.use('/api/v1/triggers', triggerRoutes);
+app.use('/api/v1/rag', requireJwtAuth, ragRoutes);
+app.use('/api/v1/messaging', requireJwtAuth, messagingRoutes);
+app.use('/api/v1/triggers', requireJwtAuth, triggerRoutes);
 
 // 2. Configurações Dinâmicas do Cérebro Central (JARVIS / SNC) + Sincronização GitHub Gist
-app.get('/api/v1/brain-config', getBrainConfig);
-app.put('/api/v1/brain-config', updateBrainConfig);
-app.post('/api/v1/brain-config/validate', validateLLMConnection);
-app.get('/api/v1/brain-config/models', getSupportedModels);
-app.get('/api/v1/brain-config/prompt-versions', listPromptVersions);
-app.post('/api/v1/brain-config/port', manageServerPortAndEnv);
+app.get('/api/v1/brain-config', requireJwtAuth, getBrainConfig);
+app.put('/api/v1/brain-config', requireJwtAuth, updateBrainConfig);
+app.post('/api/v1/brain-config/validate', requireJwtAuth, validateLLMConnection);
+app.get('/api/v1/brain-config/models', requireJwtAuth, getSupportedModels);
+app.get('/api/v1/brain-config/prompt-versions', requireJwtAuth, listPromptVersions);
+app.post('/api/v1/brain-config/port', requireJwtAuth, manageServerPortAndEnv);
 
 // 3. Conectores Externos & Chaves de API das Tools
-app.get('/api/v1/connectors', connectorController.listConnectors);
-app.post('/api/v1/connectors', connectorController.saveConnectorConfig);
-app.put('/api/v1/connectors', connectorController.saveConnectorConfig);
+app.get('/api/v1/connectors', requireJwtAuth, connectorController.listConnectors);
+app.post('/api/v1/connectors', requireJwtAuth, connectorController.saveConnectorConfig);
+app.put('/api/v1/connectors', requireJwtAuth, connectorController.saveConnectorConfig);
 if (typeof (connectorController as any).testExternalConnector === 'function') {
-  app.post('/api/v1/connectors/test', (connectorController as any).testExternalConnector);
+  app.post('/api/v1/connectors/test', requireJwtAuth, (connectorController as any).testExternalConnector);
 }
 if (typeof (connectorController as any).deleteExternalConnector === 'function') {
-  app.delete('/api/v1/connectors/:key', (connectorController as any).deleteExternalConnector);
+  app.delete('/api/v1/connectors/:key', requireJwtAuth, (connectorController as any).deleteExternalConnector);
 }
 
 // ROTA DE CONSULTA DIRETA AO BANCO PARA A ABA DE MEMÓRIA (MÉDIO E LONGO PRAZO)
-app.post('/api/v1/connectors/query-db', async (req: Request, res: Response) => {
+app.post('/api/v1/connectors/query-db', requireJwtAuth, async (req: Request, res: Response) => {
   try {
     const { query, params } = req.body || {};
-    if (!query) {
+    if (!query || typeof query !== 'string') {
       return res.status(400).json({ success: false, error: 'Query SQL obrigatória.' });
     }
-    const result = await pool.query(query, params || []);
+    const cleanSql = query.trim();
+    if (!/^SELECT\s+/i.test(cleanSql) || /;\s*\S/.test(cleanSql)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Operação bloqueada: este endpoint permite apenas consultas SELECT únicas.'
+      });
+    }
+    if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|GRANT|REVOKE|CREATE|COPY|EXECUTE)\b/i.test(cleanSql)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Comandos de escrita ou DDL não são permitidos nesta rota.'
+      });
+    }
+    if (/\b(system_configs|identities|pg_shadow|pg_authid)\b/i.test(cleanSql)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado a tabelas protegidas de credenciais.'
+      });
+    }
+    const result = await pool.query(cleanSql, Array.isArray(params) ? params : []);
     return res.status(200).json({
       success: true,
       rows: result.rows,
@@ -184,13 +213,13 @@ app.post('/api/v1/connectors/query-db', async (req: Request, res: Response) => {
 });
 
 // 4. Gestão de Memória por Session ID, Rollback de Prompts e Coleções Dinâmicas
-app.get('/api/v1/memory/sessions', listMemorySessions);
-app.get('/api/v1/memory/sessions/:sessionId', getSessionDetails);
-app.put('/api/v1/memory/messages/:id', updateMemoryMessage);
-app.delete('/api/v1/memory/messages/:id', deleteMemoryMessage);
-app.delete('/api/v1/memory/sessions/:sessionId', clearSessionMemory);
+app.get('/api/v1/memory/sessions', requireJwtAuth, listMemorySessions);
+app.get('/api/v1/memory/sessions/:sessionId', requireJwtAuth, getSessionDetails);
+app.put('/api/v1/memory/messages/:id', requireJwtAuth, updateMemoryMessage);
+app.delete('/api/v1/memory/messages/:id', requireJwtAuth, deleteMemoryMessage);
+app.delete('/api/v1/memory/sessions/:sessionId', requireJwtAuth, clearSessionMemory);
 
-app.get('/api/v1/dynamic-db/collections', async (_req: Request, res: Response) => {
+app.get('/api/v1/dynamic-db/collections', requireJwtAuth, async (_req: Request, res: Response) => {
   try {
     const result = await pool.query(`
       SELECT collection_name, COUNT(*) AS total_documents, MAX(created_at) AS last_updated
@@ -206,7 +235,7 @@ app.get('/api/v1/dynamic-db/collections', async (_req: Request, res: Response) =
 
 // 5. Biometria Vocal & Treinamento Voice Match (CRUD de Vozes)
 // 5.1 Listar todas as pessoas com voz gravada
-app.get('/api/v1/voice-profiles', async (_req: Request, res: Response) => {
+app.get('/api/v1/voice-profiles', requireJwtAuth, async (_req: Request, res: Response) => {
   try {
     const profiles = await listVoiceProfiles();
     return res.status(200).json({ success: true, data: profiles });
@@ -216,7 +245,7 @@ app.get('/api/v1/voice-profiles', async (_req: Request, res: Response) => {
 });
 
 // 5.2 Cadastrar ou calibrar mais uma amostra de voz
-app.post('/api/v1/voice-profiles/enroll', async (req: Request, res: Response) => {
+app.post('/api/v1/voice-profiles/enroll', requireJwtAuth, async (req: Request, res: Response) => {
   try {
     const { name, role = 'family', audioPayload } = req.body || {};
     if (!name || !audioPayload) {
@@ -233,7 +262,7 @@ app.post('/api/v1/voice-profiles/enroll', async (req: Request, res: Response) =>
 });
 
 // 5.3 Excluir perfil de voz cadastrado
-app.delete('/api/v1/voice-profiles/:id', async (req: Request, res: Response) => {
+app.delete('/api/v1/voice-profiles/:id', requireJwtAuth, async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const removed = await deleteVoiceProfile(id);
@@ -256,7 +285,7 @@ app.get('/api/v1/audio/voice-settings', async (_req: Request, res: Response) => 
   } catch { return res.status(200).json({ success: true, data: { ...d, hasClonedSample: false } }); }
 });
 
-app.post('/api/v1/audio/voice-settings', async (req: Request, res: Response) => {
+app.post('/api/v1/audio/voice-settings', requireJwtAuth, async (req: Request, res: Response) => {
   try {
     const { voice = 'pt-BR-AntonioNeural', rate = '+8%', pitch = '-4Hz', mode = 'edge' } = req.body || {};
     const dir = path.join(process.cwd(), 'assets', 'voices');
@@ -267,7 +296,7 @@ app.post('/api/v1/audio/voice-settings', async (req: Request, res: Response) => 
   } catch (err: any) { return res.status(500).json({ success: false, error: err.message }); }
 });
 
-app.post('/api/v1/audio/voice-sample', async (req: Request, res: Response) => {
+app.post('/api/v1/audio/voice-sample', requireJwtAuth, async (req: Request, res: Response) => {
   try {
     const { audioBase64 } = req.body || {};
     if (!audioBase64) return res.status(400).json({ success: false, error: 'Áudio vazio.' });
@@ -323,7 +352,7 @@ app.post('/api/v1/audio/speak', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/api/v1/dynamic-db/collections/:name', async (req: Request, res: Response) => {
+app.get('/api/v1/dynamic-db/collections/:name', requireJwtAuth, async (req: Request, res: Response) => {
   try {
     const result = await pool.query(
       'SELECT * FROM dynamic_collections WHERE collection_name = $1 ORDER BY id DESC LIMIT 100;',
@@ -335,7 +364,7 @@ app.get('/api/v1/dynamic-db/collections/:name', async (req: Request, res: Respon
   }
 });
 
-app.get('/api/v1/prompts/versions/:slug', async (req: Request, res: Response) => {
+app.get('/api/v1/prompts/versions/:slug', requireJwtAuth, async (req: Request, res: Response) => {
   try {
     const result = await pool.query(
       'SELECT * FROM prompt_versions WHERE target_slug = $1 ORDER BY id DESC LIMIT 20;',
@@ -459,14 +488,14 @@ app.post('/api/v1/preferences', saveUserPrefsHandler);
 app.put('/api/v1/preferences', saveUserPrefsHandler);
 
 // 7. Document Loader (RAG) & Terminal SSH
-app.post('/api/v1/docs-ssh/rag/upload', handleDocumentUploadToRag);
-app.get('/api/v1/docs-ssh/rag/documents', handleListRagDocuments);
-app.delete('/api/v1/docs-ssh/rag/documents/:id', handleDeleteRagDocument);
-app.post('/api/v1/docs-ssh/ssh/execute', handleSshExecute);
-app.post('/api/v1/docs-ssh/ssh/read-to-rag', handleSshReadToRag);
+app.post('/api/v1/docs-ssh/rag/upload', requireJwtAuth, handleDocumentUploadToRag);
+app.get('/api/v1/docs-ssh/rag/documents', requireJwtAuth, handleListRagDocuments);
+app.delete('/api/v1/docs-ssh/rag/documents/:id', requireJwtAuth, handleDeleteRagDocument);
+app.post('/api/v1/docs-ssh/ssh/execute', requireJwtAuth, handleSshExecute);
+app.post('/api/v1/docs-ssh/ssh/read-to-rag', requireJwtAuth, handleSshReadToRag);
 
 // 8. Webhooks de Entrada (Orquestrador Central, Áudio Whisper, Agentes Diretos e Webhook Global 1:N)
-app.post('/api/v1/webhook/ingress', handleWebhookIngress);
+app.post('/api/v1/webhook/ingress', webhookRateLimiter, validateWebhookIngress, handleWebhookIngress);
 app.post('/api/v1/audio/transcribe', handleLocalAudioTranscribe);
 app.all('/api/v1/webhook/agents/:slug', handleAgentProductionWebhook);
 app.all('/api/v1/webhook-test/agents/:slug', handleAgentTestWebhook);

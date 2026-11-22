@@ -382,6 +382,23 @@ export async function getSupportedModels(_req: Request, res: Response) {
 
 export const getHomologatedModels = getSupportedModels;
 
+function maskSecretForResponse(key?: string): string {
+  const k = String(key || '').trim();
+  if (!k) return '';
+  if (k.length <= 8) return '••••••••';
+  return '••••••••' + k.slice(-4);
+}
+
+function maskSavedKeysMap(map?: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!map || typeof map !== 'object') return out;
+  for (const [prov, val] of Object.entries(map)) {
+    const masked = maskSecretForResponse(String(val || ''));
+    if (masked) out[prov] = masked;
+  }
+  return out;
+}
+
 export async function getBrainConfig(_req: Request, res: Response) {
   const activePort = getEnvRegisteredPort();
   try {
@@ -449,16 +466,17 @@ export async function getBrainConfig(_req: Request, res: Response) {
         agent_name: parsed.agent_name || parsed.name || 'JARVIS',
         provider,
         model: sanitizeModelForProvider(provider, parsed.model),
-        api_key: effectiveKey,
-        base_url: KNOWN_ENDPOINTS[provider] || parsed.base_url || KNOWN_ENDPOINTS.groq,
+        api_key: maskSecretForResponse(effectiveKey),
+      has_api_key: Boolean(effectiveKey),
+      base_url: KNOWN_ENDPOINTS[provider] || parsed.base_url || KNOWN_ENDPOINTS.groq,
         temperature: Number(parsed.temperature ?? 0.2),
         server_base_url: parsed.server_base_url || `http://localhost:${activePort}`,
         system_prompt:
           parsed.system_prompt ||
           'Você é o JARVIS, o Cérebro Central e Agente Líder permanente do sistema.',
-        saved_keys: savedKeys
-      }
-    });
+        saved_keys: maskSavedKeysMap(savedKeys)
+    }
+  });
   } catch (error: any) {
     console.error('❌ Erro no getBrainConfig:', error.message);
     return res.status(200).json({
@@ -535,7 +553,7 @@ export async function updateBrainConfig(req: Request, res: Response) {
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();`,
       [JSON.stringify(newConfig)]
     );
-    return res.status(200).json({ success: true, message: `Modelo [${chosenModel}] (${provider.toUpperCase()}) salvo!`, data: newConfig });
+    return res.status(200).json({ success: true, message: `Modelo [${chosenModel}] (${provider.toUpperCase()}) salvo!`, data: { ...newConfig, api_key: maskSecretForResponse(effectiveKey), has_api_key: Boolean(effectiveKey), saved_keys: maskSavedKeysMap(savedKeys) } });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
