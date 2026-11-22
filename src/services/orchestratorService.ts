@@ -475,6 +475,7 @@ export async function processarExecucaoWorkflow(
         agentesAtivos: dadosContexto.agentesAtivos,
         connectorsMap: dadosContexto.connectorsMap,
         validToolSlugs: dadosContexto.validToolSlugs,
+        toolsCatalogoOrquestrador: dadosContexto.tools,
         activeSpeakerName,
         sessionId,
         threadConversa: dadosContexto.threadConversa,
@@ -707,10 +708,6 @@ export async function processarExecucaoWorkflow(
       rotaCompleta: rotaCompletaTexto}),
           tempoExecucaoMs
         ]
-      ),
-      ingestDocumentToRag(
-        `Pergunta (${activeSpeakerName}): ${userPrompt} | Resposta (${triggeredAgentName}): ${textoRespostaFinal}`,
-        { sessionId, agent: triggeredAgentName, speaker: activeSpeakerName }
       )
     ]).catch(() => {});
 

@@ -4,7 +4,7 @@ import { pool } from '../../config/database.js';
 import { searchVectorDocuments } from '../ragService.js';
 import { getCentralBrainConfig, sanitizeToolName } from './brainConfigAndUtils.js';
 import { getDynamicToolsCatalog } from './catalogAndDatabase.js';
-import { toolDelegarCriacaoSubagente } from './brainMetaTools.js';
+import { toolDelegarCriacaoSubagente, toolGerenciarMemoria } from './brainMetaTools.js';
 
 export async function montarContextoEConexoes(
   userPrompt: string,
@@ -13,23 +13,55 @@ export async function montarContextoEConexoes(
   speakerRole: string,
   instrucaoVisual: string
 ) {
-  // Carregamento paralelo completo: Cérebro, Curto Prazo, Médio Prazo, Agenda Permanente e RAG
+  // Carregamento paralelo completo das 3 camadas de memória: Curto Prazo, Médio Prazo e Longo Prazo (RAG + Contatos)
   const [
     configuracaoCerebro,
     historicoRes,
     linhasRag,
+    longoPrazoFixoRes,
     contatosRes,
     episodicaRes,
+    candidatosRes,
     todosAgentesRes,
     dadosCatalogoTools
   ] = await Promise.all([
     getCentralBrainConfig(),
     pool
-      .query(`SELECT role, content FROM jarvis_chat_memory WHERE session_id = $1 ORDER BY id DESC LIMIT 15;`, [sessionId])
+      .query(`SELECT role, content FROM jarvis_chat_memory WHERE session_id = $1 ORDER BY id DESC LIMIT 20;`, [sessionId])
       .catch(() => ({ rows: [] as any[] })),
     searchVectorDocuments(userPrompt, 6).catch(() => []),
-    Promise.resolve({ rows: [] as any[] }),
-    Promise.resolve({ rows: [] as any[] }),
+    pool
+      .query(
+        `SELECT id, title, category, content
+         FROM vector_documents
+         WHERE category IN ('contatos', 'permanente')
+         ORDER BY id DESC
+         LIMIT 30;`
+      )
+      .catch(() => ({ rows: [] as any[] })),
+    pool
+      .query(`SELECT nome, telefone, apelidos FROM contatos_agenda ORDER BY nome ASC LIMIT 100;`)
+      .catch(() => ({ rows: [] as any[] })),
+    pool
+      .query(
+        `SELECT id, categoria, titulo, conteudo, expires_at
+         FROM jarvis_episodic_memory
+         WHERE expires_at > NOW()
+         ORDER BY created_at DESC
+         LIMIT 20;`
+      )
+      .catch(() => ({ rows: [] as any[] })),
+    pool
+      .query(
+        `SELECT LOWER(TRIM(titulo)) AS chave, MAX(titulo) AS titulo, MAX(conteudo) AS conteudo, COUNT(*)::int AS qtd
+         FROM jarvis_episodic_memory
+         WHERE created_at >= NOW() - INTERVAL '14 days'
+         GROUP BY LOWER(TRIM(titulo))
+         HAVING COUNT(*) >= 3
+         ORDER BY COUNT(*) DESC
+         LIMIT 1;`
+      )
+      .catch(() => ({ rows: [] as any[] })),
     pool.query(`SELECT * FROM ai_agents ORDER BY is_active DESC, id ASC;`).catch(() => ({ rows: [] as any[] })),
     getDynamicToolsCatalog()
   ]);
@@ -46,49 +78,83 @@ export async function montarContextoEConexoes(
     content: r.content
   }));
 
-  let contextoRagTexto = '';
-  const listaRag = Array.isArray(linhasRag) ? linhasRag : (linhasRag as any)?.matches || [];
-  if (listaRag.length > 0) {
-    contextoRagTexto = listaRag
-      .filter((m: any) => (m.similarity ?? 1) > 0.12)
-      .map((m: any) => `- ${m.content}`)
-      .join('\n');
+  // 1. Longo Prazo: Contatos (unificados entre contatos_agenda e vector_documents)
+  const mapaContatos = new Map<string, string>();
+  for (const c of contatosRes.rows) {
+    const chave = String(c.nome || '').toLowerCase().trim();
+    if (!chave) continue;
+    const apelidosTxt = Array.isArray(c.apelidos) && c.apelidos.length > 0 ? ` | Apelidos/Vínculos: ${c.apelidos.join(', ')}` : '';
+    mapaContatos.set(chave, `- Nome: ${c.nome} | Telefone: ${c.telefone}${apelidosTxt}`);
+  }
+  const textoAgenda =
+    mapaContatos.size > 0
+      ? Array.from(mapaContatos.values()).join('\n')
+      : 'Nenhum contato salvo na memória de longo prazo.';
+
+  // 2. Médio Prazo: Memória Episódica Ativa (15 a 180 dias)
+  const textoMedioPrazo =
+    episodicaRes.rows.length > 0
+      ? episodicaRes.rows
+          .map((e: any) => {
+            const expira = e.expires_at ? new Date(e.expires_at).toLocaleDateString('pt-BR') : '21d';
+            return `- [ID:${e.id} | ${e.categoria} | expira em ${expira}] ${e.titulo}: ${e.conteudo}`;
+          })
+          .join('\n')
+      : 'Nenhuma memória episódica ativa no momento.';
+
+  // 3. Longo Prazo: Fatos Permanentes + Busca Semântica RAG
+  const seenRag = new Set<string>();
+  const itensLongoPrazo: string[] = [];
+
+  for (const doc of longoPrazoFixoRes.rows) {
+    if (doc.category === 'contatos') continue;
+    const txt = String(doc.content || '').trim();
+    if (txt && !seenRag.has(txt)) {
+      seenRag.add(txt);
+      itensLongoPrazo.push(`- [${doc.title || 'Permanente'}] ${txt}`);
+    }
   }
 
-  const textoAgenda = contatosRes.rows.length > 0
-    ? contatosRes.rows
-        .map((c: any) => `- Nome: ${c.nome} | Telefone: ${c.telefone} | Apelidos/Vínculos: ${(c.apelidos || []).join(', ')}`)
-        .join('\n')
-    : 'Nenhum contato salvo.';
+  const listaRag = Array.isArray(linhasRag) ? linhasRag : (linhasRag as any)?.matches || [];
+  for (const m of listaRag) {
+    if ((m.similarity ?? 1) <= 0.12) continue;
+    const txt = String(m.content || '').trim();
+    if (txt && !seenRag.has(txt)) {
+      seenRag.add(txt);
+      itensLongoPrazo.push(`- ${txt}`);
+    }
+  }
+  const textoLongoPrazo =
+    itensLongoPrazo.length > 0
+      ? itensLongoPrazo.join('\n')
+      : 'Nenhum documento adicional indexado no RAG.';
 
-  const textoMedioPrazo = episodicaRes.rows.length > 0
-    ? episodicaRes.rows
-        .map((e: any) => {
-          const expira = e.expires_at ? new Date(e.expires_at).toLocaleDateString('pt-BR') : '21d';
-          return `- [ID:${e.id} | ${e.categoria} | expira em ${expira}] ${e.titulo}: ${e.conteudo}`;
-        })
-        .join('\n')
-    : '';
-  // Anexa Agenda + Médio Prazo + Longo Prazo (RAG) de forma visível para o Orquestrador
-  contextoRagTexto = [
-    `[GOVERNANÇA DE MEMÓRIA E INTERFACE - OBRIGATÓRIO]:
-1. LISTAS, LEMBRETES E TAREFAS TEMPORÁRIAS: Use SEMPRE a ferramenta "gerenciar_memoria_cognitiva" com tipo_memoria="medio_prazo" (contexto_semanal: 15-30 dias; tarefa_ativa: 45-60 dias; projeto: 90-180 dias). NUNCA crie arquivos .md/.txt na VM nem tente salvar listas no Notion sem pedido explícito.
-2. ATUALIZAÇÃO DE LISTAS ATIVAS: Se já existir registro em [MEMÓRIA EPISÓDICA ATIVA] sobre o assunto, use acao="atualizar" com o ID para incluir/remover itens, ou acao="concluir" ao finalizar.
-3. NAVEGAÇÃO DE INTERFACE (WebMCP): NUNCA acione trocar_aba_configuracoes ou abrir_painel_configuracoes em perguntas informativas. Só navegue com ordem explícita para abrir tela.
+  const avisoConsolidacao =
+    candidatosRes.rows.length > 0
+      ? `\n[CONSOLIDAÇÃO AUTÔNOMA DE MEMÓRIA]: O padrão "${candidatosRes.rows[0].titulo}" (${candidatosRes.rows[0].conteudo}) foi citado ${candidatosRes.rows[0].qtd} vezes nos últimos 14 dias. Ao final da resposta, pergunte de forma natural se o usuário deseja promovê-lo definitivamente para a memória de longo prazo.`
+      : '';
 
-[AGENDA PERMANENTE DE CONTATOS E IDENTIDADES]:\n${textoAgenda}`,
-    textoMedioPrazo ? `[MEMÓRIA EPISÓDICA ATIVA (MÉDIO PRAZO)]:\n${textoMedioPrazo}` : '',
-    contextoRagTexto ? `[DOCUMENTOS E FATOS DE LONGO PRAZO (RAG)]:\n${contextoRagTexto}` : ''
-  ].filter(Boolean).join('\n\n');
+  const contextoMemoriaCompleto = [
+    `[GOVERNANÇA DE MEMÓRIA EM 3 NÍVEIS - OBRIGATÓRIO]:
+1. CURTO PRAZO (Sessão Atual): Histórico imediato da conversa acima. Não precisa salvar manualmente.
+2. MÉDIO PRAZO (15 a 180 dias): Para listas de compras, lembretes, tarefas ativas e projetos temporários, use SEMPRE a ferramenta "gerenciar_memoria_cognitiva" com tipo_memoria="medio_prazo" (contexto_semanal: 15-30d; tarefa_ativa: 45-60d; projeto: 90-180d). NUNCA crie arquivos .md/.txt na VM nem tente salvar listas no Notion sem ordem explícita.
+3. ATUALIZAR / CONCLUIR MÉDIO PRAZO: Se já existir item em [MEMÓRIA EPISÓDICA ATIVA], use acao="atualizar" com o ID para incluir/remover itens, ou acao="concluir" ao finalizar.
+4. LONGO PRAZO (Permanente & Contatos): Contatos telefônicos e regras permanentes ficam na Memória de Longo Prazo. Para salvar contatos, use "salvar_contato_agenda" ou "gerenciar_memoria_cognitiva" (tipo_memoria="longo_prazo", categoria="contato"). Para consultar números já listados abaixo em [MEMÓRIA DE LONGO PRAZO - CONTATOS], leia diretamente daqui e repasse o telefone ao especialista (ex: WhatsApp) sem pedir o número ao usuário.`,
+    `[MEMÓRIA DE LONGO PRAZO - AGENDA DE CONTATOS]:\n${textoAgenda}`,
+    `[MEMÓRIA DE MÉDIO PRAZO - EPISÓDICA ATIVA]:\n${textoMedioPrazo}`,
+    `[MEMÓRIA DE LONGO PRAZO - FATOS E DOCUMENTOS (RAG)]:\n${textoLongoPrazo}`,
+    avisoConsolidacao
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 
   const todosAgentes = todosAgentesRes.rows;
   const agentesAtivos = todosAgentes.filter((a: any) => a.is_active !== false);
   const agentesInativos = todosAgentes.filter((a: any) => a.is_active === false);
 
   const { catalog: catalogoAoVivo, connectorsMap } = dadosCatalogoTools;
-  const validToolSlugs = catalogoAoVivo.map((t) => t.slug);
+  const validToolSlugs = catalogoAoVivo.map((t: any) => t.slug);
 
-  // Mapeamento enriquecido dos Especialistas Ativos com as tools que cada um possui
   const resumoAgentesAtivos =
     agentesAtivos.length > 0
       ? agentesAtivos
@@ -113,7 +179,6 @@ export async function montarContextoEConexoes(
           .join('\n')
       : 'Nenhum especialista pausado.';
 
-  // Cada subagente ativo é registrado como ferramenta nativa com suas competências explícitas
   const tools: any[] = agentesAtivos.map((ag: any) => {
     let toolsDoAgente: string[] = [];
     if (Array.isArray(ag.tools)) toolsDoAgente = ag.tools;
@@ -152,14 +217,15 @@ export async function montarContextoEConexoes(
     };
   });
 
-  // Tools Administrativas Centrais
+  // Tools Administrativas e de Memória Cognitiva (Curto, Médio e Longo Prazo)
   tools.push(
+    toolGerenciarMemoria,
     toolDelegarCriacaoSubagente,
     {
       type: 'function',
       function: {
         name: 'salvar_contato_agenda',
-        description: 'Salva ou atualiza um contato telefônico (nome, telefone com DDI 55 e apelidos) na agenda permanente do PostgreSQL.',
+        description: 'Salva ou atualiza um contato telefônico (nome, telefone com DDI 55 e apelidos) na Memória de Longo Prazo.',
         parameters: {
           type: 'object',
           properties: {
@@ -270,7 +336,6 @@ export async function montarContextoEConexoes(
     }
   );
 
-  // Diretrizes Centrais do JARVIS
   let promptSistemaCompleto = `${configuracaoCerebro.system_prompt}
 ${contextoTemporal}
 Identidade Autenticada / Locutor: ${activeSpeakerName} (${speakerRole})
@@ -283,36 +348,19 @@ ${resumoAgentesAtivos}
 ${resumoAgentesInativos}
 
 [DIRETRIZES FUNDAMENTAIS DO ORQUESTRADOR CENTRAL]:
-1. DELEGAÇÃO OBRIGATÓRIA A SUBAGENTES (INCLUINDO BANCO DE DADOS):
-   - Você NÃO tem acesso direto ao banco de dados PostgreSQL, contatos, tabelas ou registros.
-   - Se o usuário solicitar consulta ao banco de dados, tabelas, registros, contatos, cotação, agenda, automação residencial ou qualquer domínio atendido pelos Especialistas listados acima, você está ESTRITAMENTE PROIBIDO de responder em texto como JARVIS.
-   - Você DEVE acionar a TOOL CALL NATIVA do respectivo especialista (ex: o especialista que controla "mcp_postgres").
+1. ACESSO DIRETO ÀS 3 CAMADAS DE MEMÓRIA:
+   - Você TEM acesso completo às memórias de Curto Prazo, Médio Prazo e Longo Prazo (incluindo a Agenda de Contatos) listadas abaixo.
+   - Se o usuário perguntar sobre contatos, listas, lembretes ou fatos já presentes nas memórias abaixo, responda diretamente com exatidão.
+   - Quando o usuário pedir para enviar WhatsApp/mensagem/e-mail para um contato salvo (ex: "meu número", "minha mãe", "amor"), localize o telefone na seção [MEMÓRIA DE LONGO PRAZO - AGENDA DE CONTATOS] abaixo e acione imediatamente o especialista correspondente passando o número completo já resolvido em "task_details".
+2. DELEGAÇÃO OBRIGATÓRIA PARA AÇÕES EXTERNAS E SQL AVANÇADO:
+   - Para ações externas (WhatsApp, Gmail, Google Calendar, Home Assistant, cotações B3, consultas SQL customizadas em outras tabelas), acione a TOOL CALL NATIVA do especialista responsável.
+3. PROIBIÇÃO DE COMANDOS CRUS EM TEXTO:
+   - NUNCA escreva comandos como "consultar_mercado_de_valores query=..." ou "google_calendar ...". Use sempre Function/Tool Calling nativo.
 
-2. PROIBIÇÃO DE COMANDOS CRUS EM TEXTO:
- - NUNCA escreva comandos como "consultar_mercado_de_valores query=...", "google_calendar ..." ou "home_detector_de_sensores...".
- - As ferramentas técnicas pertencem aos especialistas. Acione o Especialista correto via function call.
-3. FLUIDEZ E NATURALIDADE:
- - Você só responde em texto após o especialista concluir a execução e trazer os dados reais.
- - Cumprimentos e conversação comum devem ser respondidos de forma amigável, inteligente e em português.
+--- MEMÓRIA E CONHECIMENTO DO SISTEMA (CURTO, MÉDIO E LONGO PRAZO) ---
+${contextoMemoriaCompleto}`;
 
-${contextoRagTexto ? `\n--- MEMÓRIA E CONHECIMENTO DO SISTEMA (AGENDA, MÉDIO E LONGO PRAZO) ---\n${contextoRagTexto}` : ''}`;
-  try {
-    const candRes = await pool.query(`
-      SELECT LOWER(TRIM(titulo)) AS chave, MAX(titulo) AS titulo, MAX(conteudo) AS conteudo, COUNT(*)::int AS qtd
-      FROM jarvis_episodic_memory
-      WHERE created_at >= NOW() - INTERVAL '14 days'
-      GROUP BY LOWER(TRIM(titulo))
-      HAVING COUNT(*) >= 3
-      ORDER BY COUNT(*) DESC LIMIT 1;
-    `);
-    if (candRes.rows.length > 0) {
-      const c = candRes.rows[0];
-      contextoRagTexto += `\n\n[CONSOLIDAÇÃO AUTÔNOMA DE MEMÓRIA]: O padrão "${c.titulo}" (${c.conteudo}) foi citado ${c.qtd} vezes nos últimos 14 dias. Ao final da resposta, pergunte se o usuário deseja promovê-lo definitivamente para o banco vetorial de longo prazo.`;
-    }
-  } catch {}
-
-
-    // [WEBMCP_MONTADOR_START]
+  // [WEBMCP_MONTADOR_START]
   try {
     const _liveWmcp = await ensureActiveWebMcpTools(300);
     if (_liveWmcp.length > 0 && typeof tools !== 'undefined' && Array.isArray(tools)) {
@@ -324,20 +372,24 @@ ${contextoRagTexto ? `\n--- MEMÓRIA E CONHECIMENTO DO SISTEMA (AGENDA, MÉDIO E
             function: {
               name: _wName,
               description: `[Interface Aberta / WebMCP] ${_wt.description}`,
-              parameters: (_wt.inputSchema?.properties && Object.keys(_wt.inputSchema.properties).length > 0)
-                ? _wt.inputSchema
-                : { type: 'object', properties: { confirmar: { type: 'boolean', description: 'Confirmar ação na interface' } } }
+              parameters:
+                _wt.inputSchema?.properties && Object.keys(_wt.inputSchema.properties).length > 0
+                  ? _wt.inputSchema
+                  : { type: 'object', properties: { confirmar: { type: 'boolean', description: 'Confirmar ação na interface' } } }
             }
           });
         }
       }
       if (typeof promptSistemaCompleto === 'string') {
-        promptSistemaCompleto += `\n\n[FERRAMENTAS DE TELA ATIVAS (WEBMCP)]:\n${_liveWmcp.map(t => `- ${sanitizeToolName(t.name)}: ${t.description}`).join('\n')}\nREGRA CRÍTICA: Para executar qualquer ação visual acima, CHAME A FERRAMENTA NATIVA correspondente. Nunca responda apenas "Vou abrir..." em texto sem chamar a ferramenta.`;
+        promptSistemaCompleto += `\n\n[FERRAMENTAS DE TELA ATIVAS (WEBMCP)]:\n${_liveWmcp
+          .map((t) => `- ${sanitizeToolName(t.name)}: ${t.description}`)
+          .join('\n')}\nREGRA CRÍTICA: Para executar qualquer ação visual acima, CHAME A FERRAMENTA NATIVA correspondente apenas quando o usuário ordenar explicitamente abrir ou navegar para a tela.`;
       }
     }
   } catch {}
   // [WEBMCP_MONTADOR_END]
-    const _seenTools = new Set<string>();
+
+  const _seenTools = new Set<string>();
   const toolsUnicas = tools.filter((t: any) => {
     const nm = t?.function?.name;
     if (!nm || _seenTools.has(nm)) return false;

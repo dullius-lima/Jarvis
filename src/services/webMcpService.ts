@@ -242,9 +242,14 @@ export async function tryUniversalWebMcpAutoExec(
   const rNorm = norm(llmReply);
   const combined = `${uNorm} ${rNorm}`.trim();
 
+  const ehPerguntaInformativa =
+    uNorm.includes('?') ||
+    /^(o que|oque|como|qual|quais|quando|quanto|quantos|por que|porque|voce vai|vai guardar|onde)/.test(uNorm);
+  if (ehPerguntaInformativa) return null;
+
   const hasUiIntent =
-    /(abr[aei]|abrir|mud[ae]|mudar|vai|ir|mostr[ae]|mostrar|acess[ae]|acessar|naveg[ae]|navegar|troc[ae]|trocar|volt[ae]|voltar|fech[ae]|fechar|foc[ae]|focar|filtr[ae]|filtrar|acionando|controlador de interface|webmcp)/.test(
-      combined
+    /(abr[aei]\s+(?:a\s+|o\s+)?(?:aba|painel|tela|config)|abrir\s+(?:a\s+|o\s+)?(?:aba|painel|tela)|mud[ae]\s+(?:para|de)\s+aba|va\s+para\s+(?:a\s+)?aba|vai\s+para\s+(?:a\s+)?aba|naveg[ae]\s+para|troc[ae]\s+(?:de\s+|a\s+)?aba|volt[ae]\s+(?:para\s+o\s+)?cerebro|fech[ae]\s+(?:o\s+)?painel|controlador de interface|webmcp)/.test(
+      uNorm
     );
   if (!hasUiIntent) return null;
 

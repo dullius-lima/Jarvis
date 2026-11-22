@@ -6,7 +6,8 @@ import {
   deleteToolConnectorFromBrain,
   updateAgentOrJarvisPersona,
   executeHackerSecuritySuite,
-  executarDelegacaoSubagente
+  executarDelegacaoSubagente,
+  executarGerenciamentoMemoria
 } from './brainMetaTools.js';
 import { saveToDatabase } from './catalogAndDatabase.js';
 import {
@@ -199,6 +200,48 @@ export async function processarChamadasDeFerramentas(params: {
           .map((s, idx) => `[Etapa ${idx + 1} - ${s.agentName || s.toolName}]: ${typeof s.result === "string" ? s.result : JSON.stringify(s.result)}`)
           .join("\n");
         argsParsed.task_details = `${argsParsed.task_details}\n\n[DADOS OBTIDOS NAS ETAPAS ANTERIORES - USE ESTES DADOS E O CONTEÚDO ORIGINAL]:\n${contextoAcumuladoTexto}`;
+      }
+
+      // 0. Gestão Cognitiva de Memória (Curto, Médio e Longo Prazo)
+      if (fnName === 'gerenciar_memoria_cognitiva') {
+        const tipoMem = argsParsed.tipo_memoria || 'medio_prazo';
+        triggeredAgentName =
+          tipoMem === 'longo_prazo'
+            ? 'Memória de Longo Prazo (RAG)'
+            : tipoMem === 'curto_prazo'
+            ? 'Memória de Curto Prazo (Sessão)'
+            : 'Memória de Médio Prazo (Episódica)';
+        triggeredAgentId = 'gerenciar_memoria_cognitiva';
+        triggeredNodeType = 'code';
+        toolsUsadas.push('gerenciar_memoria_cognitiva');
+
+        const resMem = await executarGerenciamentoMemoria({
+          acao: argsParsed.acao || 'salvar',
+          tipo_memoria: tipoMem,
+          id: argsParsed.id ? Number(argsParsed.id) : undefined,
+          titulo: String(argsParsed.titulo || userPrompt.slice(0, 60)),
+          conteudo: String(argsParsed.conteudo || userPrompt),
+          categoria: argsParsed.categoria,
+          dias_validade: argsParsed.dias_validade ? Number(argsParsed.dias_validade) : undefined,
+          session_id: sessionId
+        });
+
+        trilhaExecucao.push({
+          step: trilhaExecucao.length + 1,
+          kind: 'tool',
+          slug: 'gerenciar_memoria_cognitiva',
+          name: triggeredAgentName,
+          parentSlug: 'jarvis_core',
+          status: resMem?.success === false ? 'error' : 'ok'
+        });
+
+        saidasFerramentasParaSintese.push({
+          step: saidasFerramentasParaSintese.length + 1,
+          toolName: fnName,
+          agentName: triggeredAgentName,
+          result: resMem
+        });
+        continue;
       }
 
       // 1. Delegação Segura para o Subagente Arquiteto
@@ -574,25 +617,28 @@ export async function processarChamadasDeFerramentas(params: {
     }
 
     // [AUTO_CONTINUACAO_WHATSAPP]
-    // Se a LLM parou antes de chamar o WhatsApp num pedido que exige envio ("mande para", "envie", "whatsapp", "meu numero")
-    const pedeEnvioMensagem = /\b(mande|manda|envie|envia|encaminhe|encaminha|zap|whatsapp|meu numero|meu número|para mim|pra mim)\b/i.test(userPrompt);
-    const jaExecutouWhatsApp = toolsUsadas.some((t) => t.includes("whatsapp")) || saidasFerramentasParaSintese.some((s) => String(s.toolName).includes("whatsapp"));
-    if (pedeEnvioMensagem && !jaExecutouWhatsApp && cicloOrquestrador < MAX_ORCHESTRATOR_CYCLES) {
-      const agWhats = agentesAtivos.find((a) => normalizar(a.slug).includes("whatsapp") || normalizar(a.name).includes("whatsapp"));
+    const pedeEnvioWhatsAppExplicito =
+      /\b(whatsapp|zap)\b/i.test(userPrompt) &&
+      /\b(mande|manda|envie|envia|encaminhe|encaminha)\b/i.test(userPrompt);
+    const jaExecutouWhatsApp =
+      toolsUsadas.some((t) => t.includes('whatsapp')) ||
+      saidasFerramentasParaSintese.some((s) => String(s.toolName).includes('whatsapp'));
+    if (pedeEnvioWhatsAppExplicito && !jaExecutouWhatsApp && cicloOrquestrador < MAX_ORCHESTRATOR_CYCLES) {
+      const agWhats = agentesAtivos.find(
+        (a) => normalizar(a.slug).includes('whatsapp') || normalizar(a.name).includes('whatsapp')
+      );
       if (agWhats) {
         const resumoDados = saidasFerramentasParaSintese
-          .map((s, i) => `[Passo ${i + 1} - ${s.agentName || s.toolName}]: ${typeof s.result === "string" ? s.result : JSON.stringify(s.result)}`)
-          .join("\n");
-        console.log("⚡ [Auto-Continuação ReAct] Enfileirando Especialista do WhatsApp para concluir a entrega!");
+          .map((s, i) => '[Passo ' + (i + 1) + ' - ' + (s.agentName || s.toolName) + ']: ' + (typeof s.result === 'string' ? s.result : JSON.stringify(s.result)))
+          .join('\n');
         filaToolCallsAtual = [
           {
-            id: `auto_whats_${Date.now()}`,
-            type: "function",
+            id: 'auto_whats_' + Date.now(),
+            type: 'function',
             function: {
               name: sanitizeToolName(agWhats.slug),
               arguments: JSON.stringify({
-                task_details: `Pedido do utilizador: "${userPrompt}". Envie AGORA no WhatsApp o conteúdo obtido nos passos anteriores usando o telefone localizado (se for para "meu número" ou "Matheus", use 5567991289607).\n\nDados já coletados:\n${resumoDados}`,
-                query: "5567991289607"
+                task_details: 'Pedido do utilizador: "' + userPrompt + '". Envie no WhatsApp utilizando o telefone localizado na Memória de Longo Prazo (Agenda de Contatos).\n\nDados coletados:\n' + resumoDados
               })
             }
           }

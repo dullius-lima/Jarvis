@@ -170,38 +170,78 @@ export async function executarGerenciamentoMemoria(params: {
     }
   }
 
-  if (acao === 'atualizar' && tipo_memoria === 'medio_prazo') {
-    const dias = resolverDias(categoria, dias_validade);
-    const updRes = id
-      ? await pool.query(
-          `UPDATE jarvis_episodic_memory SET conteudo = $1, titulo = COALESCE(NULLIF($2, ''), titulo), expires_at = NOW() + ($3 || ' days')::interval WHERE id = $4 RETURNING id, titulo, conteudo, expires_at;`,
-          [conteudo, titulo, dias, id]
-        )
-      : await pool.query(
-          `UPDATE jarvis_episodic_memory SET conteudo = $1, expires_at = NOW() + ($2 || ' days')::interval
-           WHERE id = (SELECT id FROM jarvis_episodic_memory WHERE expires_at > NOW() AND titulo ILIKE $3 ORDER BY id DESC LIMIT 1)
-           RETURNING id, titulo, conteudo, expires_at;`,
-          [conteudo, dias, `%${titulo}%`]
-        );
-    if (updRes.rows.length > 0) {
-      return { success: true, registro: updRes.rows[0], message: `Memória "${updRes.rows[0].titulo}" atualizada (válida por mais ${dias} dias).` };
+    if (acao === 'atualizar') {
+    if (tipo_memoria === 'medio_prazo') {
+      const dias = resolverDias(categoria, dias_validade);
+      const updRes = id
+        ? await pool.query(
+            `UPDATE jarvis_episodic_memory SET conteudo = $1, titulo = COALESCE(NULLIF($2, ''), titulo), expires_at = NOW() + ($3 || ' days')::interval WHERE id = $4 RETURNING id, titulo, conteudo, expires_at;`,
+            [conteudo, titulo, dias, id]
+          )
+        : await pool.query(
+            `UPDATE jarvis_episodic_memory SET conteudo = $1, expires_at = NOW() + ($2 || ' days')::interval
+             WHERE id = (SELECT id FROM jarvis_episodic_memory WHERE expires_at > NOW() AND titulo ILIKE $3 ORDER BY id DESC LIMIT 1)
+             RETURNING id, titulo, conteudo, expires_at;`,
+            [conteudo, dias, '%' + titulo + '%']
+          );
+      if (updRes.rows.length > 0) {
+        return { success: true, registro: updRes.rows[0], message: 'Memória "' + updRes.rows[0].titulo + '" atualizada (válida por mais ' + dias + ' dias).' };
+      }
+      return { success: false, message: 'Nenhuma memória episódica ativa encontrada com "' + titulo + '".' };
     }
-    return { success: false, message: `Nenhuma memória episódica ativa encontrada com "${titulo}".` };
+
+    if (tipo_memoria === 'longo_prazo') {
+      if (categoria === 'contato' || /telefone|contato|whatsapp|celular/i.test(titulo)) {
+        const digitos = conteudo.replace(/\D/g, '');
+        if (digitos.length >= 8) {
+          let fone = digitos;
+          if (fone.length === 8 || fone.length === 9) fone = '5567' + (fone.length === 8 ? '9' + fone : fone);
+          else if (fone.length === 10 || fone.length === 11) fone = '55' + fone;
+          const nomeNorm = titulo.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+          await pool.query(
+            `INSERT INTO contatos_agenda (nome, telefone, apelidos) VALUES ($1, $2, ARRAY[$3])
+             ON CONFLICT (nome) DO UPDATE SET telefone = EXCLUDED.telefone, atualizado_em = NOW();`,
+            [nomeNorm, fone, titulo]
+          ).catch(() => {});
+          await pool.query(`DELETE FROM vector_documents WHERE category = 'contatos' AND (title ILIKE $1 OR content ILIKE $2);`, ['%' + titulo + '%', '%' + nomeNorm + '%']).catch(() => {});
+          await pool.query(`INSERT INTO vector_documents (title, content, category) VALUES ($1, $2, 'contatos');`, ['Contato: ' + titulo, 'Nome: ' + titulo + ' | Telefone: ' + fone]);
+          return { success: true, tipo_memoria: 'longo_prazo', message: 'Contato "' + titulo + '" (' + fone + ') atualizado na memória de longo prazo.' };
+        }
+      }
+      const updRag = id
+        ? await pool.query(`UPDATE vector_documents SET content = $1, title = COALESCE(NULLIF($2, ''), title) WHERE id = $3 RETURNING id, title;`, [conteudo, titulo, id])
+        : await pool.query(`UPDATE vector_documents SET content = $1 WHERE id = (SELECT id FROM vector_documents WHERE title ILIKE $2 ORDER BY id DESC LIMIT 1) RETURNING id, title;`, [conteudo, '%' + titulo + '%']);
+      if (updRag.rows.length > 0) {
+        return { success: true, registro: updRag.rows[0], message: 'Memória de longo prazo "' + updRag.rows[0].title + '" atualizada.' };
+      }
+      return { success: false, message: 'Registro de longo prazo "' + titulo + '" não localizado para atualização.' };
+    }
   }
 
-  if (acao === 'concluir' && tipo_memoria === 'medio_prazo') {
-    const delRes = id
-      ? await pool.query(`UPDATE jarvis_episodic_memory SET expires_at = NOW() WHERE id = $1 RETURNING id, titulo;`, [id])
-      : await pool.query(
-          `UPDATE jarvis_episodic_memory SET expires_at = NOW()
-           WHERE id = (SELECT id FROM jarvis_episodic_memory WHERE expires_at > NOW() AND titulo ILIKE $1 ORDER BY id DESC LIMIT 1)
-           RETURNING id, titulo;`,
-          [`%${titulo}%`]
-        );
-    return {
-      success: delRes.rows.length > 0,
-      message: delRes.rows.length > 0 ? `Memória "${delRes.rows[0].titulo}" concluída e encerrada.` : `Registro "${titulo}" já encerrado.`
-    };
+  if (acao === 'concluir') {
+    if (tipo_memoria === 'medio_prazo') {
+      const delRes = id
+        ? await pool.query(`UPDATE jarvis_episodic_memory SET expires_at = NOW() WHERE id = $1 RETURNING id, titulo;`, [id])
+        : await pool.query(
+            `UPDATE jarvis_episodic_memory SET expires_at = NOW()
+             WHERE id = (SELECT id FROM jarvis_episodic_memory WHERE expires_at > NOW() AND titulo ILIKE $1 ORDER BY id DESC LIMIT 1)
+             RETURNING id, titulo;`,
+            ['%' + titulo + '%']
+          );
+      return {
+        success: delRes.rows.length > 0,
+        message: delRes.rows.length > 0 ? 'Memória "' + delRes.rows[0].titulo + '" concluída e encerrada.' : 'Registro "' + titulo + '" já encerrado.'
+      };
+    }
+    if (tipo_memoria === 'longo_prazo') {
+      const delRag = id
+        ? await pool.query(`DELETE FROM vector_documents WHERE id = $1 RETURNING id, title;`, [id])
+        : await pool.query(`DELETE FROM vector_documents WHERE title ILIKE $1 RETURNING id, title;`, ['%' + titulo + '%']);
+      return {
+        success: delRag.rows.length > 0,
+        message: delRag.rows.length > 0 ? 'Registro de longo prazo "' + delRag.rows[0].title + '" removido.' : 'Registro não localizado.'
+      };
+    }
   }
 
   if (acao === 'consultar') {

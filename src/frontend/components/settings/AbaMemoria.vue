@@ -226,7 +226,7 @@
     </div>
 
     <!-- DOCUMENT LOADER VISUAL (PDF, CSV, DOCX, TXT) -->
-    <div v-if="nivelAtivo === 'longo'" style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:12px;margin:12px 0;">
+    <div v-if="nivelMemoriaAtivo === 'longo'" style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:12px;margin:12px 0;">
       <strong style="color:#38bdf8;font-size:13px;">📄 Document Loader Visual (PDF, CSV, DOCX e TXT para o RAG)</strong>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center;">
         <input type="file" accept=".pdf,.csv,.docx,.txt,.md,.json" @change="selecionarDocRag" style="font-size:12px;color:#cbd5e1;" />

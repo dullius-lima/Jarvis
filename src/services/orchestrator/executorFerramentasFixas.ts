@@ -384,13 +384,23 @@ export async function executarFerramentaVinculada(
         }
 
         if (nomeNorm && foneFinal) {
+          const rotuloOriginal = String(nomeIdentificado || nomeNorm).trim();
           await pool.query(
             `INSERT INTO contatos_agenda (nome, telefone, apelidos)
              VALUES ($1, $2, ARRAY[$3])
              ON CONFLICT (nome) DO UPDATE 
              SET telefone = EXCLUDED.telefone, atualizado_em = NOW();`,
-            [nomeNorm, foneFinal, String(nomeIdentificado || nomeNorm)]
+            [nomeNorm, foneFinal, rotuloOriginal]
           );
+          await pool.query(
+            `DELETE FROM vector_documents WHERE category = 'contatos' AND (LOWER(title) = LOWER($1) OR content LIKE '%' || $2 || '%');`,
+            ['Contato: ' + rotuloOriginal, foneFinal]
+          ).catch(() => {});
+          await pool.query(
+            `INSERT INTO vector_documents (title, category, content)
+             VALUES ($1, 'contatos', $2);`,
+            ['Contato: ' + rotuloOriginal, 'Nome: ' + rotuloOriginal + ' | Telefone: ' + foneFinal + ' | Apelidos: ' + nomeNorm]
+          ).catch(() => {});
         }
       } catch (e: any) {
         console.warn('⚠️ [Agenda] Falha ao espelhar em contatos_agenda:', e?.message);
