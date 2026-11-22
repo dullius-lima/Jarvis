@@ -182,22 +182,32 @@ app.post('/api/v1/connectors/query-db', requireJwtAuth, async (req: Request, res
       return res.status(400).json({ success: false, error: 'Query SQL obrigatória.' });
     }
     const cleanSql = query.trim();
-    if (!/^SELECT\s+/i.test(cleanSql) || /;\s*\S/.test(cleanSql)) {
+    if (/;\s*\S/.test(cleanSql)) {
       return res.status(403).json({
         success: false,
-        error: 'Operação bloqueada: este endpoint permite apenas consultas SELECT únicas.'
+        error: 'Operação bloqueada: apenas uma instrução SQL por chamada é permitida.'
       });
     }
-    if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|GRANT|REVOKE|CREATE|COPY|EXECUTE)\b/i.test(cleanSql)) {
+    if (/\b(DROP|ALTER|TRUNCATE|GRANT|REVOKE|CREATE|COPY|EXECUTE)\b/i.test(cleanSql)) {
       return res.status(403).json({
         success: false,
-        error: 'Comandos de escrita ou DDL não são permitidos nesta rota.'
+        error: 'Comandos DDL/administrativos não são permitidos nesta rota.'
       });
     }
     if (/\b(system_configs|identities|pg_shadow|pg_authid)\b/i.test(cleanSql)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado a tabelas protegidas de credenciais.'
+      });
+    }
+    const isSelect = /^SELECT\s+/i.test(cleanSql);
+    const isSafeMemoryMutation =
+      /^(INSERT\s+INTO|DELETE\s+FROM|UPDATE)\s+(jarvis_episodic_memory|vector_documents)\b/i.test(cleanSql);
+
+    if (!isSelect && !isSafeMemoryMutation) {
+      return res.status(403).json({
+        success: false,
+        error: 'Escrita permitida apenas nas tabelas de memória episódica e vetorial.'
       });
     }
     const result = await pool.query(cleanSql, Array.isArray(params) ? params : []);

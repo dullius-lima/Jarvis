@@ -17,6 +17,11 @@ export function useAuth(onLoginSuccess?: () => Promise<void> | void) {
   const isLoggingIn = ref<boolean>(false);
 
   const showPasswordModal = ref<boolean>(false);
+  if (typeof window !== 'undefined') {
+    window.addEventListener('jarvis-auth-expired', () => {
+      isAuthenticated.value = false;
+    });
+  }
   const newEmailInput = ref<string>(loginEmail.value);
   const newPasswordInput = ref<string>('');
   const credFeedback = ref<string>('');

@@ -3,7 +3,7 @@ import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { z } from 'zod';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'jarvis-n8n-oci-super-secret-key-2026';
+const getJwtSecret = () => process.env.JWT_SECRET || 'jarvis-n8n-oci-super-secret-key-2026';
 
 // ============================================================================
 // 1. MOTOR JWT NATIVO (HS256 com proteção Timing-Safe)
@@ -16,7 +16,7 @@ export function signJwtToken(payload: object, expiresInHours = 24): string {
   ).toString('base64url');
 
   const signature = crypto
-    .createHmac('sha256', JWT_SECRET)
+    .createHmac('sha256', getJwtSecret())
     .update(`${header}.${body}`)
     .digest('base64url');
 
@@ -30,7 +30,7 @@ export function verifyJwtToken(token: string): any | null {
     const [header, body, signature] = parts;
 
     const expectedSig = crypto
-      .createHmac('sha256', JWT_SECRET)
+      .createHmac('sha256', getJwtSecret())
       .update(`${header}.${body}`)
       .digest('base64url');
 

@@ -7,7 +7,7 @@ import { pool } from '../config/database.js';
 import { verifyBiometricIdentity } from '../services/biometricService.js';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'jarvis-n8n-oci-super-secret-key-2026';
+const getJwtSecret = () => process.env.JWT_SECRET || 'jarvis-n8n-oci-super-secret-key-2026';
 
 // ============================================================================
 // 1. UTILITÁRIOS CRIPTOGRÁFICOS E TOKEN JWT
@@ -34,7 +34,7 @@ export function generateAuthToken(payload: Record<string, any>): string {
     JSON.stringify({ ...payload, iat: Date.now(), exp: Date.now() + 24 * 60 * 60 * 1000 })
   ).toString('base64url');
   const signature = crypto
-    .createHmac('sha256', JWT_SECRET)
+    .createHmac('sha256', getJwtSecret())
     .update(`${header}.${body}`)
     .digest('base64url');
   return `${header}.${body}.${signature}`;
