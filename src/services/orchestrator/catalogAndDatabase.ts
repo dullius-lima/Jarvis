@@ -13,6 +13,7 @@ import {
 // FERRAMENTAS NATIVAS FIXAS DO ECOSSISTEMA
 // ============================================================================
 export const CORE_BUILT_IN_TOOLS: DynamicToolCatalogItem[] = [
+  {"slug":"excluir_contato_completo","name":"Excluir Contato (Banco + Celular)","category":"SQL","method":"SQL","endpoint":"","description":"Exclui um contato do PostgreSQL e apaga diretamente da agenda nativa do Galaxy S25."},
   {
     slug: "salvar_contato_agenda",
     name: "Salvar Contato na Agenda",

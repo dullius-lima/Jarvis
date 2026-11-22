@@ -23,6 +23,7 @@ import java.net.*;
 import java.util.*;
 
 public class JarvisVoiceService extends Service {
+    private OpenWakeWordDetector owwDetector;
     public static volatile JarvisVoiceService instance;
     private static final String BASE = "http://163.176.111.18";
     private Handler mainHandler;
@@ -97,6 +98,8 @@ public class JarvisVoiceService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        owwDetector = new OpenWakeWordDetector(this);
+        DeviceCommandExecutor.startMesh(this, "galaxy_s25");
         instance = this;
         mainHandler = new Handler(Looper.getMainLooper());
         tts = new TextToSpeech(getApplicationContext(), st -> {
@@ -115,7 +118,7 @@ public class JarvisVoiceService extends Service {
                 .setOngoing(true)
                 .build();
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(101, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(101, n, (Build.VERSION.SDK_INT >= 34 ? (ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE | ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA) : ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE));
         else startForeground(101, n);
 
         try { PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE); PowerManager.WakeLock wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "jarvis:voice24h"); wl.acquire(); } catch (Exception ignored) {}
@@ -291,6 +294,7 @@ public class JarvisVoiceService extends Service {
             body.put("requireWakeWord", requireWake);
             body.put("identityToken", "Matheus-Admin");
             body.put("sessionId", "sess_main_admin");
+                body.put("deviceId", "galaxy_s25");
 
             HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/voice/turn").openConnection();
             c.setRequestMethod("POST");

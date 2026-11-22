@@ -96,6 +96,7 @@ public class JarvisVoiceService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        DeviceCommandExecutor.startMesh(this, "galaxy_watch");
         instance = this;
         mainHandler = new Handler(Looper.getMainLooper());
         tts = new TextToSpeech(getApplicationContext(), st -> {

@@ -1,27 +1,54 @@
 #!/usr/bin/env bash
+set -e
+
+ROOT_DIR="/home/ubuntu/meu-n8n-backend"
+cd "$ROOT_DIR"
+
 export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac))))
 export ANDROID_HOME=/home/ubuntu/android-sdk
 export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+
+echo "☕ JAVA_HOME: $JAVA_HOME"
 echo "sdk.dir=/home/ubuntu/android-sdk" > android/local.properties
 
-rm -rf android/app/src/main/java/com/matheus/jarvis/*
-cp -f devices/phone/java/com/matheus/jarvis/* android/app/src/main/java/com/matheus/jarvis/
-cp -f devices/phone/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-mkdir -p android/app/src/main/res/xml
-cp -rf devices/phone/res/xml/* android/app/src/main/res/xml/ 2>/dev/null || true
+rm -rf public/download dist/public/download android/app/src/main/assets/public
+npm run build:frontend
 
-rm -rf public/download dist/public/download android/app/src/main/assets/public android/app/build/outputs/apk/debug/app-debug.apk
-npm run build:frontend > /tmp/build_phone.log 2>&1 || { echo "Erro Vite:"; tail -n 15 /tmp/build_phone.log; exit 1; }
+if [ -x "./node_modules/.bin/cap" ]; then
+  ./node_modules/.bin/cap sync android || true
+fi
+
 mkdir -p android/app/src/main/assets/public
 cp -rf dist/* android/app/src/main/assets/public/
-[ -f capacitor.config.json ] && cp -f capacitor.config.json android/app/src/main/assets/capacitor.config.json
 
-(cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon >> /tmp/build_phone.log 2>&1) || { echo "Erro Gradle:"; tail -n 20 /tmp/build_phone.log; exit 1; }
+if [ -d "devices/phone/java" ]; then
+  mkdir -p android/app/src/main/java
+  cp -rf devices/phone/java/* android/app/src/main/java/
+fi
+if [ -f "devices/phone/AndroidManifest.xml" ]; then
+  cp -f devices/phone/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+fi
+if [ -d "devices/phone/assets/oww" ]; then
+  mkdir -p android/app/src/main/assets/oww
+  cp -f devices/phone/assets/oww/* android/app/src/main/assets/oww/
+fi
 
-APK="android/app/build/outputs/apk/debug/app-debug.apk"
-mkdir -p /home/ubuntu/jarvis_releases dist/public/download
-cp -f "$APK" /home/ubuntu/jarvis_releases/jarvis.apk
-cp -f "$APK" dist/public/download/jarvis.apk
-chmod 644 /home/ubuntu/jarvis_releases/jarvis.apk dist/public/download/jarvis.apk
-ls -lh /home/ubuntu/jarvis_releases/jarvis.apk
-curl -sI http://127.0.0.1/download/jarvis.apk | grep -iE "HTTP|Content-Length"
+python3 "$ROOT_DIR/fix_phone_manifest.py"
+
+cat << 'PROPS' > android/gradle.properties
+org.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8
+org.gradle.daemon=false
+org.gradle.parallel=false
+org.gradle.workers.max=1
+android.useAndroidX=true
+PROPS
+
+cd "$ROOT_DIR/android"
+chmod +x gradlew
+rm -f app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleDebug --no-daemon
+
+mkdir -p /home/ubuntu/jarvis_releases
+cp -f app/build/outputs/apk/debug/app-debug.apk /home/ubuntu/jarvis_releases/jarvis.apk
+chmod 644 /home/ubuntu/jarvis_releases/jarvis.apk
+echo "✅ jarvis.apk v3.5.1 compilado com sucesso!"

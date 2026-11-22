@@ -299,7 +299,7 @@ export function processarEntradaVisual(
 
   const frameAtivo = frameTela || frameWebcam;
   const ehPerguntaVisual =
-    /est[aá]\s+me\s+vendo|t[aá]\s+me\s+vendo|consegue\s+me\s+ver|voc[eê]\s+me\s+v[eê]|ative\s+a\s+c[aâ]mera|olhe\s+para\s+mim|como\s+eu\s+estou|o\s+que\s+estou\s+segurando|olhe\s+minha\s+tela/i.test(
+    /est[aá]\s+me\s+vendo|t[aá]\s+me\s+vendo|consegue\s+me\s+ver|voc[eê]\s+me\s+v[eê]|ativ[ae]\s+a\s+c[aâ]mera|lig[ae]\s+a\s+c[aâ]mera|olh[ae]\s+para\s+mim|me\s+olh[ae]|como\s+(?:eu\s+)?estou|o\s+que\s+(?:eu\s+)?estou\s+fazendo|o\s+que\s+estou\s+segurando|olh[ae]\s+minha\s+tela|veja\s+minha\s+tela|tela\s+do|tela\s+da|c[aâ]mera\s+d[oa]/i.test(
       userPrompt
     );
 

@@ -1,3 +1,8 @@
+import { tryHandleUiControlCommand } from './uiControlService.js';
+import { requestLiveSensoryFrame, detectSensoryIntent, handleSensoryStopCommand } from './sensoryRouterService.js';
+import { sendToDeviceById } from './deviceMeshService.js';
+import { matchAndStoreVisualCapture, promoteLastCaptureToFamiliar } from './visualMemoryService.js';
+import { captureVscreenFrame, launchAppOnVscreen } from './agentVscreenBridge';
 import { callWebMcpTool, ensureActiveWebMcpTools, tryUniversalWebMcpAutoExec } from "./webMcpService.js";
 // src/services/orchestratorService.ts
 import { pool } from '../config/database.js';
@@ -167,7 +172,55 @@ export async function processarExecucaoWorkflow(
     }
 
     // 2. Visão Multimodal
-    const visual = processarEntradaVisual(sensoryInput, userPrompt, activeSpeakerName);
+    const originDev = String(sensoryInput?.deviceId || sensoryInput?.sensorData?.deviceId || (String(sessionId).includes('tv') ? 'tv_sala' : String(sessionId).includes('watch') ? 'galaxy_watch' : 'galaxy_s25'));
+  const famMatch = userPrompt.match(/^(?:jarvis[,\s]+)?(?:esse|essa|este|esta)\s+[eé]\s+(?:o\s+|a\s+|meu\s+irm[aã]o\s+|minha\s+irm[aã]\s+|meu\s+pai\s+|minha\s+m[aã]e\s+|minha\s+esposa\s+|meu\s+filho\s+|minha\s+filha\s+)?([a-zA-ZÀ-ÿ ]{2,40})$/i);
+  if (famMatch && !/quem|que|isso|aquilo/i.test(famMatch[1])) {
+    const msgFam = await promoteLastCaptureToFamiliar(famMatch[1]);
+    return { success: true, triggeredSuccess: true, agent: 'JARVIS (Biometria Visual 512D)', agentId: 'jarvis_visual_bio', nodeType: 'core', executedTools: ['jarvis_visual_memory'], response: msgFam, executionTimeMs: Date.now() - inicioExecucao, data: null as any };
+  }
+
+  const uiRes = await tryHandleUiControlCommand(userPrompt, originDev);
+  if (uiRes && uiRes.handled) {
+    return { success: true, triggeredSuccess: true, agent: 'JARVIS (Controle de Tela & Cursor)', agentId: 'jarvis_ui_control', nodeType: 'core', executedTools: ['ui_control'], response: uiRes.response, executionTimeMs: Date.now() - inicioExecucao, data: null as any };
+  }
+
+  const sCheck = detectSensoryIntent(userPrompt, originDev, sessionId);
+  if (sCheck.stopAction) {
+    const stopMsg = handleSensoryStopCommand(sCheck.stopAction, sessionId, sendToDeviceById);
+    return { success: true, triggeredSuccess: true, agent: 'JARVIS (Córtex Visual)', agentId: 'jarvis_vision', nodeType: 'core', executedTools: [], response: stopMsg, executionTimeMs: Date.now() - inicioExecucao, data: null as any };
+  }
+
+  const hasFrame = Boolean(sensoryInput?.webcamFrame || sensoryInput?.screenFrame || sensoryInput?.sensorData?.webcamFrame || sensoryInput?.sensorData?.screenFrame);
+  let offlineTarget: string | undefined;
+  if (!hasFrame && sCheck.isVisual) {
+    const liveCap = await requestLiveSensoryFrame(userPrompt, originDev, sessionId, sendToDeviceById);
+    offlineTarget = liveCap.offlineDevice;
+    if (liveCap.frame) {
+      sensoryInput = sensoryInput || {};
+      sensoryInput.sensorData = sensoryInput.sensorData || {};
+      if (liveCap.intent.modality === 'screen') {
+        sensoryInput.screenFrame = liveCap.frame;
+        sensoryInput.sensorData.screenFrame = liveCap.frame;
+      } else {
+        sensoryInput.webcamFrame = liveCap.frame;
+        sensoryInput.sensorData.webcamFrame = liveCap.frame;
+      }
+    }
+  }
+
+  const camNow = sensoryInput?.webcamFrame || sensoryInput?.sensorData?.webcamFrame;
+  if (camNow) {
+    const bioRes = await matchAndStoreVisualCapture({ imageBase64: camNow, deviceId: sCheck.targetDeviceId || originDev, analiseInicial: userPrompt }).catch(() => null);
+    if (bioRes) { const st = (globalThis as any).__jarvisSensoryStatus; if (st && st.active) { st.identifiedName = bioRes.nome; st.isFamiliar = bioRes.isFamiliar; st.updatedAt = Date.now(); } userPrompt = `${userPrompt}\n[MEMÓRIA VISUAL 512 PARÂMETROS]: ${bioRes.matchSummary}`; }
+  }
+  if (sCheck.armAction) {
+    userPrompt = `${userPrompt}\n[MODO ARMADO ATIVO]: Confirme brevemente ao usuário que a ${sCheck.armAction === 'camera' ? 'câmera' : 'tela'} de ${sCheck.targetLabel} ficará ativa sob demanda (sem gasto de tokens em repouso) até ele pedir para encerrar.`;
+  }
+
+  const visual = processarEntradaVisual(sensoryInput, userPrompt, activeSpeakerName);
+  if (visual.ehPerguntaVisual && !visual.frameAtivo && offlineTarget) {
+    return { success: true, triggeredSuccess: true, agent: 'JARVIS (Córtex Visual)', agentId: 'jarvis_vision', nodeType: 'core', executedTools: [], response: `Não consegui conectar ao sensor de ${offlineTarget} no momento. Abra o app JARVIS nesse aparelho para mantê-lo ativo na rede.`, executionTimeMs: Date.now() - inicioExecucao, data: null as any };
+  }
     if (visual.ehPerguntaVisual && !visual.frameAtivo) {
       const respVisual = {
         success: true,

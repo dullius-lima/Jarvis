@@ -184,7 +184,16 @@ router.post('/login', async (req: Request, res: Response) => {
 // ============================================================================
 router.put('/update-credentials', async (req: Request, res: Response) => {
   try {
-    const { currentEmail, newEmail, newPassword } = req.body || {};
+    const { currentEmail, currentPassword, newEmail, newPassword } = req.body || {};
+    if (!currentPassword) {
+      return res.status(400).json({ success: false, error: "Informe a senha atual para autorizar a alteração de credenciais." });
+    }
+    const envPass = process.env.ADMIN_PASSWORD || "123456";
+    const checkDb = await pool.query("SELECT password FROM identities WHERE LOWER(email) = LOWER($1) LIMIT 1", [currentEmail || process.env.ADMIN_EMAIL]);
+    const validPass = checkDb.rows[0]?.password || envPass;
+    if (String(currentPassword) !== String(validPass)) {
+      return res.status(401).json({ success: false, error: "Senha atual incorreta. Alteração bloqueada." });
+    }
     if (!currentEmail || (!newEmail && !newPassword)) {
       return res.status(400).json({
         success: false,

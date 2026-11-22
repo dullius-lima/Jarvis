@@ -96,6 +96,7 @@ public class JarvisVoiceService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        DeviceCommandExecutor.startMesh(this, "tv_sala");
         instance = this;
         mainHandler = new Handler(Looper.getMainLooper());
         tts = new TextToSpeech(getApplicationContext(), st -> {
@@ -267,6 +268,7 @@ public class JarvisVoiceService extends Service {
             body.put("requireWakeWord", requireWake);
             body.put("identityToken", "Matheus-Admin");
             body.put("sessionId", "sess_main_admin");
+                body.put("deviceId", "tv_sala");
 
             HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/voice/turn").openConnection();
             c.setRequestMethod("POST");

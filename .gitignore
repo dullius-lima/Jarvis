@@ -16,3 +16,8 @@ Thumbs.db
 android/.gradle/
 android/app/build/
 android/build/
+models/
+*.onnx
+*.bin
+backups_voice_*/
+*.bak

@@ -1,3 +1,4 @@
+import { attachDeviceMeshWebSocket } from './deviceMeshService.js';
 import { bindWebMcpWss, handleWebMcpSocketMessage, unregisterWebMcpClient } from "./webMcpService.js";
 // src/services/brainSocketService.ts
 import { Server as HttpServer } from 'http';
@@ -53,6 +54,7 @@ export function initBrainWebSocketServer(server: HttpServer): WebSocketServer {
   wss = new WebSocketServer({ server });
   bindWebMcpWss(wss);
 
+  attachDeviceMeshWebSocket(wss);
   wss.on('connection', (ws: WebSocket) => {
     // [WEBMCP_WS_HOOK]
     ws.on("message", (rawWebMcpMsg: any) => {

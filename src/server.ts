@@ -1,3 +1,5 @@
+import { resolveSensoryFrame } from './services/sensoryRouterService';
+import { attachDeviceMeshWebSocket, registerDeviceMeshRoutes } from './services/deviceMeshService';
 import { handleWebMcpJsonRpc } from "./services/webMcpService.js";
 import crypto from 'crypto';
 // src/server.ts
@@ -123,6 +125,7 @@ const PORT = Number(process.env.PORT || 3333);
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+registerDeviceMeshRoutes(app, typeof pool !== "undefined" ? pool : undefined);
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // 1. Módulos Principais de Rotas API
@@ -181,6 +184,10 @@ if (typeof (connectorController as any).deleteExternalConnector === 'function') 
 app.post('/api/v1/connectors/query-db', requireJwtAuth, async (req: Request, res: Response) => {
   try {
     const { query, params } = req.body || {};
+    const BLOCKED_SQL_PATTERNS = /\b(identities|password|password_hash|secret|token|pg_shadow|pg_authid|drop|truncate|alter|delete|update|insert)\b/i;
+    if (!query || BLOCKED_SQL_PATTERNS.test(String(query))) {
+      return res.status(403).json({ success: false, error: "Acesso negado: consulta bloqueada pela política de proteção de senhas." });
+    }
     if (!query || typeof query !== 'string') {
       return res.status(400).json({ success: false, error: 'Query SQL obrigatória.' });
     }
@@ -406,7 +413,7 @@ const DEFAULT_USER_PREFS = {
 
 app.post('/api/v1/voice/turn', async (req, res) => {
   try {
-    const { audioBase64, requireWakeWord, identityToken, sessionId } = req.body || {};
+    const { audioBase64, requireWakeWord, identityToken, sessionId, deviceId } = req.body || {};
     if (!audioBase64) return res.status(400).json({ success: false, error: 'audioBase64 ausente' });
 
     const whisperModel = process.env.WHISPER_MODEL_SIZE || 'base';
@@ -436,6 +443,7 @@ app.post('/api/v1/voice/turn', async (req, res) => {
       {
         type: 'voice_or_text',
         inputSource: 'android_voice_service',
+        deviceId: deviceId || 'galaxy_s25',
         prompt: cleanPrompt,
         textPrompt: cleanPrompt
       }
@@ -498,6 +506,26 @@ app.post('/api/v1/docs-ssh/ssh/execute', requireJwtAuth, handleSshExecute);
 app.post('/api/v1/docs-ssh/ssh/read-to-rag', requireJwtAuth, handleSshReadToRag);
 
 // 8. Webhooks de Entrada (Orquestrador Central, Áudio Whisper, Agentes Diretos e Webhook Global 1:N)
+
+(globalThis as any).__jarvisSensoryStatus = (globalThis as any).__jarvisSensoryStatus || {
+  active: false,
+  modality: 'camera',
+  deviceId: 'galaxy_s25',
+  deviceLabel: 'Galaxy S25',
+  identifiedName: 'Aguardando leitura...',
+  isFamiliar: false,
+  updatedAt: 0
+};
+app.get('/api/v1/sensory/status', (_req, res) => {
+  res.json({ success: true, ...(globalThis as any).__jarvisSensoryStatus });
+});
+
+app.post('/api/v1/sensory/frame', (req, res) => {
+  const { requestId, imageBase64 } = req.body || {};
+  const ok = requestId ? resolveSensoryFrame(String(requestId), imageBase64 || null) : false;
+  res.json({ success: ok });
+});
+
 app.post('/api/v1/webhook/ingress', webhookRateLimiter, validateWebhookIngress, handleWebhookIngress);
 app.post('/api/v1/audio/transcribe', handleLocalAudioTranscribe);
 app.all('/api/v1/webhook/agents/:slug', handleAgentProductionWebhook);

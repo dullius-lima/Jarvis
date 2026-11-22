@@ -12,6 +12,7 @@
     "deploy:vm": "git pull origin main && npm install && npm run build && npm run build:frontend && pm2 flush && pm2 restart jarvis --update-env && pm2 restart jarvis-frontend && pm2 save"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.2",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.3",
@@ -22,7 +23,7 @@
     "ssh2": "^1.15.0",
     "three": "^0.186.1",
     "vue": "^3.4.21",
-    "ws": "^8.22.1",
+    "ws": "^8.23.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
