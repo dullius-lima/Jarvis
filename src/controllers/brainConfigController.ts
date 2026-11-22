@@ -15,7 +15,7 @@ export const KNOWN_ENDPOINTS: Record<string, string> = {
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  groq: 'llama-3.3-70b-versatile',
+  groq: 'openai/gpt-oss-20b',
   gemini: 'gemini-2.5-flash',
   openai: 'gpt-4o-mini',
   deepseek: 'deepseek-chat',
@@ -23,35 +23,28 @@ export const DEFAULT_MODELS: Record<string, string> = {
   ollama: 'llama3.1:8b'
 };
 
-export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string }>> = {
+export let CATALOG_MODELS: Record<string, Array<{ label: string; value: string }>> = {
   groq: [
     { label: '✍️ Inserir ID Manual da Groq', value: 'CUSTOM_INPUT' },
-    { label: 'Llama 3.3 70B Versatile (Recomendado / Tools)', value: 'llama-3.3-70b-versatile' },
-    { label: 'GPT-OSS 120B (Reasoning / Tools)', value: 'openai/gpt-oss-120b' },
-    { label: 'GPT-OSS 20B (Ultra-Rápido)', value: 'openai/gpt-oss-20b' },
-    { label: 'Qwen 3 32B (Tool Calling)', value: 'qwen/qwen3-32b' },
-    { label: 'Llama 3.1 8B Instant (Ultra-Rápido)', value: 'llama-3.1-8b-instant' }
+    { label: 'GPT-OSS 20B (Ultra-Rápido / Liberado)', value: 'openai/gpt-oss-20b' },
+    { label: 'GPT-OSS 120B (Reasoning & Agentes)', value: 'openai/gpt-oss-120b' },
+    { label: 'Qwen 3.8 27B', value: 'qwen/qwen3.8-27b' }
   ],
   gemini: [
     { label: '✍️ Inserir ID Manual do Gemini', value: 'CUSTOM_INPUT' },
-    { label: 'Gemini 2.5 Flash (Free Tier Recomendado)', value: 'gemini-2.5-flash' },
-    { label: 'Gemini 2.5 Flash-Lite (Ultra-Leve)', value: 'gemini-2.5-flash-lite' },
-    { label: 'Gemini 2.5 Pro (Análise Profunda)', value: 'gemini-2.5-pro' },
-    { label: 'Gemini 2.0 Flash (Free Tier)', value: 'gemini-2.0-flash' }
+    { label: 'Gemini 2.5 Flash (Recomendado)', value: 'gemini-2.5-flash' },
+    { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' }
   ],
   openrouter: [
     { label: '✍️ Inserir ID Manual do OpenRouter', value: 'CUSTOM_INPUT' },
-    { label: 'Llama 3.3 70B Instruct (100% Gratuito :free)', value: 'meta-llama/llama-3.3-70b-instruct:free' },
-    { label: 'DeepSeek R1 (100% Gratuito :free)', value: 'deepseek/deepseek-r1:free' },
-    { label: 'DeepSeek V3 Chat (100% Gratuito :free)', value: 'deepseek/deepseek-chat:free' },
-    { label: 'Auto-Router Gratuito OpenRouter', value: 'openrouter/free' },
-    { label: 'Anthropic Claude 3.5 Sonnet (Pago)', value: 'anthropic/claude-3.5-sonnet' }
+    { label: 'DeepSeek V3 Chat (:free)', value: 'deepseek/deepseek-chat:free' },
+    { label: 'DeepSeek R1 (:free)', value: 'deepseek/deepseek-r1:free' },
+    { label: 'Auto-Router Gratuito OpenRouter', value: 'openrouter/free' }
   ],
   openai: [
     { label: '✍️ Inserir ID Manual da OpenAI', value: 'CUSTOM_INPUT' },
-    { label: 'GPT-4o Mini (Mais Econômico)', value: 'gpt-4o-mini' },
-    { label: 'GPT-4o (Completo)', value: 'gpt-4o' },
-    { label: 'o3-mini (Reasoning)', value: 'o3-mini' }
+    { label: 'GPT-4o Mini', value: 'gpt-4o-mini' },
+    { label: 'GPT-4o', value: 'gpt-4o' }
   ],
   deepseek: [
     { label: '✍️ Inserir ID Manual da DeepSeek', value: 'CUSTOM_INPUT' },
@@ -60,9 +53,7 @@ export const CATALOG_MODELS: Record<string, Array<{ label: string; value: string
   ],
   ollama: [
     { label: '✍️ Inserir ID Manual do Ollama', value: 'CUSTOM_INPUT' },
-    { label: 'Llama 3.1 8B (Local)', value: 'llama3.1:8b' },
-    { label: 'Qwen 2.5 Coder (Local)', value: 'qwen2.5-coder' },
-    { label: 'Mistral 7B (Local)', value: 'mistral' }
+    { label: 'Llama 3.1 8B (Local)', value: 'llama3.1:8b' }
   ]
 };
 
@@ -113,11 +104,18 @@ function cleanAndNormalizeApiKey(rawKey?: any): string {
 
 function getEnvKeyForProvider(provider: string): string {
   const p = (provider || 'groq').toLowerCase().trim();
-  if (p === 'groq') return cleanAndNormalizeApiKey(process.env.GROQ_API_KEY || process.env.LLM_API_KEY);
-  if (p === 'gemini') return cleanAndNormalizeApiKey(process.env.GEMINI_API_KEY || process.env.LLM_API_KEY);
-  if (p === 'openrouter') return cleanAndNormalizeApiKey(process.env.OPENROUTER_API_KEY || process.env.LLM_API_KEY);
-  if (p === 'deepseek') return cleanAndNormalizeApiKey(process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY);
-  if (p === 'openai') return cleanAndNormalizeApiKey(process.env.OPENAI_API_KEY || process.env.LLM_API_KEY);
+  const generic = cleanAndNormalizeApiKey(process.env.LLM_API_KEY);
+  const belongsToOther =
+    (p !== 'groq' && generic.startsWith('gsk_')) ||
+    (p !== 'gemini' && generic.startsWith('AIza')) ||
+    (p !== 'openrouter' && generic.startsWith('sk-or-'));
+  const safeGeneric = belongsToOther ? '' : generic;
+
+  if (p === 'groq') return cleanAndNormalizeApiKey(process.env.GROQ_API_KEY) || safeGeneric;
+  if (p === 'gemini') return cleanAndNormalizeApiKey(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) || safeGeneric;
+  if (p === 'openrouter') return cleanAndNormalizeApiKey(process.env.OPENROUTER_API_KEY) || safeGeneric;
+  if (p === 'deepseek') return cleanAndNormalizeApiKey(process.env.DEEPSEEK_API_KEY) || safeGeneric;
+  if (p === 'openai') return cleanAndNormalizeApiKey(process.env.OPENAI_API_KEY) || safeGeneric;
   return '';
 }
 
@@ -145,28 +143,24 @@ function detectProviderFromKeyAndInput(rawProvider: string, apiKey: string, base
  * Valida o modelo sem bloquear modelos homologados válidos (como openai/gpt-oss-120b na Groq)
  */
 function sanitizeModelForProvider(provider: string, rawModel?: string): string {
+  const p = (provider || 'groq').toLowerCase().trim();
   const m = (rawModel || '').trim().replace(/^models\//, '');
+  const listFromGist = (CATALOG_MODELS[p] || [])
+    .map((item) => item.value)
+    .filter((v) => v && v !== 'CUSTOM_INPUT');
+
   if (!m || m === 'CUSTOM_INPUT') {
-    return DEFAULT_MODELS[provider] || 'llama-3.3-70b-versatile';
+    return listFromGist[0] || DEFAULT_MODELS[p] || 'openai/gpt-oss-20b';
   }
-  if (provider === 'gemini') {
-    if (m.includes('3.8') || m.includes('4-argon') || !m.startsWith('gemini')) {
-      return DEFAULT_MODELS.gemini;
-    }
-    return m;
+
+  // Bloqueia apenas mistura óbvia entre provedores diferentes
+  if (p === 'gemini' && !m.startsWith('gemini')) {
+    return listFromGist[0] || DEFAULT_MODELS.gemini;
   }
-  if (provider === 'groq') {
-    if (
-      m.startsWith('gemini') ||
-      m.startsWith('claude') ||
-      m.includes(':free') ||
-      m.includes('mixtral') ||
-      m.includes('gemma2')
-    ) {
-      return DEFAULT_MODELS.groq;
-    }
-    return m;
+  if (p === 'groq' && (m.startsWith('gemini') || m.startsWith('claude') || m.startsWith('gpt-4'))) {
+    return listFromGist[0] || DEFAULT_MODELS.groq;
   }
+
   return m;
 }
 
@@ -253,23 +247,40 @@ function syncKeyToEnvFile(provider: string, apiKey: string, model: string, baseU
 
 export async function syncModelsFromGistAndHealAgents(): Promise<{
   catalog: Record<string, { label: string; value: string }[]>;
+  models: Record<string, { label: string; value: string }[]>;
   source: string;
+  syncedAt: string;
+  updatedAgents: number;
 }> {
-  return { updated: 0, success: true } as any;
-}
+  const rawEnvUrl = (
+    process.env.MODELS_GIST_RAW_URL ||
+    process.env.MODELS_GIST_URL ||
+    DEFAULT_GIST_RAW_URL
+  ).trim();
+  // Remove qualquer hash de commit fixo para pegar sempre a versão mais recente do Gist
+  const cleanGistUrl = rawEnvUrl.replace(/\/raw\/[a-f0-9]{20,40}\//i, '/raw/');
+  const fetchUrl = cleanGistUrl + (cleanGistUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
 
-export async function getSupportedModels(_req: Request, res: Response) {
-  const fallbackCatalog: Record<string, { label: string; value: string }[]> = { ...CATALOG_MODELS };
+  let activeCatalog: Record<string, { label: string; value: string }[]> = { ...CATALOG_MODELS };
+  let source = 'local-fallback';
+  const syncedAt = new Date().toISOString();
+
   try {
-    const resp = await fetch(DEFAULT_GIST_RAW_URL + '?t=' + Date.now(), {
+    const resp = await fetch(fetchUrl, {
+      method: 'GET',
       cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache' },
-      signal: AbortSignal.timeout(6000)
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache'
+      },
+      signal: AbortSignal.timeout(7000)
     });
+
     if (resp.ok) {
       const remote: any = await resp.json();
       if (remote && typeof remote === 'object') {
-        const merged: Record<string, { label: string; value: string }[]> = { ...fallbackCatalog };
+        const merged: Record<string, { label: string; value: string }[]> = { ...CATALOG_MODELS };
         for (const [prov, list] of Object.entries(remote)) {
           if (!Array.isArray(list)) continue;
           const key = prov.toLowerCase().trim();
@@ -277,32 +288,96 @@ export async function getSupportedModels(_req: Request, res: Response) {
             .filter((item: any) => item && item.value)
             .map((item: any) => ({
               label: String(item.label || item.value),
-              value: String(item.value)
-                .replace(/^models\//, '')
-                .replace('gemini-3.8-flash', 'gemini-2.5-flash')
-                .replace('gemini-3.8-pro', 'gemini-2.5-pro')
-                .trim()
-            }))
-            .filter((item) => item.value !== 'gemini-4-argon');
+              value: String(item.value).replace(/^models\//, '').trim()
+            }));
 
-          const finalList = [...cleaned];
-          if (fallbackCatalog[key]) {
-            for (const reqModel of fallbackCatalog[key]) {
-              if (!finalList.some((m) => m.value === reqModel.value)) {
-                finalList.push(reqModel);
-              }
-            }
+          if (!cleaned.some((m) => m.value === 'CUSTOM_INPUT')) {
+            cleaned.unshift({ label: '✍️ Inserir ID Manual (' + key.toUpperCase() + ')', value: 'CUSTOM_INPUT' });
           }
-          if (!finalList.some((m) => m.value === 'CUSTOM_INPUT')) {
-            finalList.unshift({ label: '✍️ Inserir ID Manual (' + key.toUpperCase() + ')', value: 'CUSTOM_INPUT' });
+          merged[key] = cleaned;
+
+          const firstReal = cleaned.find((m) => m.value !== 'CUSTOM_INPUT');
+          if (firstReal) {
+            DEFAULT_MODELS[key] = firstReal.value;
           }
-          merged[key] = finalList;
         }
-        return res.status(200).json({ success: true, catalog: merged, source: 'github-gist-live' });
+        CATALOG_MODELS = merged;
+        activeCatalog = merged;
+        source = 'github-gist-live';
       }
     }
-  } catch {}
-  return res.status(200).json({ success: true, catalog: fallbackCatalog, source: 'local-fallback' });
+  } catch (err: any) {
+    console.warn('⚠️ [Gist Auto-Sync] Falha ao consultar Gist remoto, mantendo cache/fallback:', err?.message || err);
+  }
+
+  // AUTO-HEAL: Atualiza automaticamente no PostgreSQL os Agentes e o Cérebro caso estejam com modelo fora do Gist
+  let updatedAgents = 0;
+  try {
+    for (const [providerKey, modelsList] of Object.entries(activeCatalog)) {
+      if (!Array.isArray(modelsList)) continue;
+      const validModels = modelsList
+        .map((m) => m.value)
+        .filter((v) => v && v !== 'CUSTOM_INPUT');
+
+      if (validModels.length === 0) continue;
+      const primaryModel = validModels[0];
+
+      const updRes = await pool.query(
+        `UPDATE ai_agents
+         SET model = $1, updated_at = NOW()
+         WHERE LOWER(provider) = LOWER($2)
+           AND (model IS NULL OR model = '' OR NOT (model = ANY($3::text[])));`,
+        [primaryModel, providerKey, validModels]
+      );
+      updatedAgents += updRes.rowCount || 0;
+    }
+
+    const brainRes = await pool.query(
+      "SELECT value FROM system_configs WHERE key = 'brain_llm_config' LIMIT 1;"
+    );
+    if (brainRes.rows.length > 0 && brainRes.rows[0].value) {
+      const cfg =
+        typeof brainRes.rows[0].value === 'string'
+          ? JSON.parse(brainRes.rows[0].value)
+          : brainRes.rows[0].value;
+      const prov = String(cfg.provider || 'groq').toLowerCase().trim();
+      const provModels = (activeCatalog[prov] || [])
+        .map((m) => m.value)
+        .filter((v) => v && v !== 'CUSTOM_INPUT');
+
+      if (provModels.length > 0 && !provModels.includes(cfg.model)) {
+        cfg.model = provModels[0];
+        await pool.query(
+          "UPDATE system_configs SET value = $1::jsonb, updated_at = NOW() WHERE key = 'brain_llm_config';",
+          [JSON.stringify(cfg)]
+        );
+      }
+    }
+  } catch (dbErr: any) {
+    console.warn('⚠️ [Gist Auto-Heal] Aviso ao alinhar modelos no banco:', dbErr?.message || dbErr);
+  }
+
+  return {
+    catalog: activeCatalog,
+    models: activeCatalog,
+    source,
+    syncedAt,
+    updatedAgents
+  };
+}
+
+export async function getSupportedModels(_req: Request, res: Response) {
+  const result = await syncModelsFromGistAndHealAgents();
+  return res.status(200).json({
+    success: true,
+    source: result.source,
+    syncedAt: result.syncedAt,
+    updatedAgents: result.updatedAgents,
+    catalog: result.catalog,
+    models: result.models,
+    data: result.catalog,
+    endpoints: KNOWN_ENDPOINTS
+  });
 }
 
 export const getHomologatedModels = getSupportedModels;

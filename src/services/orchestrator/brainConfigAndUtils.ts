@@ -269,7 +269,7 @@ export function resolveProviderCredentials(
   baseURL = baseURL.replace(/\/+$/, '');
 
   const defaultByProvider: Record<string, string> = {
-    groq: 'llama-3.3-70b-versatile',
+    groq: 'openai/gpt-oss-20b',
     gemini: 'gemini-2.5-flash',
     openrouter: 'openrouter/free',
     deepseek: 'deepseek-chat',
@@ -280,9 +280,9 @@ export function resolveProviderCredentials(
   let model =
     customModel && customModel.trim() && customModel !== 'CUSTOM_INPUT'
       ? customModel.trim()
-      : defaultByProvider[p] || 'llama-3.3-70b-versatile';
+      : defaultByProvider[p] || 'openai/gpt-oss-20b';
 
-  if (p === 'gemini' && (!model.startsWith('gemini') || model.includes('argon') || model.includes('3.8'))) {
+  if (p === 'gemini' && !model.startsWith('gemini')) {
     model = 'gemini-2.5-flash';
   } else if (p === 'deepseek' && !model.startsWith('deepseek')) {
     model = 'deepseek-chat';
@@ -291,7 +291,7 @@ export function resolveProviderCredentials(
   } else if (p === 'openai' && (model.includes('llama') || model.includes('gpt-oss') || model.includes('gemini') || model.includes('deepseek'))) {
     model = 'gpt-4o-mini';
   } else if (p === 'groq' && (model.startsWith('gemini') || model.startsWith('gpt-4') || model.startsWith('claude'))) {
-    model = 'llama-3.3-70b-versatile';
+    model = 'openai/gpt-oss-20b';
   }
 
   return { provider: p, apiKey: apiKey || (p === 'ollama' ? 'ollama' : ''), baseURL, model };

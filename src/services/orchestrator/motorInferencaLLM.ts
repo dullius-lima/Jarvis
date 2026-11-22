@@ -97,17 +97,21 @@ export function limparMascaraChave(rawKey?: any, provider?: string): string {
 
 export function obterChaveContingenciaEnv(provider: string): string {
   const p = (provider || 'groq').toLowerCase().trim();
-  if (p === 'groq') return limparMascaraChave(process.env.GROQ_API_KEY || process.env.LLM_API_KEY, p);
-  if (p === 'gemini') return limparMascaraChave(process.env.GEMINI_API_KEY || process.env.LLM_API_KEY, p);
-  if (p === 'openrouter') return limparMascaraChave(process.env.OPENROUTER_API_KEY || process.env.LLM_API_KEY, p);
-  if (p === 'deepseek') return limparMascaraChave(process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY, p);
-  if (p === 'openai') return limparMascaraChave(process.env.OPENAI_API_KEY || process.env.LLM_API_KEY, p);
+  const generic = limparMascaraChave(process.env.LLM_API_KEY, p);
+  const belongsToOther =
+    (p !== 'groq' && generic.startsWith('gsk_')) ||
+    (p !== 'gemini' && generic.startsWith('AIza')) ||
+    (p !== 'openrouter' && generic.startsWith('sk-or-'));
+  const safeGeneric = belongsToOther ? '' : generic;
+
+  if (p === 'groq') return limparMascaraChave(process.env.GROQ_API_KEY, p) || safeGeneric;
+  if (p === 'gemini') return limparMascaraChave(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY, p) || safeGeneric;
+  if (p === 'openrouter') return limparMascaraChave(process.env.OPENROUTER_API_KEY, p) || safeGeneric;
+  if (p === 'deepseek') return limparMascaraChave(process.env.DEEPSEEK_API_KEY, p) || safeGeneric;
+  if (p === 'openai') return limparMascaraChave(process.env.OPENAI_API_KEY, p) || safeGeneric;
   return '';
 }
 
-/**
- * Executa chamadas à LLM com suporte nativo a Function Calling e tratamento estrito de credenciais
- */
 export async function chamarLLMCompativelOpenAI(options: {
   provider: string;
   model: string;
@@ -150,12 +154,7 @@ export async function chamarLLMCompativelOpenAI(options: {
   // 1. SUPORTE GOOGLE GEMINI NATIVO
   if (provider === 'gemini') {
     const rawGemModel = (creds.model || options.model || 'gemini-2.5-flash').trim();
-    const modeloPrimario =
-      !rawGemModel.startsWith('gemini') ||
-      rawGemModel.includes('argon') ||
-      rawGemModel.includes('3.8')
-        ? 'gemini-2.5-flash'
-        : rawGemModel;
+    const modeloPrimario = !rawGemModel.startsWith('gemini') ? 'gemini-2.5-flash' : rawGemModel;
 
     const partesFormatadas: any[] = [];
     for (const msg of options.messages) {
@@ -263,15 +262,15 @@ export async function chamarLLMCompativelOpenAI(options: {
   });
 
   let modeloAlvo = creds.model;
-  if (provider === 'groq' && (!modeloAlvo || modeloAlvo.includes('deepseek-r1'))) {
-    modeloAlvo = 'llama-3.3-70b-versatile';
+  if (provider === 'groq' && !modeloAlvo) {
+    modeloAlvo = 'openai/gpt-oss-20b';
   } else if (provider === 'deepseek' && (!modeloAlvo || !modeloAlvo.startsWith('deepseek'))) {
     modeloAlvo = 'deepseek-chat';
   }
 
   const modelosCandidatos =
     provider === 'groq'
-      ? Array.from(new Set([modeloAlvo, 'llama-3.3-70b-versatile', 'openai/gpt-oss-120b']))
+      ? Array.from(new Set([modeloAlvo, 'openai/gpt-oss-20b', 'openai/gpt-oss-120b']))
       : provider === 'deepseek'
       ? Array.from(new Set([modeloAlvo, 'deepseek-chat']))
       : [modeloAlvo];
@@ -318,7 +317,7 @@ export async function chamarLLMCompativelOpenAI(options: {
     if (groqBackupKey) {
       try {
         const groqClient = new OpenAI({ apiKey: groqBackupKey, baseURL: 'https://api.groq.com/openai/v1', timeout: 30000 });
-        const backupPayload: any = { model: 'llama-3.3-70b-versatile', messages: options.messages, temperature: options.temperature ?? 0.2 };
+        const backupPayload: any = { model: 'openai/gpt-oss-20b', messages: options.messages, temperature: options.temperature ?? 0.2 };
         if (options.tools && options.tools.length > 0) {
           backupPayload.tools = options.tools;
           backupPayload.tool_choice = 'auto';

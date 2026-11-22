@@ -16,11 +16,9 @@ export const ECONOMIC_FAILOVER_LADDER: Array<{
   model: string;
   tier: string;
 }> = [
-  { provider: 'gemini', model: 'gemini-2.5-flash', tier: 'Cota Gratuita Google Gemini (Ativo)' },
-  { provider: 'groq', model: 'llama-3.3-70b-versatile', tier: 'Groq LPU Principal (Tool Calling)' },
-  { provider: 'groq', model: 'openai/gpt-oss-120b', tier: 'Groq LPU Reasoning (Organização Liberada)' },
-  { provider: 'groq', model: 'qwen/qwen3-32b', tier: 'Groq Alternativo (Tool Calling)' },
-  { provider: 'groq', model: 'openai/gpt-oss-20b', tier: 'Groq Ultra-Econômico' },
+  { provider: 'gemini', model: 'gemini-2.5-flash', tier: 'Cota Gratuita Google Gemini' },
+  { provider: 'groq', model: 'openai/gpt-oss-20b', tier: 'Groq LPU Ultra-Econômico' },
+  { provider: 'groq', model: 'openai/gpt-oss-120b', tier: 'Groq LPU Alta Capacidade' },
   { provider: 'deepseek', model: 'deepseek-chat', tier: 'Baixo Custo V3 (DeepSeek)' },
   { provider: 'openai', model: 'gpt-4o-mini', tier: 'Econômico Estável (OpenAI)' },
   { provider: 'gemini', model: 'gemini-2.5-pro', tier: 'Raciocínio Avançado (Google)' },
