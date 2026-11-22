@@ -30,6 +30,48 @@
           🔄 Recarregar Sessões
         </button>
       </div>
+
+    <!-- UPLOAD DE ARQUIVOS PARA MEMÓRIA DE LONGO PRAZO (RAG) -->
+    <div style="background:#0f172a;border:1px solid #0284c7;border-radius:10px;padding:14px;margin:12px 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <strong style="color:#38bdf8;font-size:13px;">📄 Adicionar Arquivo ao Longo Prazo (PDF, CSV, DOCX, TXT)</strong>
+        <span style="font-size:11px;color:#94a3b8;">Fatiamento automático no RAG</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+        <input
+          type="file"
+          accept=".pdf,.csv,.docx,.txt,.md,.json"
+          @change="selecionarArquivoRagLongo"
+          style="font-size:12px;color:#e2e8f0;background:#020617;border:1px solid #334155;padding:6px;border-radius:6px;flex:1;min-width:200px;"
+        />
+        <input
+          v-model="docRagCategoria"
+          placeholder="Categoria (ex: fisiologia)"
+          style="background:#020617;color:#fff;border:1px solid #334155;padding:7px 10px;border-radius:6px;font-size:12px;width:170px;"
+        />
+        <select
+          v-model.number="docRagChunkSize"
+          title="Tamanho de cada bloco de leitura"
+          style="background:#020617;color:#fff;border:1px solid #334155;padding:7px 8px;border-radius:6px;font-size:12px;"
+        >
+          <option :value="1000">Bloco: 1000 chars</option>
+          <option :value="1500">Bloco: 1500 chars (Livros/Fisiologia)</option>
+          <option :value="2000">Bloco: 2000 chars</option>
+        </select>
+        <button
+          type="button"
+          :disabled="!docRagBase64 || docRagLoading"
+          @click="enviarArquivoRagLongo"
+          style="background:#0284c7;color:#fff;border:none;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;opacity:1;"
+        >
+          {{ docRagLoading ? '⏳ Processando...' : '🚀 Salvar no Longo Prazo' }}
+        </button>
+      </div>
+      <div v-if="docRagStatus" style="margin-top:8px;font-size:12px;color:#38bdf8;font-weight:500;">
+        {{ docRagStatus }}
+      </div>
+    </div>
+
     </header>
 
     <!-- SELETOR DAS 3 CAMADAS DE MEMÓRIA -->
@@ -471,6 +513,58 @@ async function enviarDocRag() {
   } catch (err: any) { statusDocRag.value = `❌ ${err.message}`; } finally { enviandoDocRag.value = false; }
 }
 carregarCandidatosConsolidacao();
+
+
+const docRagNome = ref('');
+const docRagBase64 = ref('');
+const docRagCategoria = ref('fisiologia');
+const docRagChunkSize = ref(1500);
+const docRagLoading = ref(false);
+const docRagStatus = ref('');
+
+function selecionarArquivoRagLongo(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  docRagNome.value = file.name;
+  docRagStatus.value = `📎 Arquivo selecionado: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+  const reader = new FileReader();
+  reader.onload = () => {
+    docRagBase64.value = String(reader.result || '');
+  };
+  reader.readAsDataURL(file);
+}
+
+async function enviarArquivoRagLongo() {
+  if (!docRagBase64.value || !docRagNome.value) return;
+  docRagLoading.value = true;
+  docRagStatus.value = '⏳ Extraindo texto e dividindo em blocos na memória de longo prazo...';
+  try {
+    const res = await fetch('/api/v1/docs-ssh/rag/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileName: docRagNome.value,
+        contentBase64: docRagBase64.value,
+        category: docRagCategoria.value || 'geral',
+        chunkSize: docRagChunkSize.value,
+        chunkOverlap: 200
+      })
+    });
+    const json = await res.json();
+    if (json.success) {
+      docRagStatus.value = `✅ ${json.message}`;
+      docRagBase64.value = '';
+      if (typeof promoverParaLongoPrazo === 'function') await promoverParaLongoPrazo();
+    } else {
+      docRagStatus.value = `❌ Erro: ${json.error || 'Falha ao processar arquivo.'}`;
+    }
+  } catch (err: any) {
+    docRagStatus.value = `❌ Falha na requisição: ${err.message}`;
+  } finally {
+    docRagLoading.value = false;
+  }
+}
 
 </script>
 
