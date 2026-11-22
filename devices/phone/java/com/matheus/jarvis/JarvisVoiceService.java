@@ -23,6 +23,7 @@ import java.net.*;
 import java.util.*;
 
 public class JarvisVoiceService extends Service {
+    private OpenWakeWordDetector owwDetector;
     public static volatile JarvisVoiceService instance;
     private static final String BASE = "http://163.176.111.18";
     private Handler mainHandler;
@@ -97,6 +98,8 @@ public class JarvisVoiceService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        owwDetector = new OpenWakeWordDetector(this);
+        DeviceCommandExecutor.startMesh(this, "galaxy_s25");
         instance = this;
         mainHandler = new Handler(Looper.getMainLooper());
         tts = new TextToSpeech(getApplicationContext(), st -> {

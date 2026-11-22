@@ -1,3 +1,4 @@
+import { captureVscreenFrame, launchAppOnVscreen } from './agentVscreenBridge';
 import { callWebMcpTool, ensureActiveWebMcpTools, tryUniversalWebMcpAutoExec } from "./webMcpService.js";
 // src/services/orchestratorService.ts
 import { pool } from '../config/database.js';

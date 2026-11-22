@@ -446,6 +446,40 @@ registrarFerramentaWebMcp({
     return { success: true, mensagem: `Abrindo painel na aba ${aba}.` };
   }
 });
+
+if (typeof window !== 'undefined' && !(window as any)['__jarvisSensoryHook']) {
+  (window as any)['__jarvisSensoryHook'] = true;
+  const _f = window.fetch.bind(window);
+  window.fetch = async (u: any, o?: any) => {
+    const url = typeof u === 'string' ? u : (u && u.url) || '';
+    if (url.includes('/api/v1/webhook/ingress') && o && typeof o.body === 'string') {
+      try {
+        const b = JSON.parse(o.body);
+        const t = String(b.prompt || b.message || b.text || b.command || (b.sensorData && b.sensorData.textPrompt) || '');
+        const md = navigator.mediaDevices;
+        if (!b.webcamFrame && md && md.getUserMedia && /ative\s+a\s+c[aâ]mera|liga\s+a\s+c[aâ]mera|est[aá]\s+me\s+vendo|t[aá]\s+me\s+vendo|consegue\s+me\s+ver/i.test(t)) {
+          const st = await md.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } });
+          const v = document.createElement('video'); v.srcObject = st; v.muted = true; await v.play();
+          await new Promise(r => setTimeout(r, 350));
+          const c = document.createElement('canvas'); c.width = v.videoWidth || 640; c.height = v.videoHeight || 480;
+          c.getContext('2d')?.drawImage(v, 0, 0, c.width, c.height); st.getTracks().forEach(x => x.stop());
+          b.webcamFrame = c.toDataURL('image/jpeg', 0.78);
+        }
+        if (!b.screenFrame && md && (md as any).getDisplayMedia && /veja\s+minha\s+tela|olhe\s+minha\s+tela|visualiz[ae]\s+minha\s+tela|o\s+que\s+est[aá]\s+na\s+tela/i.test(t)) {
+          const st = await (md as any).getDisplayMedia({ video: true });
+          const v = document.createElement('video'); v.srcObject = st; await v.play();
+          await new Promise(r => setTimeout(r, 300));
+          const c = document.createElement('canvas'); c.width = v.videoWidth || 1280; c.height = v.videoHeight || 720;
+          c.getContext('2d')?.drawImage(v, 0, 0, c.width, c.height); st.getTracks().forEach(x => x.stop());
+          b.screenFrame = c.toDataURL('image/jpeg', 0.75);
+        }
+        o = Object.assign({}, o, { body: JSON.stringify(b) });
+      } catch (e) {}
+    }
+    return _f(u, o);
+  };
+}
+
 </script>
 
 <style scoped>

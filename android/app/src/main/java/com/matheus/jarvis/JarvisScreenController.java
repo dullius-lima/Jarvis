@@ -20,6 +20,12 @@ public class JarvisScreenController {
     }
 
     public static String tryExecuteCommand(Context context, String rawCommand) {
+        if (rawCommand != null && rawCommand.toLowerCase().matches("^(?:abr[aei]|abrir|inici[ae]|executar)\\s+.*")) {
+            String app = rawCommand.replaceFirst("(?i)^(?:abr[aei]|abrir|inici[ae]|executar)\\s+(?:o\\s+|a\\s+)?(?:app\\s+|aplicativo\\s+)?", "").replaceAll("[.!?]+$", "").trim();
+            String res = JarvisAppLauncher.openByName(context, app);
+            if (res != null) return res;
+        }
+
         if (rawCommand == null || rawCommand.trim().isEmpty()) return null;
         String clean = rawCommand
             .replaceFirst("(?i)^(?:oi|ola|ei|ok|fala)?[\\s,.-]*(?:jarvis|javis|jarves|iarvis|jarbas)[\\s,.:!?-]*", "")
