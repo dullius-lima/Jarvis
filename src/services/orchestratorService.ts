@@ -1,8 +1,9 @@
-import { tryHandleUiControlCommand } from './uiControlService.js';
+import { validateAuthorizedDevice } from './deviceRegistryService.js';
+import { tryHandleUiControlCommand, executeDeviceUiAction } from './uiControlService.js';
 import { requestLiveSensoryFrame, detectSensoryIntent, handleSensoryStopCommand } from './sensoryRouterService.js';
 import { sendToDeviceById } from './deviceMeshService.js';
 import { matchAndStoreVisualCapture, promoteLastCaptureToFamiliar } from './visualMemoryService.js';
-import { captureVscreenFrame, launchAppOnVscreen } from './agentVscreenBridge';
+import { captureVscreenFrame, launchAppOnVscreen } from './agentVscreenBridge.js';
 import { callWebMcpTool, ensureActiveWebMcpTools, tryUniversalWebMcpAutoExec } from "./webMcpService.js";
 // src/services/orchestratorService.ts
 import { pool } from '../config/database.js';
@@ -172,7 +173,25 @@ export async function processarExecucaoWorkflow(
     }
 
     // 2. Visão Multimodal
-    const originDev = String(sensoryInput?.deviceId || sensoryInput?.sensorData?.deviceId || (String(sessionId).includes('tv') ? 'tv_sala' : String(sessionId).includes('watch') ? 'galaxy_watch' : 'galaxy_s25'));
+    const originDev = String(sensoryInput?.deviceId || sensoryInput?.sensorData?.deviceId || '').trim();
+  const originToken = String(sensoryInput?.deviceToken || sensoryInput?.sensorData?.deviceToken || '').trim();
+  if (originDev) {
+    const authDev = await validateAuthorizedDevice(originDev, originToken).catch(() => null);
+    if (!authDev) {
+      return {
+        success: true,
+        triggeredSuccess: true,
+        agent: 'JARVIS (Segurança de Dispositivos)',
+        agentId: 'jarvis_device_guard',
+        nodeType: 'core',
+        executedTools: [],
+        response: 'Dispositivo não autorizado. Abra o JARVIS neste aparelho e insira o Código de Acesso gerado na aba Dispositivos da conta principal.',
+        executionTimeMs: Date.now() - inicioExecucao,
+        data: null as any
+      };
+    }
+    userPrompt = `${userPrompt}\n[ORIGEM DO CONTATO]: Dispositivo "${authDev.custom_name}" (ID: ${authDev.device_id} | Tipo: ${authDev.device_type} | Perfil: ${authDev.owner_profile}${authDev.is_primary ? ' | CONTA PRINCIPAL' : ''}).`;
+  }
   const famMatch = userPrompt.match(/^(?:jarvis[,\s]+)?(?:esse|essa|este|esta)\s+[eé]\s+(?:o\s+|a\s+|meu\s+irm[aã]o\s+|minha\s+irm[aã]\s+|meu\s+pai\s+|minha\s+m[aã]e\s+|minha\s+esposa\s+|meu\s+filho\s+|minha\s+filha\s+)?([a-zA-ZÀ-ÿ ]{2,40})$/i);
   if (famMatch && !/quem|que|isso|aquilo/i.test(famMatch[1])) {
     const msgFam = await promoteLastCaptureToFamiliar(famMatch[1]);
@@ -249,6 +268,26 @@ export async function processarExecucaoWorkflow(
       speakerRole,
       visual.instrucaoVisualSistema
     );
+
+    // 3.05 Registra Ferramenta Global de Controle de Dispositivos (Celular, TV, PC, Watch)
+    if (!dadosContexto.tools.some((t: any) => t.function?.name === 'controlar_dispositivo')) {
+      dadosContexto.tools.push({
+        type: 'function',
+        function: {
+          name: 'controlar_dispositivo',
+          description: 'Controla diretamente o celular (galaxy_s25), TV TCL (tv_sala), PC (pc_windows) ou relógio (galaxy_watch): abre aplicativos, lê os elementos da tela, clica em botões/ícones, digita e pesquisa dentro de apps, rola a tela, busca documentos/arquivos internos e abre arquivos. Pode ser chamada em sequência (ex: open_app -> read_screen -> click_text -> type_and_search) para mergulhar dentro de qualquer app.',
+          parameters: {
+            type: 'object',
+            properties: {
+              dispositivo: { type: 'string', enum: ['galaxy_s25', 'tv_sala', 'pc_windows', 'galaxy_watch'], description: 'Dispositivo alvo.' },
+              acao: { type: 'string', enum: ['open_app', 'read_screen', 'click_text', 'type_text', 'type_and_search', 'scroll', 'global', 'search_files', 'open_file'], description: 'Ação a executar na tela ou armazenamento.' },
+              valor: { type: 'string', description: 'Nome do app, texto para clicar/digitar, direção (up/down/left/right), tecla (back/home), termo de busca de arquivo ou caminho completo do arquivo.' }
+            },
+            required: ['acao']
+          }
+        }
+      });
+    }
 
     // 3.1 Registra a Ferramenta Nativa de Aprendizado Permanente
     if (!dadosContexto.tools.some((t: any) => t.function?.name === 'salvar_memoria_permanente')) {
@@ -426,7 +465,60 @@ export async function processarExecucaoWorkflow(
         (tc: any) => sanitizeToolName(tc.function?.name) === 'salvar_memoria_permanente'
       );
 
-      if (callMemoria) {
+      const callDevControl = mensagemEscolha.tool_calls.find(
+          (tc: any) => sanitizeToolName(tc.function?.name) === 'controlar_dispositivo'
+        );
+
+        if (callDevControl) {
+          const loopMsgs: any[] = [...mensagensBase, mensagemEscolha];
+          let currentCalls = mensagemEscolha.tool_calls.filter((tc: any) => sanitizeToolName(tc.function?.name) === 'controlar_dispositivo');
+          let stepCount = 0;
+
+          while (currentCalls.length > 0 && stepCount < 5) {
+            stepCount++;
+            for (const tc of currentCalls) {
+              let a: any = {};
+              try { a = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+              const dev = a.dispositivo || originDev || 'galaxy_s25';
+              const act = String(a.acao || 'read_screen');
+              const val = String(a.valor || '');
+              const pld: Record<string, any> =
+                act === 'open_app' ? { app: val } :
+                act === 'scroll' ? { direction: val || 'down' } :
+                act === 'global' ? { key: val || 'back' } :
+                act === 'search_files' ? { query: val } :
+                act === 'open_file' ? { path: val } :
+                { text: val };
+
+              const resDev = await executeDeviceUiAction(dev, act, pld);
+              if (act === 'open_app' && resDev.ok) await new Promise((r) => setTimeout(r, 900));
+              executedTools.push(`controlar_dispositivo:${act}`);
+              loopMsgs.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(resDev) });
+            }
+
+            const nextPass: any = await callOpenAICompatibleLLM({
+              provider: dadosContexto.configuracaoCerebro.provider,
+              model: dadosContexto.configuracaoCerebro.model,
+              apiKey: dadosContexto.configuracaoCerebro.api_key,
+              baseUrl: dadosContexto.configuracaoCerebro.base_url,
+              messages: loopMsgs,
+              tools: dadosContexto.tools.filter((t: any) => t.function?.name === 'controlar_dispositivo'),
+              temperature: 0.1
+            });
+            const nextMsg = nextPass?.choices?.[0]?.message;
+            if (!nextMsg) break;
+            loopMsgs.push(nextMsg);
+            if (Array.isArray(nextMsg.tool_calls) && nextMsg.tool_calls.length > 0) {
+              currentCalls = nextMsg.tool_calls;
+            } else {
+              textoRespostaFinal = nextMsg.content || 'Ação concluída no dispositivo.';
+              break;
+            }
+          }
+          triggeredAgentName = 'JARVIS (Controle Global de Dispositivos)';
+          triggeredAgentId = 'jarvis_device_navigator';
+          triggeredNodeType = 'api';
+        } else if (callMemoria) {
         let argsMem: any = {};
         try { argsMem = JSON.parse(callMemoria.function?.arguments || '{}'); } catch { argsMem = {}; }
 

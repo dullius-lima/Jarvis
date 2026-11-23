@@ -152,6 +152,7 @@ public class JarvisVoiceService extends Service {
     }
 
     private boolean canListenNow() {
+        if (!JarvisDeviceIdentity.isPaired(this)) return false;
         if (isSpeaking) return false;
         if (false) return false; // Libera mic para o WebView dentro do app
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false;
@@ -268,7 +269,9 @@ public class JarvisVoiceService extends Service {
             body.put("requireWakeWord", requireWake);
             body.put("identityToken", "Matheus-Admin");
             body.put("sessionId", "sess_main_admin");
-                body.put("deviceId", "tv_sala");
+                body.put("deviceId", JarvisDeviceIdentity.getDeviceId(this));
+            body.put("modelInfo", JarvisDeviceIdentity.getModelInfo());
+            body.put("deviceToken", JarvisDeviceIdentity.getDeviceToken(this));
 
             HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/voice/turn").openConnection();
             c.setRequestMethod("POST");

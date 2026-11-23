@@ -143,9 +143,120 @@ public class JarvisFloatingOrbManager {
         });
     }
 
+        public static void openPairingCard(Context ctx) {
+        new Handler(Looper.getMainLooper()).post(() -> {
+            try {
+                if (chatOpen && chatCard != null) return;
+                if (wm == null) wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
+
+                chatCard = new LinearLayout(ctx);
+                chatCard.setOrientation(LinearLayout.VERTICAL);
+                chatCard.setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12));
+
+                GradientDrawable cardBg = new GradientDrawable();
+                cardBg.setColor(Color.parseColor("#F5080F1E"));
+                cardBg.setCornerRadius(dp(ctx, 18));
+                cardBg.setStroke(dp(ctx, 1), Color.parseColor("#F59E0B"));
+                chatCard.setBackground(cardBg);
+
+                LinearLayout header = new LinearLayout(ctx);
+                header.setOrientation(LinearLayout.HORIZONTAL);
+                TextView title = new TextView(ctx);
+                title.setText("🔐 Vincular Dispositivo");
+                title.setTextColor(Color.parseColor("#FBBF24"));
+                title.setTextSize(13.5f);
+                title.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+                TextView btnClose = new TextView(ctx);
+                btnClose.setText("✕");
+                btnClose.setTextColor(Color.parseColor("#94A3B8"));
+                btnClose.setTextSize(15f);
+                btnClose.setPadding(dp(ctx, 8), 0, dp(ctx, 4), 0);
+                btnClose.setOnClickListener(v -> closeMiniChat());
+                header.addView(title);
+                header.addView(btnClose);
+                chatCard.addView(header);
+
+                TextView desc = new TextView(ctx);
+                String curDev = JarvisDeviceIdentity.isPaired(ctx) ? ("Ligado: " + JarvisDeviceIdentity.getCustomName(ctx) + "\n") : "";
+                desc.setText(curDev + "Introduza o Código de Acesso (JRV-...) gerado na aba Dispositivos:");
+                desc.setTextColor(Color.parseColor("#CBD5E1"));
+                desc.setTextSize(11.5f);
+                desc.setPadding(0, dp(ctx, 6), 0, dp(ctx, 8));
+                chatCard.addView(desc);
+
+                EditText codeInput = new EditText(ctx);
+                codeInput.setHint("Ex: JRV-4829-K7P2");
+                codeInput.setHintTextColor(Color.parseColor("#64748B"));
+                codeInput.setTextColor(Color.parseColor("#22D3EE"));
+                codeInput.setTextSize(14f);
+                codeInput.setSingleLine(true);
+                codeInput.setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 10), dp(ctx, 8));
+                GradientDrawable inBg = new GradientDrawable();
+                inBg.setColor(Color.parseColor("#0F172A"));
+                inBg.setCornerRadius(dp(ctx, 10));
+                inBg.setStroke(1, Color.parseColor("#38BDF8"));
+                codeInput.setBackground(inBg);
+                chatCard.addView(codeInput);
+
+                TextView statusTxt = new TextView(ctx);
+                statusTxt.setTextColor(Color.parseColor("#F87171"));
+                statusTxt.setTextSize(11f);
+                statusTxt.setPadding(0, dp(ctx, 4), 0, dp(ctx, 6));
+                chatCard.addView(statusTxt);
+
+                TextView btnPair = new TextView(ctx);
+                btnPair.setText("✅ Ativar Dispositivo");
+                btnPair.setTextColor(Color.parseColor("#020617"));
+                btnPair.setTextSize(13f);
+                btnPair.setGravity(Gravity.CENTER);
+                btnPair.setPadding(dp(ctx, 12), dp(ctx, 9), dp(ctx, 12), dp(ctx, 9));
+                GradientDrawable btnBg = new GradientDrawable();
+                btnBg.setColor(Color.parseColor("#22D3EE"));
+                btnBg.setCornerRadius(dp(ctx, 12));
+                btnPair.setBackground(btnBg);
+                btnPair.setOnClickListener(v -> {
+                    String code = codeInput.getText().toString().trim();
+                    statusTxt.setTextColor(Color.parseColor("#38BDF8"));
+                    statusTxt.setText("A validar código...");
+                    new Thread(() -> {
+                        String res = JarvisDeviceIdentity.pairWithCode(ctx, code);
+                        new Handler(Looper.getMainLooper()).post(() -> {
+                            if (res.startsWith("OK:")) {
+                                closeMiniChat();
+                                openMiniChat(ctx);
+                                appendChat("✅ Ligado como: " + res.substring(3));
+                            } else {
+                                statusTxt.setTextColor(Color.parseColor("#F87171"));
+                                statusTxt.setText("❌ " + res);
+                            }
+                        });
+                    }).start();
+                });
+                chatCard.addView(btnPair);
+
+                int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams.TYPE_PHONE;
+                chatParams = new WindowManager.LayoutParams(
+                        dp(ctx, 295),
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        overlayType,
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                        PixelFormat.TRANSLUCENT
+                );
+                chatParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                chatParams.y = Math.max(dp(ctx, 60), (orbParams != null ? orbParams.y + dp(ctx, 66) : dp(ctx, 240)));
+                wm.addView(chatCard, chatParams);
+                chatOpen = true;
+            } catch (Exception ignored) {}
+        });
+    }
+
     public static void toggleMiniChat(Context ctx) {
         if (chatOpen) {
             closeMiniChat();
+        } else if (!JarvisDeviceIdentity.isPaired(ctx)) {
+            openPairingCard(ctx);
         } else {
             openMiniChat(ctx);
         }
@@ -185,10 +296,28 @@ public class JarvisFloatingOrbManager {
                 header.setGravity(Gravity.CENTER_VERTICAL);
 
                 TextView title = new TextView(ctx);
-                title.setText("🌐 JARVIS");
+                title.setText("🌐 " + JarvisDeviceIdentity.getCustomName(ctx));
                 title.setTextColor(Color.parseColor("#38BDF8"));
                 title.setTextSize(13f);
                 title.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+                TextView btnToken = new TextView(ctx);
+                btnToken.setText("🔑 Token");
+                btnToken.setTextColor(Color.parseColor("#FDE68A"));
+                btnToken.setTextSize(11f);
+                btnToken.setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4));
+                GradientDrawable tokBg = new GradientDrawable();
+                tokBg.setColor(Color.parseColor("#1E293B"));
+                tokBg.setCornerRadius(dp(ctx, 10));
+                btnToken.setBackground(tokBg);
+                LinearLayout.LayoutParams tokLp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                tokLp.rightMargin = dp(ctx, 5);
+                btnToken.setLayoutParams(tokLp);
+                btnToken.setOnClickListener(v -> {
+                    closeMiniChat();
+                    openPairingCard(ctx);
+                });
 
                 TextView btnChrome = new TextView(ctx);
                 btnChrome.setText("⚙️ Config");
@@ -214,6 +343,7 @@ public class JarvisFloatingOrbManager {
                 btnClose.setOnClickListener(v -> closeMiniChat());
 
                 header.addView(title);
+                header.addView(btnToken);
                 header.addView(btnChrome);
                 header.addView(btnClose);
                 chatCard.addView(header);
@@ -330,7 +460,9 @@ public class JarvisFloatingOrbManager {
                 body.put("textPrompt", text);
                 body.put("identityToken", "Matheus-Admin");
                 body.put("sessionId", "sess_main_admin");
-                body.put("deviceId", "galaxy_s25");
+                body.put("deviceId", JarvisDeviceIdentity.getDeviceId(orbView.getContext()));
+                body.put("modelInfo", JarvisDeviceIdentity.getModelInfo());
+                body.put("deviceToken", JarvisDeviceIdentity.getDeviceToken(orbView.getContext()));
 
                 try (OutputStream os = c.getOutputStream()) {
                     os.write(body.toString().getBytes(StandardCharsets.UTF_8));
@@ -377,13 +509,14 @@ public class JarvisFloatingOrbManager {
             float cx = w / 2f;
             float cy = h / 2f;
             float r = Math.min(cx, cy) - 4f;
+            boolean isUnpaired = !JarvisDeviceIdentity.isPaired(getContext());
             boolean isActive = "active".equals(orbState);
 
             // Fundo circular escuro com brilho ciano
             canvas.drawCircle(cx, cy, r, bgPaint);
 
             ringPaint.setStrokeWidth(isActive ? 3.2f : 2.0f);
-            ringPaint.setColor(isActive ? Color.parseColor("#00FFFF") : Color.parseColor("#38BDF8"));
+            ringPaint.setColor(isUnpaired ? Color.parseColor("#F59E0B") : (isActive ? Color.parseColor("#00FFFF") : Color.parseColor("#38BDF8")));
             canvas.drawCircle(cx, cy, r - 1f, ringPaint);
 
             // Anéis giroscópicos 3D inclinados

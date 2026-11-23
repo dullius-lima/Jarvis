@@ -2,9 +2,18 @@ package com.matheus.jarvis;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.PixelFormat;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
 import android.util.Base64;
 import android.view.Display;
+import android.view.Gravity;
+import android.view.WindowManager;
+import android.widget.TextView;
 import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
@@ -15,14 +24,58 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class JarvisSensoryHelper {
+    private static TextView statusPill;
+    private static WindowManager wmRef;
+
+    public static void showIdentificationPill(Context ctx, String label) {
+        new Handler(Looper.getMainLooper()).post(() -> {
+            try {
+                if (!Settings.canDrawOverlays(ctx)) return;
+                if (wmRef == null) wmRef = (WindowManager) ctx.getApplicationContext().getSystemService(Context.WINDOW_SERVICE);
+                if (statusPill == null) {
+                    statusPill = new TextView(ctx.getApplicationContext());
+                    statusPill.setTextColor(Color.parseColor("#E0F2FE"));
+                    statusPill.setTextSize(12f);
+                    statusPill.setPadding(32, 14, 32, 14);
+                    GradientDrawable bg = new GradientDrawable();
+                    bg.setColor(Color.parseColor("#E60F172A"));
+                    bg.setCornerRadius(48f);
+                    bg.setStroke(3, Color.parseColor("#22D3EE"));
+                    statusPill.setBackground(bg);
+
+                    WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                            WindowManager.LayoutParams.WRAP_CONTENT,
+                            WindowManager.LayoutParams.WRAP_CONTENT,
+                            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                            PixelFormat.TRANSLUCENT
+                    );
+                    lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                    lp.y = 95;
+                    wmRef.addView(statusPill, lp);
+                }
+                statusPill.setText(label);
+                statusPill.setVisibility(android.view.View.VISIBLE);
+            } catch (Exception ignored) {}
+        });
+    }
+
+    public static void hideIdentificationPill() {
+        new Handler(Looper.getMainLooper()).post(() -> {
+            try {
+                if (statusPill != null) statusPill.setVisibility(android.view.View.GONE);
+            } catch (Exception ignored) {}
+        });
+    }
+
     public static void handleCaptureRequest(Context ctx, String deviceId, String requestId, String modality, String facing) {
+        boolean isScreen = "screen".equalsIgnoreCase(modality);
+        
+
         new Thread(() -> {
-            String frame = null;
-            if ("screen".equalsIgnoreCase(modality)) {
-                frame = captureAccessibilityScreen();
-            } else {
-                frame = JarvisHeadlessCamera.captureBase64(ctx, facing);
-            }
+            String frame = isScreen
+                    ? captureAccessibilityScreen()
+                    : JarvisHeadlessCamera.captureBase64(ctx, facing);
             postFrame(requestId, deviceId, frame);
         }).start();
     }

@@ -6,13 +6,11 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.Settings;
 import android.view.Gravity;
-import android.view.KeyEvent;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.core.app.ActivityCompat;
@@ -21,79 +19,142 @@ import androidx.core.content.ContextCompat;
 public class MainActivity extends Activity {
     public static volatile boolean isAppInForeground = false;
     public static volatile TextView liveStatusView;
+    private boolean forceTokenScreen = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        }
+        renderUI();
+    }
+
+    private void renderUI() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
-        root.setBackgroundColor(Color.parseColor("#060B14"));
-        root.setPadding(64, 48, 64, 48);
+        root.setBackgroundColor(Color.BLACK);
+        root.setPadding(24, 20, 24, 20);
 
-        TextView title = new TextView(this);
-        title.setText("JARVIS WATCH");
-        title.setTextColor(Color.parseColor("#38BDF8"));
-        title.setTextSize(22f);
-        title.setGravity(Gravity.CENTER);
-        root.addView(title);
+        if (!JarvisDeviceIdentity.isPaired(this) || forceTokenScreen) {
+            TextView title = new TextView(this);
+            title.setText("🔐 VINCULAR RELÓGIO");
+            title.setTextColor(Color.parseColor("#FBBF24"));
+            title.setTextSize(13f);
+            title.setGravity(Gravity.CENTER);
+            root.addView(title);
+
+            EditText codeBox = new EditText(this);
+            codeBox.setHint("JRV-XXXX-XXXX");
+            codeBox.setHintTextColor(Color.GRAY);
+            codeBox.setTextColor(Color.parseColor("#22D3EE"));
+            codeBox.setTextSize(13f);
+            codeBox.setGravity(Gravity.CENTER);
+            codeBox.setSingleLine(true);
+            root.addView(codeBox);
+
+            liveStatusView = new TextView(this);
+            liveStatusView.setText("Cole o código da aba Dispositivos");
+            liveStatusView.setTextColor(Color.parseColor("#94A3B8"));
+            liveStatusView.setTextSize(10.5f);
+            liveStatusView.setGravity(Gravity.CENTER);
+            root.addView(liveStatusView);
+
+            Button btnPair = new Button(this);
+            btnPair.setText("✅ ATIVAR");
+            btnPair.setTextColor(Color.BLACK);
+            btnPair.setBackgroundColor(Color.parseColor("#22D3EE"));
+            btnPair.setOnClickListener(v -> {
+                String c = codeBox.getText().toString().trim();
+                liveStatusView.setText("Validando...");
+                new Thread(() -> {
+                    String r = JarvisDeviceIdentity.pairWithCode(this, c);
+                    runOnUiThread(() -> {
+                        if (r.startsWith("OK:")) {
+                            forceTokenScreen = false;
+                            renderUI();
+                        } else {
+                            liveStatusView.setText("❌ " + r);
+                        }
+                    });
+                }).start();
+            });
+            root.addView(btnPair);
+            setContentView(root);
+            return;
+        }
+
+        GradientDrawable ring = new GradientDrawable();
+        ring.setShape(GradientDrawable.OVAL);
+        ring.setColor(Color.parseColor("#081226"));
+        ring.setStroke(6, Color.parseColor("#22D3EE"));
+
+        TextView orb = new TextView(this);
+        orb.setText("🎙️\nJARVIS");
+        orb.setTextColor(Color.parseColor("#38BDF8"));
+        orb.setTextSize(15f);
+        orb.setGravity(Gravity.CENTER);
+        orb.setBackground(ring);
+        int sz = (int) (116 * getResources().getDisplayMetrics().density);
+        root.addView(orb, new LinearLayout.LayoutParams(sz, sz));
 
         liveStatusView = new TextView(this);
-        liveStatusView.setText("Pronto • Pressione o botão de microfone do controle ou clique abaixo");
-        liveStatusView.setTextColor(Color.parseColor("#94A3B8"));
-        liveStatusView.setTextSize(15f);
+        liveStatusView.setText("🟢 " + JarvisDeviceIdentity.getCustomName(this));
+        liveStatusView.setTextColor(Color.parseColor("#34D399"));
+        liveStatusView.setTextSize(11f);
         liveStatusView.setGravity(Gravity.CENTER);
-        liveStatusView.setPadding(0, 16, 0, 32);
+        liveStatusView.setPadding(4, 10, 4, 4);
         root.addView(liveStatusView);
 
-        Button btnTalk = makeBtn("🎙️  FALAR COM O JARVIS AGORA", "#0284C7");
-        btnTalk.setOnClickListener(v -> { startTvService(); JarvisVoiceService.wakeNow(); });
-        root.addView(btnTalk, btnLp());
-
-        Button btnAcc = makeBtn("♿  ATIVAR CONTROLE TOTAL DA TV (ACESSIBILIDADE)", "#1E293B");
-        btnAcc.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
-        root.addView(btnAcc, btnLp());
+        TextView btnChangeTok = new TextView(this);
+        btnChangeTok.setText("🔑 Token");
+        btnChangeTok.setTextColor(Color.parseColor("#94A3B8"));
+        btnChangeTok.setTextSize(10f);
+        btnChangeTok.setPadding(8, 4, 8, 4);
+        btnChangeTok.setOnClickListener(v -> { forceTokenScreen = true; renderUI(); });
+        root.addView(btnChangeTok);
 
         setContentView(root);
-        btnTalk.requestFocus();
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS}, 201);
-        } else startTvService();
+        orb.setOnClickListener(v -> triggerWatchVoice());
+        startWatchVoice();
     }
 
     @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_VOICE_ASSIST || keyCode == KeyEvent.KEYCODE_ASSIST || keyCode == KeyEvent.KEYCODE_SEARCH) {
-            startTvService();
-            JarvisVoiceService.wakeNow();
-            return true;
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (JarvisDeviceIdentity.isPaired(this)) triggerWatchVoice();
+    }
+
+    private void startWatchVoice() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{
+                Manifest.permission.RECORD_AUDIO,
+                Manifest.permission.POST_NOTIFICATIONS
+            }, 301);
+            return;
         }
-        return super.onKeyDown(keyCode, event);
+        triggerWatchVoice();
     }
 
-    private Button makeBtn(String t, String hex) {
-        Button b = new Button(this);
-        b.setText(t); b.setTextColor(Color.WHITE); b.setTextSize(15f);
-        b.setFocusable(true); b.setFocusableInTouchMode(true);
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(Color.parseColor(hex)); g.setCornerRadius(16f); g.setStroke(2, Color.parseColor("#38BDF8"));
-        b.setBackground(g); b.setPadding(32, 20, 32, 20);
-        return b;
+    @Override
+    public void onRequestPermissionsResult(int rc, String[] p, int[] g) {
+        super.onRequestPermissionsResult(rc, p, g);
+        triggerWatchVoice();
     }
 
-    private LinearLayout.LayoutParams btnLp() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(700, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(0, 12, 0, 12);
-        return lp;
-    }
-
-    private void startTvService() {
+    private void triggerWatchVoice() {
+        if (!JarvisDeviceIdentity.isPaired(this)) return;
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return;
         Intent i = new Intent(this, JarvisVoiceService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i); else startService(i);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            try { startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()))); } catch (Exception ignored) {}
-        }
+        i.setAction("ACTION_WAKE_NOW");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i);
+        else startService(i);
+        JarvisVoiceService.wakeNow();
+        if (liveStatusView != null) liveStatusView.setText("🎙️ Fale agora...");
     }
+
     @Override protected void onResume() { super.onResume(); isAppInForeground = true; }
     @Override protected void onPause() { isAppInForeground = false; super.onPause(); }
 }

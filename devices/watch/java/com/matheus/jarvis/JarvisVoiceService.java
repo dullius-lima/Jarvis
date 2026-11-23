@@ -38,7 +38,7 @@ public class JarvisVoiceService extends Service {
     private volatile boolean prefScreenOff = true;
     private volatile boolean prefOnlyUnlocked = false;
     private volatile boolean prefOnlyAppOpen = false;
-    private volatile boolean prefPushToTalk = false;
+    private volatile boolean prefPushToTalk = true;
     private volatile boolean prefSilent = false;
     private volatile boolean prefChime = true;
     private volatile int prefContinuousSec = 15;
@@ -140,7 +140,7 @@ public class JarvisVoiceService extends Service {
                 prefScreenOff = d.optBoolean("listen_screen_off", true);
                 prefOnlyUnlocked = d.optBoolean("listen_only_unlocked", false);
                 prefOnlyAppOpen = d.optBoolean("listen_only_app_open", false);
-                prefPushToTalk = d.optBoolean("push_to_talk_only", false);
+                prefPushToTalk = true;
                 prefSilent = d.optBoolean("silent_text_only", false);
                 prefChime = d.optBoolean("chime_enabled", true);
                 prefContinuousSec = d.optInt("continuous_chat_seconds", 15);
@@ -152,6 +152,7 @@ public class JarvisVoiceService extends Service {
     }
 
     private boolean canListenNow() {
+        if (!JarvisDeviceIdentity.isPaired(this)) return false;
         if (isSpeaking) return false;
         if (false) return false; // Libera mic para o WebView dentro do app
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false;

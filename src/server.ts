@@ -413,7 +413,7 @@ const DEFAULT_USER_PREFS = {
 
 app.post('/api/v1/voice/turn', async (req, res) => {
   try {
-    const { audioBase64, requireWakeWord, identityToken, sessionId, deviceId } = req.body || {};
+    const { audioBase64, requireWakeWord, identityToken, sessionId, deviceId, deviceToken } = req.body || {};
     if (!audioBase64) return res.status(400).json({ success: false, error: 'audioBase64 ausente' });
 
     const whisperModel = process.env.WHISPER_MODEL_SIZE || 'base';
@@ -443,7 +443,8 @@ app.post('/api/v1/voice/turn', async (req, res) => {
       {
         type: 'voice_or_text',
         inputSource: 'android_voice_service',
-        deviceId: deviceId || 'galaxy_s25',
+        deviceId: deviceId || '',
+        deviceToken: deviceToken || '',
         prompt: cleanPrompt,
         textPrompt: cleanPrompt
       }

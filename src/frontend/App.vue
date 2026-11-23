@@ -500,6 +500,46 @@ async function handleCloseMediaPreview() {
   try { await fetch('/api/v1/sensory/stop', { method: 'POST' }); } catch {}
 }
 
+
+const showDevicePairBox = ref(false);
+const devicePairCodeInput = ref('');
+const devicePairError = ref('');
+const isPairingDevice = ref(false);
+
+async function pairWithDeviceCode() {
+  devicePairError.value = '';
+  const code = devicePairCodeInput.value.trim().toUpperCase();
+  if (!code) { devicePairError.value = 'Informe o código gerado na aba Dispositivos.'; return; }
+  isPairingDevice.value = true;
+  try {
+    const r = await fetch('/api/v1/devices/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pairingCode: code,
+        platform: 'web',
+        deviceType: 'pc',
+        modelInfo: navigator.platform || 'Navegador Web'
+      })
+    });
+    const j = await r.json();
+    if (j.success && j.deviceToken) {
+      localStorage.setItem('jarvis_paired_device_id', j.deviceId);
+      localStorage.setItem('jarvis_paired_device_token', j.deviceToken);
+      localStorage.setItem('jarvis_paired_device_name', j.customName || 'Dispositivo Web');
+      localStorage.setItem('jarvis_authenticated_session', 'true');
+      isAuthenticated.value = true;
+      await bootAuthenticatedUniverse();
+    } else {
+      devicePairError.value = j.error || 'Código inválido ou bloqueado.';
+    }
+  } catch (e: any) {
+    devicePairError.value = e.message || 'Erro de conexão.';
+  } finally {
+    isPairingDevice.value = false;
+  }
+}
+
 </script>
 
 <style scoped>

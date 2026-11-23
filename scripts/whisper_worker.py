@@ -70,6 +70,21 @@ def load_audio_16k_float32(file_path: str) -> np.ndarray:
 
     raise RuntimeError("Audio invalido ou vazio")
 
+
+def trim_silence_fast(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
+    frame = int(sr * 0.02)
+    n = len(audio) // frame
+    if n < 8:
+        return audio
+    rms = np.sqrt(np.mean(audio[:n * frame].reshape(n, frame) ** 2, axis=1))
+    thr = max(0.012, float(np.percentile(rms, 25)) * 2.2)
+    idx = np.where(rms >= thr)[0]
+    if idx.size < 8:
+        return np.array([], dtype=np.float32)
+    start = max(0, int(idx[0]) - 8) * frame
+    end = min(n, int(idx[-1]) + 10) * frame
+    return audio[start:end]
+
 def main():
     model_size = sys.argv[1] if len(sys.argv) > 1 else "base"
     try:
@@ -105,6 +120,12 @@ def main():
                 continue
 
             # Amplifica falas baixas ou distantes para 82% do volume máximo
+            audio = trim_silence_fast(audio)
+            if audio.size < 3200:
+                sys.stdout.write(json.dumps({"success": True, "text": "", "peak": round(peak, 4)}) + "\n")
+                sys.stdout.flush()
+                continue
+            peak = float(np.max(np.abs(audio)))
             if peak < 0.82:
                 gain = min(6.0, 0.82 / peak)
                 audio = np.clip(audio * gain, -1.0, 1.0)
@@ -118,7 +139,9 @@ def main():
                 temperature=0.0,
                 repetition_penalty=1.25,
                 no_repeat_ngram_size=3,
-                vad_filter=False,
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=260, speech_pad_ms=140),
+                no_speech_threshold=0.6,
                 condition_on_previous_text=False,
                 initial_prompt="Jarvis, Oi Jarvis, bom dia Jarvis, manda um WhatsApp, envia mensagem, acende a luz, apaga a luz, ar-condicionado, quarto de casal, sala, que horas são, status do sistema."
             )

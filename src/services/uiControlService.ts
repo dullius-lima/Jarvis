@@ -1,3 +1,4 @@
+import { resolveDeviceByPromptOrId } from './deviceRegistryService.js';
 import { sendToDeviceById } from './deviceMeshService.js';
 import { waitForSensoryAck } from './sensoryRouterService.js';
 
@@ -30,10 +31,23 @@ export async function tryHandleUiControlCommand(prompt: string, originDeviceId: 
   const clean = (prompt || '').replace(/^(?:jarvis[,:\s]+)/i, '').trim();
   if (!clean) return null;
 
-  const target = resolveTargetDevice(clean, originDeviceId);
+  const target = await resolveDeviceByPromptOrId(clean, originDeviceId);
   let action = '';
   let payload: Record<string, any> = {};
 
+  // 0. Busca rápida de documentos no dispositivo
+  if (/^(?:busc[ae]|procur[ae]|ach[ae]|encontr[ae]|vasculh[ae])\s+(?:o\s+|um\s+|meus?\s+)?(?:documento|arquivo|pdf|contrato|planilha|foto)s?\s*(.*)/i.test(clean)) {
+    const m = clean.match(/^(?:busc[ae]|procur[ae]|ach[ae]|encontr[ae]|vasculh[ae])\s+(?:o\s+|um\s+|meus?\s+)?(?:documento|arquivo|pdf|contrato|planilha|foto)s?\s*(.*)/i);
+    const q = stripDeviceSuffix((m?.[1] || '').replace(/^(?:chamado|com\s+nome|sobre|de|do|da)\s+/i, ''));
+    action = 'search_files';
+    payload = { query: q };
+  }
+  // 0.1 Abertura direta de app (apenas quando não houver segunda tarefa como 'e busque')
+  else if (/^(?:abr[aei]|abrir|inici[ae])\s+(?:o\s+|a\s+)?(?:app\s+|aplicativo\s+)?([^,]+)$/i.test(clean) && !/\s+e\s+(?:busc|procur|pesquis|digit|escrev|cliqu|mand|envi)/i.test(clean) && !/aba\s+|painel|mem[oó]ria|configura|documento|arquivo|pdf/i.test(clean)) {
+    const m = clean.match(/^(?:abr[aei]|abrir|inici[ae])\s+(?:o\s+|a\s+)?(?:app\s+|aplicativo\s+)?(.+)$/i);
+    action = 'open_app';
+    payload = { app: stripDeviceSuffix(m?.[1] || '') };
+  }
   // 1. Leitura de texto da tela
   if (/^(?:lei[ae]|ler)\s+(?:o\s+que\s+est[aá]\s+(?:escrito\s+)?)?(?:na\s+|a\s+)?tela|o\s+que\s+est[aá]\s+escrito\s+na\s+tela/i.test(clean)) {
     action = 'read_screen';
@@ -118,4 +132,31 @@ export async function tryHandleUiControlCommand(prompt: string, originDeviceId: 
     };
   }
   return { handled: true, response: ack.replace(/^ACK:/, '') };
+}
+
+
+export async function executeDeviceUiAction(
+  targetDevice: string,
+  action: string,
+  payload: Record<string, any> = {}
+): Promise<{ ok: boolean; deviceLabel: string; output: string }> {
+  const target = await resolveDeviceByPromptOrId(targetDevice || 'galaxy_s25', 'galaxy_s25');
+  const requestId = `ui_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const sent = sendToDeviceById(target.id, {
+    type: 'UI_CONTROL',
+    requestId,
+    action,
+    ...payload
+  });
+  if (!sent) {
+    return {
+      ok: false,
+      deviceLabel: target.label,
+      output: `Dispositivo ${target.label} está offline na malha /ws no momento.`
+    };
+  }
+  const ack = await waitForSensoryAck(requestId, 4500);
+  if (!ack) return { ok: true, deviceLabel: target.label, output: `Ação '${action}' enviada para ${target.label}.` };
+  if (ack.startsWith('TEXT:')) return { ok: true, deviceLabel: target.label, output: ack.slice(5).trim() || '(tela sem textos visíveis)' };
+  return { ok: true, deviceLabel: target.label, output: ack.replace(/^ACK:/, '') };
 }

@@ -50,8 +50,15 @@ public class DeviceCommandExecutor {
     private static volatile boolean started = false;
     private static volatile String currentDeviceId = "galaxy_s25";
 
+    public static void forceReconnect(Context ctx) {
+        try { if (activeSocket != null) activeSocket.close(); } catch (Exception ignored) {}
+        activeSocket = null;
+        connecting = false;
+        ensureConnected(ctx.getApplicationContext());
+    }
+
     public static synchronized void startMesh(Context ctx, String deviceId) {
-        currentDeviceId = deviceId;
+        currentDeviceId = JarvisDeviceIdentity.getDeviceId(ctx);
         if (started) return;
         started = true;
         final Context appCtx = ctx.getApplicationContext();
@@ -60,6 +67,8 @@ public class DeviceCommandExecutor {
     }
 
     private static void ensureConnected(Context ctx) {
+        if (!JarvisDeviceIdentity.isPaired(ctx)) return;
+        currentDeviceId = JarvisDeviceIdentity.getDeviceId(ctx);
         if (connecting || (activeSocket != null && activeSocket.isConnected() && !activeSocket.isClosed())) return;
         connecting = true;
         new Thread(() -> {
@@ -98,6 +107,9 @@ public class DeviceCommandExecutor {
                 reg.put("deviceId", currentDeviceId);
                 reg.put("platform", "android");
                 reg.put("token", MESH_SECRET);
+                reg.put("deviceToken", JarvisDeviceIdentity.getDeviceToken(ctx));
+                reg.put("deviceType", JarvisDeviceIdentity.getDeviceType(ctx));
+                reg.put("modelInfo", JarvisDeviceIdentity.getModelInfo());
                 sendWsFrame(out, 0x1, reg.toString().getBytes(StandardCharsets.UTF_8));
 
                 DataInputStream dis = new DataInputStream(in);

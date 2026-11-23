@@ -59,6 +59,14 @@
         </button>
 
         <button
+          @click="abaAtiva = 'devices'"
+          :class="{ active: abaAtiva === 'devices' }"
+          class="nav-item"
+        >
+          📱 Dispositivos
+        </button>
+
+        <button
           @click="abaAtiva = 'prefs'"
           :class="{ active: abaAtiva === 'prefs' }"
           class="nav-item"
@@ -87,6 +95,7 @@
       <AbaAgentes v-else-if="abaAtiva === 'agents'" />
       <AbaConexoes v-else-if="abaAtiva === 'connectors'" />
       <AbaMemoria v-else-if="abaAtiva === 'memory'" />
+      <AbaDispositivos v-else-if="abaAtiva === 'devices'" />
       <AbaPreferencias v-else-if="abaAtiva === 'prefs'" />
       <AbaManual v-else-if="abaAtiva === 'manual'" />
     </main>
@@ -106,10 +115,11 @@ import AbaAgentes from './components/settings/AbaAgentes.vue';
 import AbaConexoes from './components/settings/AbaConexoes.vue';
 import AbaMemoria from './components/settings/AbaMemoria.vue';
 import AbaPreferencias from './components/settings/AbaPreferencias.vue';
+import AbaDispositivos from './components/settings/AbaDispositivos.vue';
 import AbaManual from './components/settings/AbaManual.vue';
 
-type TipoAba = 'brain' | 'security' | 'voices' | 'agents' | 'connectors' | 'memory' | 'prefs' | 'manual';
-const abasValidas: TipoAba[] = ['brain', 'security', 'voices', 'agents', 'connectors', 'memory', 'prefs', 'manual'];
+type TipoAba = 'brain' | 'security' | 'voices' | 'agents' | 'connectors' | 'memory' | 'devices' | 'prefs' | 'manual';
+const abasValidas: TipoAba[] = ['brain', 'security', 'voices', 'agents', 'connectors', 'memory', 'devices', 'prefs', 'manual'];
 const abaSalva = localStorage.getItem('jarvis_settings_tab') as TipoAba;
 const abaInicial: TipoAba = abasValidas.includes(abaSalva) ? abaSalva : 'brain';
 

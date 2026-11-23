@@ -171,6 +171,7 @@ public class JarvisVoiceService extends Service {
     }
 
     private boolean canListenNow() {
+        if (!JarvisDeviceIdentity.isPaired(this)) return false;
         if (isSpeaking) return false;
         // Escuta ativa tambem com app aberto // Libera mic para o WebView dentro do app
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false;
@@ -235,14 +236,14 @@ public class JarvisVoiceService extends Service {
                 }
 
                 double rms = Math.sqrt((double) sumSq / n);
-                double baseThresh = Math.max(115.0, 340.0 / Math.max(0.5, prefSensitivity));
+                double baseThresh = Math.max(230.0, 460.0 / Math.max(0.5, prefSensitivity));
                 double threshold = Math.max(baseThresh, Math.min(noiseFloor, 180.0) * 1.35);
                 boolean forced = System.currentTimeMillis() < forceAwakeUntil || System.currentTimeMillis() < continuousUntil;
 
                 if (!forced && rms < threshold) {
                     noiseFloor = noiseFloor * 0.94 + rms * 0.06;
                     preRoll.addLast(pcmBytes);
-                    while (preRoll.size() > 12) preRoll.removeFirst(); // 1.2s pré-buffer
+                    while (preRoll.size() > 4) preRoll.removeFirst(); // 1.2s pré-buffer
                     continue;
                 }
 
@@ -270,7 +271,7 @@ public class JarvisVoiceService extends Service {
                     utterance.write(b2);
                     double curRms = Math.sqrt((double) s2 / r);
                     if (curRms >= threshold * 0.85) lastVoice = System.currentTimeMillis();
-                    else if (System.currentTimeMillis() - lastVoice > 900L && utterance.size() > 12800) break;
+                    else if (System.currentTimeMillis() - lastVoice > 480L && utterance.size() > 9600) break;
                 }
 
                 byte[] fullPcm = utterance.toByteArray();
@@ -295,7 +296,9 @@ public class JarvisVoiceService extends Service {
             body.put("requireWakeWord", requireWake);
             body.put("identityToken", "Matheus-Admin");
             body.put("sessionId", "sess_main_admin");
-                body.put("deviceId", "galaxy_s25");
+                body.put("deviceId", JarvisDeviceIdentity.getDeviceId(this));
+            body.put("modelInfo", JarvisDeviceIdentity.getModelInfo());
+            body.put("deviceToken", JarvisDeviceIdentity.getDeviceToken(this));
 
             HttpURLConnection c = (HttpURLConnection) new URL(BASE + "/api/v1/voice/turn").openConnection();
             c.setRequestMethod("POST");

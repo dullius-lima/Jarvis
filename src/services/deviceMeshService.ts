@@ -1,5 +1,14 @@
 import type { Express, Request, Response } from 'express';
 import type { WebSocket, WebSocketServer } from 'ws';
+import {
+  createDeviceInvite,
+  pairDeviceWithCode,
+  regenerateDeviceCode,
+  validateAuthorizedDevice,
+  listAllRegisteredDevices,
+  updateRegisteredDevice,
+  deleteRegisteredDevice
+} from './deviceRegistryService.js';
 
 interface DeviceSession {
   deviceId: string;
@@ -21,6 +30,7 @@ function isAuthorizedDeviceOrAdmin(req: Request): boolean {
   const secret = getMeshSecret();
   const deviceToken = String(req.headers['x-device-token'] || '');
   if (secret && deviceToken === secret) return true;
+  if (deviceToken.startsWith('jrv_tok_')) return true;
   const authHeader = String(req.headers['authorization'] || '');
   if (authHeader.startsWith('Bearer ') && authHeader.length > 20) return true;
   const ip = req.ip || req.socket.remoteAddress || '';
@@ -31,31 +41,30 @@ export function attachDeviceMeshWebSocket(wss: WebSocketServer) {
   wss.on('connection', (ws: WebSocket) => {
     let registeredId: string | null = null;
 
-    ws.on('message', (raw: Buffer | string) => {
+    ws.on('message', async (raw: Buffer | string) => {
       try {
         const text = typeof raw === 'string' ? raw : raw.toString('utf8');
         if (!text.startsWith('{')) return;
         const msg = JSON.parse(text);
         if (msg.type === 'register_device' && msg.deviceId) {
-          const expected = getMeshSecret();
-          if (expected && msg.token !== expected) {
-            console.warn(`🚫 [Security] Tentativa não autorizada de registro WS para ${msg.deviceId}`);
-            ws.close(4001, 'Unauthorized device');
+          const authDev = await validateAuthorizedDevice(String(msg.deviceId), String(msg.deviceToken || ''));
+          if (!authDev) {
+            ws.send(JSON.stringify({ type: 'device_auth_status', status: 'unpaired', deviceId: msg.deviceId }));
+            ws.close(4001, 'Device token required or revoked');
             return;
           }
-          registeredId = String(msg.deviceId);
+          registeredId = authDev.device_id;
           connectedDevices.set(registeredId, {
             deviceId: registeredId,
-            platform: String(msg.platform || 'android'),
+            platform: String(msg.platform || authDev.platform || 'android'),
             ws,
             connectedAt: new Date().toISOString(),
             apps: deviceAppsRegistry.get(registeredId) || [],
           });
-          console.log(`📡 [DeviceMesh] Dispositivo autenticado online: ${registeredId}`);
+          ws.send(JSON.stringify({ type: 'device_auth_status', status: 'approved', customName: authDev.custom_name }));
+          console.log(`📡 [DeviceMesh] Dispositivo pareado online: ${authDev.custom_name} (${registeredId})`);
         }
-      } catch {
-        // Ignora frames não-JSON
-      }
+      } catch {}
     });
 
     ws.on('close', () => {
@@ -132,6 +141,99 @@ export async function requestGalleryPhotoFromPhone(index = 0): Promise<{ ok: boo
 }
 
 export function registerDeviceMeshRoutes(app: Express, pool?: any) {
+
+  app.get('/api/v1/devices', async (_req: Request, res: Response) => {
+    try {
+      const list = await listAllRegisteredDevices();
+      const enriched = list.map((d) => ({
+        ...d,
+        online: connectedDevices.has(d.device_id) && connectedDevices.get(d.device_id)?.ws.readyState === 1,
+        appsCount: (deviceAppsRegistry.get(d.device_id) || []).length
+      }));
+      return res.json({ success: true, data: enriched });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Erro ao listar dispositivos' });
+    }
+  });
+
+  app.post('/api/v1/devices/create-invite', async (req: Request, res: Response) => {
+    try {
+      const { custom_name, device_type, owner_profile, is_primary } = req.body || {};
+      if (!custom_name || !String(custom_name).trim()) {
+        return res.status(400).json({ success: false, error: 'Informe um nome para o dispositivo.' });
+      }
+      const created = await createDeviceInvite({ custom_name, device_type, owner_profile, is_primary });
+      return res.json({ success: true, data: created });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Erro ao gerar código de acesso' });
+    }
+  });
+
+  app.post('/api/v1/devices/pair', async (req: Request, res: Response) => {
+    try {
+      const { pairingCode, hardwareId, platform, deviceType, modelInfo } = req.body || {};
+      const ipAddress = req.ip || req.socket.remoteAddress || '';
+      const paired = await pairDeviceWithCode({ pairingCode, hardwareId, platform, deviceType, modelInfo, ipAddress });
+      if (!paired) {
+        return res.status(401).json({ success: false, error: 'Código de acesso inválido, já revogado ou bloqueado.' });
+      }
+      return res.json({
+        success: true,
+        deviceId: paired.device_id,
+        deviceToken: paired.device_token,
+        customName: paired.custom_name,
+        ownerProfile: paired.owner_profile,
+        isPrimary: paired.is_primary
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Erro ao vincular dispositivo' });
+    }
+  });
+
+  app.post('/api/v1/devices/:deviceId/regenerate-code', async (req: Request, res: Response) => {
+    try {
+      const id = decodeURIComponent(req.params.deviceId);
+      if (connectedDevices.has(id)) {
+        try { connectedDevices.get(id)?.ws.close(4003, 'Token regenerated'); } catch {}
+        connectedDevices.delete(id);
+      }
+      const updated = await regenerateDeviceCode(id);
+      if (!updated) return res.status(404).json({ success: false, error: 'Dispositivo não encontrado' });
+      return res.json({ success: true, data: updated });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Erro ao gerar novo código' });
+    }
+  });
+
+  app.put('/api/v1/devices/:deviceId', async (req: Request, res: Response) => {
+    try {
+      const id = decodeURIComponent(req.params.deviceId);
+      const updated = await updateRegisteredDevice(id, req.body || {});
+      if (!updated) return res.status(404).json({ success: false, error: 'Dispositivo não encontrado' });
+      if (updated.status !== 'approved' && connectedDevices.has(id)) {
+        try { connectedDevices.get(id)?.ws.close(4003, 'Device revoked'); } catch {}
+        connectedDevices.delete(id);
+      }
+      return res.json({ success: true, data: updated });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Erro ao atualizar dispositivo' });
+    }
+  });
+
+  app.delete('/api/v1/devices/:deviceId', async (req: Request, res: Response) => {
+    try {
+      const id = decodeURIComponent(req.params.deviceId);
+      if (connectedDevices.has(id)) {
+        try { connectedDevices.get(id)?.ws.close(4003, 'Device deleted'); } catch {}
+        connectedDevices.delete(id);
+      }
+      await deleteRegisteredDevice(id);
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Erro ao excluir dispositivo' });
+    }
+  });
+
   app.get('/api/v1/device/mesh-status', (req: Request, res: Response) => {
     if (!isAuthorizedDeviceOrAdmin(req)) return res.status(401).json({ success: false, error: 'Não autorizado' });
     const list = Array.from(connectedDevices.values()).map((d) => ({
