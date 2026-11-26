@@ -18,7 +18,6 @@ import android.provider.AlarmClock;
 import android.provider.ContactsContract;
 import android.provider.MediaStore;
 import android.util.Base64;
-import android.util.Log;
 import android.view.KeyEvent;
 import androidx.core.content.ContextCompat;
 import org.json.JSONArray;
@@ -39,10 +38,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class DeviceCommandExecutor {
-    private static final String TAG = "JARVIS-MESH";
     private static final String VM_HOST = "163.176.111.18";
     private static final String HTTP_BASE = "http://163.176.111.18";
-    private static final String MESH_SECRET = "7e8ed97940dd35642846f517aa85cbe72b3ea5b907f6a976";
 
     private static volatile Socket activeSocket;
     private static volatile boolean connecting = false;
@@ -69,6 +66,7 @@ public class DeviceCommandExecutor {
     private static void ensureConnected(Context ctx) {
         if (!JarvisDeviceIdentity.isPaired(ctx)) return;
         currentDeviceId = JarvisDeviceIdentity.getDeviceId(ctx);
+        final String devToken = JarvisDeviceIdentity.getDeviceToken(ctx);
         if (connecting || (activeSocket != null && activeSocket.isConnected() && !activeSocket.isClosed())) return;
         connecting = true;
         new Thread(() -> {
@@ -102,12 +100,10 @@ public class DeviceCommandExecutor {
                 connecting = false;
 
                 JSONObject reg = new JSONObject();
-
                 reg.put("type", "register_device");
                 reg.put("deviceId", currentDeviceId);
                 reg.put("platform", "android");
-                reg.put("token", MESH_SECRET);
-                reg.put("deviceToken", JarvisDeviceIdentity.getDeviceToken(ctx));
+                reg.put("deviceToken", devToken);
                 reg.put("deviceType", JarvisDeviceIdentity.getDeviceType(ctx));
                 reg.put("modelInfo", JarvisDeviceIdentity.getModelInfo());
                 sendWsFrame(out, 0x1, reg.toString().getBytes(StandardCharsets.UTF_8));
@@ -160,18 +156,35 @@ public class DeviceCommandExecutor {
     }
 
     private static volatile long lastAutoSyncMs = 0L;
-    public static void triggerSyncNow(Context ctx) { long now = System.currentTimeMillis(); if (now - lastAutoSyncMs < 1800000L) return; lastAutoSyncMs = now; final Context app = ctx.getApplicationContext(); scheduler.execute(() -> syncDeviceContext(app, currentDeviceId)); }
+    public static void triggerSyncNow(Context ctx) {
+        long now = System.currentTimeMillis();
+        if (now - lastAutoSyncMs < 1800000L) return;
+        lastAutoSyncMs = now;
+        final Context app = ctx.getApplicationContext();
+        scheduler.execute(() -> syncDeviceContext(app, currentDeviceId));
+    }
 
     public static void handleIncomingCommand(Context ctx, String rawJson) {
         try {
             JSONObject obj = new JSONObject(rawJson);
-                if ("device_auth_status".equals(obj.optString("type")) && "unpaired".equals(obj.optString("status"))) { JarvisDeviceIdentity.clearPairing(ctx); return; }
-                if ("STOP_SENSORY".equals(obj.optString("type"))) { JarvisSensoryHelper.hideIdentificationPill(); return; }
-                if ("UI_CONTROL".equals(obj.optString("type"))) { JarvisUiController.execute(ctx, obj); return; }
-                if ("CAPTURE_SENSORY".equals(obj.optString("type")) || "CAPTURE_SENSORY".equals(obj.optString("action"))) {
-                    JarvisSensoryHelper.handleCaptureRequest(ctx, "galaxy_s25", obj.optString("requestId"), obj.optString("modality", "camera"), obj.optString("facing", "front"));
-                    return;
-                }
+            if ("device_auth_status".equals(obj.optString("type")) && "unpaired".equals(obj.optString("status"))) {
+                JarvisDeviceIdentity.clearPairing(ctx);
+                return;
+            }
+            if ("STOP_SENSORY".equals(obj.optString("type"))) {
+                JarvisSensoryHelper.hideIdentificationPill();
+                return;
+            }
+            if ("UI_CONTROL".equals(obj.optString("type"))) {
+                if (SensitiveAppGuard.isProtectedNow()) return;
+                JarvisUiController.execute(ctx, obj);
+                return;
+            }
+            if ("CAPTURE_SENSORY".equals(obj.optString("type")) || "CAPTURE_SENSORY".equals(obj.optString("action"))) {
+                if (SensitiveAppGuard.isProtectedNow()) return;
+                JarvisSensoryHelper.handleCaptureRequest(ctx, currentDeviceId, obj.optString("requestId"), obj.optString("modality", "camera"), obj.optString("facing", "front"));
+                return;
+            }
 
             if (!"device_command".equals(obj.optString("type"))) return;
             String action = obj.optString("action", "");
@@ -180,15 +193,15 @@ public class DeviceCommandExecutor {
 
             if ("set_alarm".equals(action)) {
                 ctx.startActivity(new Intent(AlarmClock.ACTION_SET_ALARM)
-                        .putExtra(AlarmClock.EXTRA_HOUR, p.optInt("hour", 7))
-                        .putExtra(AlarmClock.EXTRA_MINUTES, p.optInt("minute", 0))
-                        .putExtra(AlarmClock.EXTRA_MESSAGE, p.optString("label", "JARVIS"))
-                        .putExtra(AlarmClock.EXTRA_SKIP_UI, true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    .putExtra(AlarmClock.EXTRA_HOUR, p.optInt("hour", 7))
+                    .putExtra(AlarmClock.EXTRA_MINUTES, p.optInt("minute", 0))
+                    .putExtra(AlarmClock.EXTRA_MESSAGE, p.optString("label", "JARVIS"))
+                    .putExtra(AlarmClock.EXTRA_SKIP_UI, true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             } else if ("set_timer".equals(action)) {
                 ctx.startActivity(new Intent(AlarmClock.ACTION_SET_TIMER)
-                        .putExtra(AlarmClock.EXTRA_LENGTH, p.optInt("seconds", 60))
-                        .putExtra(AlarmClock.EXTRA_MESSAGE, p.optString("label", "JARVIS"))
-                        .putExtra(AlarmClock.EXTRA_SKIP_UI, true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    .putExtra(AlarmClock.EXTRA_LENGTH, p.optInt("seconds", 60))
+                    .putExtra(AlarmClock.EXTRA_MESSAGE, p.optString("label", "JARVIS"))
+                    .putExtra(AlarmClock.EXTRA_SKIP_UI, true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             } else if ("open_app".equals(action)) {
                 openInstalledApp(ctx, p.optString("app", "").toLowerCase().trim());
             } else if ("media_control".equals(action)) {
@@ -200,18 +213,20 @@ public class DeviceCommandExecutor {
                 addNativeAndroidContact(ctx, p.optString("name", "").trim(), p.optString("phone", "").trim());
                 scheduler.execute(() -> syncDeviceContext(ctx, currentDeviceId));
             } else if ("get_gallery_photo".equals(action)) {
+                if (SensitiveAppGuard.isProtectedNow()) return;
                 int idx = p.optInt("index", 0);
                 String reqId = p.optString("requestId", "latest");
                 scheduler.execute(() -> uploadGalleryPhoto(ctx, idx, reqId));
             } else if ("sync_now".equals(action)) {
                 scheduler.execute(() -> syncDeviceContext(ctx, currentDeviceId));
             } else if ("wake_mic".equals(action)) {
-                try { JarvisVoiceService.class.getMethod("wakeNow").invoke(null); } catch (Exception ignored) {}
+                if (!SensitiveAppGuard.isProtectedNow()) {
+                    try { JarvisVoiceService.class.getMethod("wakeNow").invoke(null); } catch (Exception ignored) {}
+                }
             }
         } catch (Throwable ignored) {}
     }
 
-    
     public static void deleteNativeAndroidContact(Context ctx, String name, String phone) {
         if ((name == null || name.isEmpty()) && (phone == null || phone.isEmpty())) return;
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.WRITE_CONTACTS) != PackageManager.PERMISSION_GRANTED) return;
@@ -222,9 +237,9 @@ public class DeviceCommandExecutor {
             String tailDigits = cleanDigits.length() >= 8 ? cleanDigits.substring(cleanDigits.length() - 8) : cleanDigits;
 
             try (Cursor c = ctx.getContentResolver().query(
-                    ContactsContract.Data.CONTENT_URI,
-                    new String[]{ContactsContract.Data.RAW_CONTACT_ID, ContactsContract.Data.MIMETYPE, ContactsContract.Data.DATA1},
-                    null, null, null)) {
+                ContactsContract.Data.CONTENT_URI,
+                new String[]{ContactsContract.Data.RAW_CONTACT_ID, ContactsContract.Data.MIMETYPE, ContactsContract.Data.DATA1},
+                null, null, null)) {
                 while (c != null && c.moveToNext()) {
                     long rawId = c.getLong(0);
                     String mime = c.getString(1);
@@ -241,9 +256,9 @@ public class DeviceCommandExecutor {
             }
             for (Long rawId : rawIds) {
                 ctx.getContentResolver().delete(
-                        ContactsContract.RawContacts.CONTENT_URI,
-                        ContactsContract.RawContacts._ID + "=?",
-                        new String[]{String.valueOf(rawId)}
+                    ContactsContract.RawContacts.CONTENT_URI,
+                    ContactsContract.RawContacts._ID + "=?",
+                    new String[]{String.valueOf(rawId)}
                 );
             }
         } catch (Throwable ignored) {}
@@ -281,7 +296,7 @@ public class DeviceCommandExecutor {
                 body.put("requestId", requestId);
                 body.put("fileName", fileName);
                 body.put("imageBase64", Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP));
-                postSecureJson("/api/v1/device/gallery-upload", body.toString());
+                postSecureJson(ctx, "/api/v1/device/gallery-upload", body.toString());
             }
         } catch (Throwable ignored) {}
     }
@@ -308,6 +323,7 @@ public class DeviceCommandExecutor {
     }
 
     public static void syncDeviceContext(Context ctx, String deviceId) {
+        if (!JarvisDeviceIdentity.isPaired(ctx)) return;
         try {
             JSONArray apps = new JSONArray();
             PackageManager pm = ctx.getPackageManager();
@@ -324,43 +340,33 @@ public class DeviceCommandExecutor {
                     }
                 }
             }
-            postSecureJson("/api/v1/device/sync-context", new JSONObject().put("deviceId", deviceId).put("apps", apps).put("contacts", new JSONArray()).toString());
+            postSecureJson(ctx, "/api/v1/device/sync-context", new JSONObject().put("deviceId", deviceId).put("apps", apps).put("contacts", new JSONArray()).toString());
             for (int i = 0; i < contacts.length(); i += 300) {
                 JSONArray batch = new JSONArray();
                 for (int j = i; j < Math.min(i + 300, contacts.length()); j++) batch.put(contacts.get(j));
-                postSecureJson("/api/v1/device/sync-context", new JSONObject().put("deviceId", deviceId).put("contacts", batch).toString());
+                postSecureJson(ctx, "/api/v1/device/sync-context", new JSONObject().put("deviceId", deviceId).put("contacts", batch).toString());
             }
-            final int totalC = contacts.length();
         } catch (Throwable ignored) {}
     }
 
-    private static int postSecureJson(String path, String json) throws Exception {
-        javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{ new javax.net.ssl.X509TrustManager() {
-            public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
-            public void checkClientTrusted(java.security.cert.X509Certificate[] c, String a) {}
-            public void checkServerTrusted(java.security.cert.X509Certificate[] c, String a) {}
-        }};
-        javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
-        sc.init(null, trustAll, new java.security.SecureRandom());
-        for (String base : new String[]{"http://163.176.111.18"}) {
-            try {
-                HttpURLConnection conn = (HttpURLConnection) new URL(base + path).openConnection();
-                if (conn instanceof javax.net.ssl.HttpsURLConnection) {
-                    ((javax.net.ssl.HttpsURLConnection) conn).setSSLSocketFactory(sc.getSocketFactory());
-                    ((javax.net.ssl.HttpsURLConnection) conn).setHostnameVerifier((h, sess) -> true);
-                }
-                conn.setRequestMethod("POST");
-                conn.setConnectTimeout(6000);
-                conn.setReadTimeout(15000);
-                conn.setDoOutput(true);
-                conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-                conn.setRequestProperty("x-device-token", MESH_SECRET);
-                try (OutputStream os = conn.getOutputStream()) { os.write(json.getBytes(StandardCharsets.UTF_8)); }
-                int code = conn.getResponseCode();
-                conn.disconnect();
-                if (code >= 200 && code < 300) return code;
-            } catch (Throwable ignored) {}
-        }
+    private static int postSecureJson(Context ctx, String path, String json) {
+        try {
+            String devId = JarvisDeviceIdentity.getDeviceId(ctx);
+            String devTok = JarvisDeviceIdentity.getDeviceToken(ctx);
+            if (devId.isEmpty() || devTok.isEmpty()) return 0;
+            HttpURLConnection conn = (HttpURLConnection) new URL(HTTP_BASE + path).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(15000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setRequestProperty("x-device-id", devId);
+            conn.setRequestProperty("x-device-token", devTok);
+            try (OutputStream os = conn.getOutputStream()) { os.write(json.getBytes(StandardCharsets.UTF_8)); }
+            int code = conn.getResponseCode();
+            conn.disconnect();
+            return code;
+        } catch (Throwable ignored) {}
         return 0;
     }
 }

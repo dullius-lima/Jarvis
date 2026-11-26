@@ -16,6 +16,7 @@ import { processarExecucaoWorkflow } from './services/orchestratorService.js';
 
 import {
   requireJwtAuth,
+  requireDeviceOrJwtAuth,
   createRateLimiter,
   validateWebhookIngress
 } from './middlewares/securityMiddleware.js';
@@ -32,7 +33,8 @@ import { startAgentWatchdog } from './services/agentWatchdogService.js';
 import {
   listVoiceProfiles,
   enrollSpeakerVoice,
-  deleteVoiceProfile
+  deleteVoiceProfile,
+  identifySpeaker
 } from './services/voiceBiometricService.js';
 
 import * as triggerRoutesMod from './routes/triggerRoutes.js';
@@ -184,7 +186,7 @@ if (typeof (connectorController as any).deleteExternalConnector === 'function') 
 app.post('/api/v1/connectors/query-db', requireJwtAuth, async (req: Request, res: Response) => {
   try {
     const { query, params } = req.body || {};
-    const BLOCKED_SQL_PATTERNS = /\b(identities|password|password_hash|secret|token|pg_shadow|pg_authid|drop|truncate|alter|delete|update|insert)\b/i;
+    const BLOCKED_SQL_PATTERNS = /\b(identities|external_connectors|contatos_agenda|family_voice_profiles|jarvis_devices|system_configs|password|password_hash|secret|token|pg_shadow|pg_authid|drop|truncate|alter|grant|revoke|create|copy|execute)\b/i;
     if (!query || BLOCKED_SQL_PATTERNS.test(String(query))) {
       return res.status(403).json({ success: false, error: "Acesso negado: consulta bloqueada pela política de proteção de senhas." });
     }
@@ -411,15 +413,57 @@ const DEFAULT_USER_PREFS = {
   mic_sensitivity: 'balanced'
 };
 
-app.post('/api/v1/voice/turn', async (req, res) => {
+async function transcribeFastWithGroqOrLocal(audioBase64: string): Promise<{ text: string; engine: string }> {
+  const groqKey = (process.env.GROQ_API_KEY || '').trim();
+  if (groqKey) {
+    try {
+      const cleanB64 = audioBase64.replace(/^data:audio\/[a-zA-Z0-9+.-]+;base64,/, '').trim();
+      const buf = Buffer.from(cleanB64, 'base64');
+      if (buf.length > 800) {
+        const form = new FormData();
+        form.append('file', new Blob([buf], { type: 'audio/wav' }), 'turn.wav');
+        form.append('model', 'whisper-large-v3-turbo');
+        form.append('language', 'pt');
+        form.append('temperature', '0');
+        form.append('prompt', 'Jarvis, Oi Jarvis, mandar WhatsApp, acender luz, ar-condicionado, status do sistema.');
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 4500);
+        const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${groqKey}` },
+          body: form,
+          signal: ctrl.signal
+        });
+        clearTimeout(t);
+        if (r.ok) {
+          const j: any = await r.json();
+          const txt = String(j?.text || '').trim();
+          if (txt) return { text: txt, engine: 'groq-whisper-large-v3-turbo' };
+        }
+      }
+    } catch {}
+  }
+  const whisperModel = process.env.WHISPER_MODEL_SIZE || 'small';
+  const trJson = await transcribeWithLocalWhisper(audioBase64, whisperModel);
+  return { text: String(trJson?.text || '').trim(), engine: trJson?.engine || 'faster-whisper-local' };
+}
+
+app.post('/api/v1/voice/turn', requireDeviceOrJwtAuth, async (req, res) => {
   try {
     const { audioBase64, requireWakeWord, identityToken, sessionId, deviceId, deviceToken } = req.body || {};
     if (!audioBase64) return res.status(400).json({ success: false, error: 'audioBase64 ausente' });
 
-    const whisperModel = process.env.WHISPER_MODEL_SIZE || 'base';
-    const trJson = await transcribeWithLocalWhisper(audioBase64, whisperModel);
-    const transcript = String(trJson?.text || '').trim();
-    console.log(`[VoiceTurn] Ouviu: "${transcript}"`);
+    const isAdminDev = Boolean((req as any).device?.is_primary || String((req as any).device?.owner_profile || '').toLowerCase().includes('admin'));
+    const tr = await transcribeFastWithGroqOrLocal(String(audioBase64));
+    const normCheck = tr.text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const quickWake = /\b(jarvis|javis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|jar\s*vis|ja\s*vis)\b/.test(normCheck);
+    const bio = await identifySpeaker(String(audioBase64), {
+      trustedAdminChannel: isAdminDev,
+      hasWakeWord: quickWake
+    }).catch(() => null);
+
+    const transcript = tr.text;
+    console.log(`[VoiceTurn | ${tr.engine}] Ouviu: "${transcript}" (Bio: ${bio ? `${bio.name}:${bio.confidence}` : 'off'})`);
 
     if (!transcript) return res.json({ success: true, woke: false, transcript: '', reply: '' });
 
@@ -429,6 +473,11 @@ app.post('/api/v1/voice/turn', async (req, res) => {
       return res.json({ success: true, woke: false, transcript, reply: '' });
     }
 
+    if (bio && bio.lockEnabled && bio.hasRegisteredProfiles && !bio.identified) {
+      console.warn(`🛡️ [VoiceTurn] Voz desconhecida/TV bloqueada pela Biometria 44D (score: ${bio.confidence}).`);
+      return res.json({ success: true, woke: false, blockedByBiometrics: true, transcript, reply: '' });
+    }
+
     const cleanPrompt = transcript
       .replace(/^(oi|olá|ola|ei|hey|ok|fala|e\s*a[ií])?[,\s.-]*(jarvis|j[aá]vis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|j\.a\.r\.v\.i\.s\.?)\s*[,\s.:!?-]*/i, '')
       .trim();
@@ -436,15 +485,21 @@ app.post('/api/v1/voice/turn', async (req, res) => {
       return res.json({ success: true, woke: true, transcript, reply: '' });
     }
 
+    const resolvedIdentity =
+      bio && bio.identified
+        ? (bio.role === 'admin' ? `${bio.name}-Admin` : bio.name)
+        : ((req as any).device?.owner_profile || identityToken || 'Matheus-Admin');
+
     const ingJson: any = await processarExecucaoWorkflow(
-      identityToken || 'Matheus-Admin',
+      resolvedIdentity,
       cleanPrompt,
       sessionId || 'sess_main_admin',
       {
         type: 'voice_or_text',
         inputSource: 'android_voice_service',
-        deviceId: deviceId || '',
+        deviceId: (req as any).device?.device_id || deviceId || '',
         deviceToken: deviceToken || '',
+        speakerName: bio?.identified ? bio.name : undefined,
         prompt: cleanPrompt,
         textPrompt: cleanPrompt
       }
@@ -496,8 +551,8 @@ const saveUserPrefsHandler = async (req: Request, res: Response) => {
   }
 };
 
-app.post('/api/v1/preferences', saveUserPrefsHandler);
-app.put('/api/v1/preferences', saveUserPrefsHandler);
+app.post('/api/v1/preferences', requireJwtAuth, saveUserPrefsHandler);
+app.put('/api/v1/preferences', requireJwtAuth, saveUserPrefsHandler);
 
 // 7. Document Loader (RAG) & Terminal SSH
 app.post('/api/v1/docs-ssh/rag/upload', requireJwtAuth, handleDocumentUploadToRag);
@@ -517,25 +572,25 @@ app.post('/api/v1/docs-ssh/ssh/read-to-rag', requireJwtAuth, handleSshReadToRag)
   isFamiliar: false,
   updatedAt: 0
 };
-app.get('/api/v1/sensory/status', (_req, res) => {
+app.get('/api/v1/sensory/status', requireDeviceOrJwtAuth, (_req, res) => {
   res.json({ success: true, ...(globalThis as any).__jarvisSensoryStatus });
 });
 
-app.post('/api/v1/sensory/frame', (req, res) => {
+app.post('/api/v1/sensory/frame', requireDeviceOrJwtAuth, (req, res) => {
   const { requestId, imageBase64 } = req.body || {};
   const ok = requestId ? resolveSensoryFrame(String(requestId), imageBase64 || null) : false;
   res.json({ success: ok });
 });
 
 app.post('/api/v1/webhook/ingress', webhookRateLimiter, validateWebhookIngress, handleWebhookIngress);
-app.post('/api/v1/audio/transcribe', handleLocalAudioTranscribe);
+app.post('/api/v1/audio/transcribe', requireDeviceOrJwtAuth, handleLocalAudioTranscribe);
 app.all('/api/v1/webhook/agents/:slug', handleAgentProductionWebhook);
 app.all('/api/v1/webhook-test/agents/:slug', handleAgentTestWebhook);
 app.all('/api/v1/webhook/global/:key', handleGlobalWebhookTrigger);
 app.all('/api/v1/webhook-test/global/:key', handleGlobalWebhookTrigger);
 
 // 9. Health Check
-app.post(["/api/v1/webmcp", "/api/v1/webmcp/mcp"], handleWebMcpJsonRpc);
+app.post(["/api/v1/webmcp", "/api/v1/webmcp/mcp"], requireJwtAuth, handleWebMcpJsonRpc);
 
 app.get('/health', (_req: Request, res: Response) => {
   return res.json({

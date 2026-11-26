@@ -42,6 +42,7 @@ public class JarvisFloatingOrbManager {
     private static ScrollView chatScroll;
     private static boolean chatOpen = false;
     private static String orbState = "idle"; // idle | active
+    private static volatile boolean suspendedForSecurity = false;
     private static final String BASE_URL = "http://163.176.111.18";
 
     private static int dp(Context ctx, int v) {
@@ -60,6 +61,7 @@ public class JarvisFloatingOrbManager {
         new Handler(Looper.getMainLooper()).post(() -> {
             try {
                 Context appCtx = ctx.getApplicationContext();
+                if (suspendedForSecurity || SensitiveAppGuard.isProtectedNow()) return;
                 if (!Settings.canDrawOverlays(appCtx)) return;
                 if (orbView != null) return;
 
@@ -127,6 +129,16 @@ public class JarvisFloatingOrbManager {
                 wm.addView(orbView, orbParams);
             } catch (Exception ignored) {}
         });
+    }
+
+    
+    public static void setSuspendedForSecurity(Context ctx, boolean suspended) {
+        suspendedForSecurity = suspended;
+        if (suspended) {
+            detach();
+        } else if (ctx != null) {
+            attach(ctx.getApplicationContext());
+        }
     }
 
     public static void detach() {

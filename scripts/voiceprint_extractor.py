@@ -12,6 +12,7 @@ def convert_to_wav_16k(input_path: str, wav_path: str) -> bool:
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", input_path,
+        "-af", "highpass=f=85,lowpass=f=7200",
         "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
         wav_path
     ]
@@ -23,14 +24,13 @@ def read_pcm16(wav_path: str):
         sr = wf.getframerate()
         n_frames = wf.getnframes()
         raw = wf.readframes(n_frames)
-    if len(raw) < 400:
-        return [], sr
-    samples = list(struct.unpack(f"<{len(raw)//2}h", raw))
-    # Normaliza para [-1.0, 1.0]
-    norm = [s / 32768.0 for s in samples]
-    return norm, sr
+        if len(raw) < 400:
+            return [], sr
+        samples = list(struct.unpack(f"<{len(raw)//2}h", raw))
+        norm = [s / 32768.0 for s in samples]
+        return norm, sr
 
-def pre_emphasis(sig, coeff=0.97):
+def pre_emphasis(sig, coeff=0.95):
     if not sig:
         return []
     out = [sig[0]]
@@ -44,7 +44,7 @@ def hz_to_mel(hz):
 def mel_to_hz(mel):
     return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
 
-def build_mel_filterbank(num_filters=24, fft_size=512, sr=16000, low_freq=110.0, high_freq=7600.0):
+def build_mel_filterbank(num_filters=24, fft_size=512, sr=16000, low_freq=100.0, high_freq=7200.0):
     low_mel = hz_to_mel(low_freq)
     high_mel = hz_to_mel(high_freq)
     mel_points = [low_mel + i * (high_mel - low_mel) / (num_filters + 1) for i in range(num_filters + 2)]
@@ -65,7 +65,6 @@ def build_mel_filterbank(num_filters=24, fft_size=512, sr=16000, low_freq=110.0,
     return fbank
 
 def fft_mag_sq(frame, fft_size=512):
-    # FFT radix-2 iterativa rápida em Python puro
     x = [complex(frame[i] if i < len(frame) else 0.0, 0.0) for i in range(fft_size)]
     j = 0
     for i in range(1, fft_size):
@@ -94,7 +93,7 @@ def fft_mag_sq(frame, fft_size=512):
     return [(x[k].real * x[k].real + x[k].imag * x[k].imag) / fft_size for k in range(n_spec)]
 
 def estimate_frame_pitch(frame, sr=16000):
-    min_lag = int(sr / 360.0)
+    min_lag = int(sr / 300.0)
     max_lag = int(sr / 75.0)
     if len(frame) <= max_lag:
         return 0.0
@@ -111,8 +110,12 @@ def estimate_frame_pitch(frame, sr=16000):
         if norm_corr > best_corr:
             best_corr = norm_corr
             best_lag = lag
-    if best_corr >= 0.38 and best_lag > 0:
-        return float(sr) / float(best_lag)
+    if best_corr >= 0.40 and best_lag > 0:
+        hz = float(sr) / float(best_lag)
+        # Corrige dobra de oitava comum em sinais fortes
+        if hz > 210.0:
+            hz *= 0.5
+        return hz
     return 0.0
 
 def extract_voiceprint(audio_path: str):
@@ -126,8 +129,8 @@ def extract_voiceprint(audio_path: str):
             return {"ok": False, "error": "too_short"}
 
         emph = pre_emphasis(samples)
-        frame_len = 400  # 25ms
-        hop_len = 160    # 10ms
+        frame_len = 400
+        hop_len = 160
         fft_size = 512
         hamming = [0.54 - 0.46 * math.cos(2.0 * math.pi * n / (frame_len - 1)) for n in range(frame_len)]
 
@@ -147,19 +150,17 @@ def extract_voiceprint(audio_path: str):
         if max_rms < 0.004:
             return {"ok": False, "error": "silence"}
 
-        # VAD interno: mantém apenas frames de fala ativa (ignora pausas e fundo)
-        vad_thresh = max(0.005, max_rms * 0.24)
+        vad_thresh = max(0.005, max_rms * 0.22)
         active = [(wf, rf, r) for (wf, rf, r) in frames if r >= vad_thresh]
         if len(active) < 8:
             active = sorted(frames, key=lambda item: item[2], reverse=True)[:max(8, len(frames)//3)]
 
         fbank = build_mel_filterbank(num_filters=24, fft_size=fft_size, sr=sr)
         num_mfcc = 16
-        # Pré-calcula matriz DCT-II (índices 1..16, ignorando c0 de volume absoluto)
-        dct_mat = []
-        for c in range(1, num_mfcc + 1):
-            row = [math.cos(math.pi * c * (m + 0.5) / 24.0) for m in range(24)]
-            dct_mat.append(row)
+        dct_mat = [
+            [math.cos(math.pi * c * (m + 0.5) / 24.0) for m in range(24)]
+            for c in range(1, num_mfcc + 1)
+        ]
 
         mfcc_frames = []
         pitches = []
@@ -174,7 +175,6 @@ def extract_voiceprint(audio_path: str):
             coeffs = [sum(dct_mat[c][m] * mel_energies[m] for m in range(24)) for c in range(num_mfcc)]
             mfcc_frames.append(coeffs)
 
-            # Contraste espectral em 8 sub-bandas (captura formantes vocais)
             step = len(spec) // 8
             for b in range(8):
                 band = sorted(spec[b * step:(b + 1) * step])
@@ -188,16 +188,18 @@ def extract_voiceprint(audio_path: str):
                 pitches.append(p)
 
         n_act = float(len(mfcc_frames))
-        mean_mfcc = [sum(f[i] for f in mfcc_frames) / n_act for i in range(num_mfcc)]
+        # Usa mediana por coeficiente (imune a vogais isoladas de cada frase)
+        med_mfcc = []
+        for i in range(num_mfcc):
+            col = sorted(f[i] for f in mfcc_frames)
+            med_mfcc.append(col[len(col) // 2])
 
-        # Delta-MFCC (dinâmica de transição vocal)
         delta_frames = []
         for t in range(len(mfcc_frames)):
             prev_f = mfcc_frames[max(0, t - 1)]
             next_f = mfcc_frames[min(len(mfcc_frames) - 1, t + 1)]
             delta_frames.append([(next_f[i] - prev_f[i]) * 0.5 for i in range(num_mfcc)])
         mean_delta = [sum(d[i] for d in delta_frames) / n_act for i in range(num_mfcc)]
-
         mean_subband = [v / n_act for v in subband_ratios]
 
         if pitches:
@@ -209,20 +211,19 @@ def extract_voiceprint(audio_path: str):
             pitch_median = 130.0
             pitch_std = 15.0
 
-        # Vetor final de 44 dimensões: 16 MFCC + 16 Delta-MFCC + 8 Formant Contrasts + 4 Pitch Features
+        weighted_mfcc = [med_mfcc[0] * 0.20] + [med_mfcc[i] * 1.15 for i in range(1, num_mfcc)]
         raw_vec = (
-            mean_mfcc +
+            weighted_mfcc +
             [d * 2.5 for d in mean_delta] +
-            [s * 0.6 for s in mean_subband] +
+            [s * 0.85 for s in mean_subband] +
             [
-                (pitch_median - 150.0) / 60.0,
-                pitch_std / 35.0,
-                (pitch_median / 200.0),
-                1.0 if pitches else 0.0
+                ((pitch_median - 145.0) / 45.0) * 2.2,
+                (pitch_std / 35.0) * 1.2,
+                (pitch_median / 170.0) * 2.2,
+                1.8 if pitches else 0.0
             ]
         )
 
-        # Normalização L2 (garante comparação angular imune à distância do microfone)
         norm = math.sqrt(sum(v * v for v in raw_vec)) or 1.0
         l2_vec = [round(v / norm, 6) for v in raw_vec]
         avg_energy = sum(r for _, _, r in active) / n_act

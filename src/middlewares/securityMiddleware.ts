@@ -1,13 +1,11 @@
-// src/middlewares/securityMiddleware.ts
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { z } from 'zod';
+import { validateAuthorizedDevice } from '../services/deviceRegistryService.js';
 
-const getJwtSecret = () => process.env.JWT_SECRET || 'jarvis-n8n-oci-super-secret-key-2026';
+const RUNTIME_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
+const getJwtSecret = () => process.env.JWT_SECRET || RUNTIME_FALLBACK_SECRET;
 
-// ============================================================================
-// 1. MOTOR JWT NATIVO (HS256 com proteção Timing-Safe)
-// ============================================================================
 export function signJwtToken(payload: object, expiresInHours = 24): string {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const exp = Math.floor(Date.now() / 1000) + expiresInHours * 3600;
@@ -51,6 +49,17 @@ export function verifyJwtToken(token: string): any | null {
   }
 }
 
+function isDirectLoopbackRequest(req: Request): boolean {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  const realIp = req.headers['x-real-ip'];
+  const remoteAddr = req.socket?.remoteAddress || '';
+  return (
+    !forwardedFor &&
+    !realIp &&
+    (remoteAddr === '127.0.0.1' || remoteAddr === '::1' || remoteAddr === '::ffff:127.0.0.1')
+  );
+}
+
 export function requireJwtAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   const apiKeyHeader = req.headers['x-api-key'] as string;
@@ -58,15 +67,6 @@ export function requireJwtAuth(req: Request, res: Response, next: NextFunction) 
   if (process.env.INTERNAL_API_KEY && apiKeyHeader === process.env.INTERNAL_API_KEY) {
     return next();
   }
-
-  // Requisição vinda de proxy externo (Nginx) nunca é considerada local
-  const forwardedFor = req.headers['x-forwarded-for'];
-  const realIp = req.headers['x-real-ip'];
-  const remoteAddr = req.socket?.remoteAddress || '';
-  const isDirectLoopback =
-    !forwardedFor &&
-    !realIp &&
-    (remoteAddr === '127.0.0.1' || remoteAddr === '::1' || remoteAddr === '::ffff:127.0.0.1');
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
@@ -81,24 +81,66 @@ export function requireJwtAuth(req: Request, res: Response, next: NextFunction) 
     return next();
   }
 
-  if (isDirectLoopback) {
+  if (isDirectLoopbackRequest(req)) {
     return next();
   }
 
   return res.status(401).json({
     success: false,
-    error: 'Acesso negado: Token JWT obrigatório para esta rota administrativa.'
+    error: 'Acesso negado: Token JWT obrigatório para esta rota.'
   });
 }
 
-// ============================================================================
-// 2. RATE LIMITER & PROTEÇÃO DoS (Com emissão de Neurotransmissor GABA)
-// ============================================================================
+export async function requireDeviceOrJwtAuth(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  const apiKeyHeader = req.headers['x-api-key'] as string;
+
+  if (process.env.INTERNAL_API_KEY && apiKeyHeader === process.env.INTERNAL_API_KEY) {
+    return next();
+  }
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    const decoded = verifyJwtToken(token);
+    if (decoded) {
+      (req as any).user = decoded;
+      return next();
+    }
+  }
+
+  if (isDirectLoopbackRequest(req)) {
+    return next();
+  }
+
+  const deviceId = String(req.headers['x-device-id'] || req.body?.deviceId || '').trim();
+  const deviceToken = String(req.headers['x-device-token'] || req.body?.deviceToken || '').trim();
+
+  if (deviceId && deviceToken) {
+    const authDev = await validateAuthorizedDevice(deviceId, deviceToken).catch(() => null);
+    if (authDev) {
+      (req as any).device = authDev;
+      return next();
+    }
+  }
+
+  return res.status(401).json({
+    success: false,
+    error: 'Dispositivo não autorizado ou sessão expirada.'
+  });
+}
+
 interface RateEntry {
   count: number;
   resetAt: number;
 }
 const rateBuckets = new Map<string, RateEntry>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of rateBuckets.entries()) {
+    if (now > v.resetAt) rateBuckets.delete(k);
+  }
+}, 5 * 60 * 1000).unref();
 
 export function createRateLimiter(maxRequests: number, windowMs: number) {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -148,9 +190,6 @@ export function createRateLimiter(maxRequests: number, windowMs: number) {
   };
 }
 
-// ============================================================================
-// 3. SANITIZAÇÃO ESTRITA E VALIDAÇÃO ZOD (Ingress & Retorno de Especialistas)
-// ============================================================================
 export function sanitizeString(input: string): string {
   if (typeof input !== 'string') return '';
   return input
@@ -213,7 +252,10 @@ export function validateWebhookIngress(req: Request, res: Response, next: NextFu
   }
 
   const hmacSignature = req.headers['x-hmac-signature'] as string;
-  if (hmacSignature && process.env.WEBHOOK_HMAC_SECRET) {
+  if (hmacSignature) {
+    if (!process.env.WEBHOOK_HMAC_SECRET) {
+      return res.status(500).json({ success: false, error: 'WEBHOOK_HMAC_SECRET não configurado.' });
+    }
     const expectedHmac = crypto
       .createHmac('sha256', process.env.WEBHOOK_HMAC_SECRET)
       .update(JSON.stringify(req.body))

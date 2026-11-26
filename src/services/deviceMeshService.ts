@@ -1,3 +1,4 @@
+import { verifyJwtToken } from '../middlewares/securityMiddleware.js';
 import type { Express, Request, Response } from 'express';
 import type { WebSocket, WebSocketServer } from 'ws';
 import {
@@ -26,15 +27,23 @@ function getMeshSecret(): string {
   return process.env.DEVICE_MESH_SECRET || '';
 }
 
-function isAuthorizedDeviceOrAdmin(req: Request): boolean {
+async function isAuthorizedDeviceOrAdmin(req: Request): Promise<boolean> {
   const secret = getMeshSecret();
-  const deviceToken = String(req.headers['x-device-token'] || '');
+  const deviceToken = String(req.headers['x-device-token'] || '').trim();
+  const deviceId = String(req.headers['x-device-id'] || req.body?.deviceId || '').trim();
   if (secret && deviceToken === secret) return true;
-  if (deviceToken.startsWith('jrv_tok_')) return true;
+  if (deviceId && deviceToken) {
+    const dev = await validateAuthorizedDevice(deviceId, deviceToken).catch(() => null);
+    if (dev) return true;
+  }
   const authHeader = String(req.headers['authorization'] || '');
-  if (authHeader.startsWith('Bearer ') && authHeader.length > 20) return true;
-  const ip = req.ip || req.socket.remoteAddress || '';
-  return ip === '127.0.0.1' || ip === '::1' || ip.endsWith('127.0.0.1');
+  if (authHeader.startsWith('Bearer ')) {
+    const decoded = verifyJwtToken(authHeader.slice(7).trim());
+    if (decoded) return true;
+  }
+  const forwarded = req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
+  const ip = req.socket?.remoteAddress || '';
+  return !forwarded && (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1');
 }
 
 export function attachDeviceMeshWebSocket(wss: WebSocketServer) {
@@ -234,8 +243,8 @@ export function registerDeviceMeshRoutes(app: Express, pool?: any) {
     }
   });
 
-  app.get('/api/v1/device/mesh-status', (req: Request, res: Response) => {
-    if (!isAuthorizedDeviceOrAdmin(req)) return res.status(401).json({ success: false, error: 'Não autorizado' });
+  app.get('/api/v1/device/mesh-status', async (req: Request, res: Response) => {
+    if (!(await isAuthorizedDeviceOrAdmin(req))) return res.status(401).json({ success: false, error: 'Não autorizado' });
     const list = Array.from(connectedDevices.values()).map((d) => ({
       deviceId: d.deviceId,
       platform: d.platform,
@@ -245,16 +254,16 @@ export function registerDeviceMeshRoutes(app: Express, pool?: any) {
     return res.json({ success: true, devices: list });
   });
 
-  app.post('/api/v1/device/dispatch', (req: Request, res: Response) => {
-    if (!isAuthorizedDeviceOrAdmin(req)) return res.status(401).json({ success: false, error: 'Não autorizado' });
+  app.post('/api/v1/device/dispatch', async (req: Request, res: Response) => {
+    if (!(await isAuthorizedDeviceOrAdmin(req))) return res.status(401).json({ success: false, error: 'Não autorizado' });
     const { targetDevice, action, payload } = req.body || {};
     if (!targetDevice || !action) return res.status(400).json({ success: false, error: 'Informe targetDevice e action.' });
     const result = dispatchCommandToDevice(String(targetDevice), String(action), payload || {});
     return res.status(result.ok ? 200 : 404).json(result);
   });
 
-  app.post('/api/v1/device/gallery-upload', (req: Request, res: Response) => {
-    if (!isAuthorizedDeviceOrAdmin(req)) return res.status(401).json({ success: false, error: 'Não autorizado' });
+  app.post('/api/v1/device/gallery-upload', async (req: Request, res: Response) => {
+    if (!(await isAuthorizedDeviceOrAdmin(req))) return res.status(401).json({ success: false, error: 'Não autorizado' });
     const { requestId, fileName, imageBase64 } = req.body || {};
     if (!requestId || !imageBase64) return res.status(400).json({ success: false });
     pendingGalleryUploads.set(String(requestId), {
@@ -266,7 +275,7 @@ export function registerDeviceMeshRoutes(app: Express, pool?: any) {
   });
 
   app.post('/api/v1/device/sync-context', async (req: Request, res: Response) => {
-    if (!isAuthorizedDeviceOrAdmin(req)) return res.status(401).json({ success: false, error: 'Não autorizado' });
+    if (!(await isAuthorizedDeviceOrAdmin(req))) return res.status(401).json({ success: false, error: 'Não autorizado' });
     try {
       const { deviceId = 'galaxy_s25', apps = [], contacts = [] } = req.body || {};
       if (Array.isArray(apps) && apps.length > 0) deviceAppsRegistry.set(String(deviceId), apps);

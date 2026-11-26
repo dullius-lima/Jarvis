@@ -15,21 +15,36 @@ import java.util.Locale;
 
 public class JarvisAccessibilityService extends AccessibilityService {
     public static JarvisAccessibilityService instance;
+    private boolean lastProtectedState = false;
 
     @Override public void onServiceConnected() { super.onServiceConnected(); instance = this; }
-    @Override public void onAccessibilityEvent(AccessibilityEvent e) {}
+
+    @Override
+    public void onAccessibilityEvent(AccessibilityEvent e) {
+        if (e == null || e.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
+        CharSequence pkgCs = e.getPackageName();
+        if (pkgCs == null) return;
+        boolean nowProtected = SensitiveAppGuard.updateForegroundPackage(pkgCs.toString());
+        if (nowProtected != lastProtectedState) {
+            lastProtectedState = nowProtected;
+            JarvisFloatingOrbManager.setSuspendedForSecurity(this, nowProtected);
+            JarvisVoiceService.onSecurityLockChanged(nowProtected);
+        }
+    }
+
     @Override public void onInterrupt() {}
     @Override public void onDestroy() { instance = null; super.onDestroy(); }
 
     private static String norm(String s) {
         if (s == null) return "";
         return Normalizer.normalize(s.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
-                .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
-                .replaceAll("\\s+", " ")
-                .trim();
+            .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
+            .replaceAll("\\s+", " ")
+            .trim();
     }
 
     public boolean clickByText(String target) {
+        if (SensitiveAppGuard.isProtectedNow()) return false;
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null || target == null || target.trim().isEmpty()) return false;
         List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByText(target);
@@ -77,6 +92,7 @@ public class JarvisAccessibilityService extends AccessibilityService {
     public boolean inputText(String txt) { return inputText(txt, false); }
 
     public boolean inputText(String txt, boolean submitSearch) {
+        if (SensitiveAppGuard.isProtectedNow()) return false;
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return false;
         AccessibilityNodeInfo target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
@@ -98,11 +114,13 @@ public class JarvisAccessibilityService extends AccessibilityService {
     }
 
     public String dumpScreenText() {
+        if (SensitiveAppGuard.isProtectedNow()) return "Bloqueado por segurança: aplicativo bancário/protegido ativo.";
         String txt = readScreenText();
         return txt.isEmpty() ? "Tela vazia ou inacessível." : txt;
     }
 
     public boolean tapXY(float x, float y) {
+        if (SensitiveAppGuard.isProtectedNow()) return false;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
         Path path = new Path();
         path.moveTo(x, y);
@@ -112,6 +130,7 @@ public class JarvisAccessibilityService extends AccessibilityService {
     }
 
     public boolean tapPercent(float xPct, float yPct) {
+        if (SensitiveAppGuard.isProtectedNow()) return false;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
         DisplayMetrics dm = getResources().getDisplayMetrics();
         float x = Math.max(1f, Math.min(dm.widthPixels - 1f, (xPct / 100f) * dm.widthPixels));
@@ -120,6 +139,7 @@ public class JarvisAccessibilityService extends AccessibilityService {
     }
 
     public boolean scrollScreen(String direction) {
+        if (SensitiveAppGuard.isProtectedNow()) return false;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
         DisplayMetrics dm = getResources().getDisplayMetrics();
         int x1 = dm.widthPixels / 2, y1 = (int)(dm.heightPixels * 0.72);
@@ -140,6 +160,7 @@ public class JarvisAccessibilityService extends AccessibilityService {
     }
 
     public String readScreenText() {
+        if (SensitiveAppGuard.isProtectedNow()) return "";
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return "";
         StringBuilder sb = new StringBuilder();
