@@ -484,28 +484,7 @@
               
         <!-- CONSTRUTOR VISUAL DE AGENDAMENTO AUTOMÁTICO (DATA, HORÁRIO E FREQUÊNCIA) -->
         <div style="background: #020617; border: 1px solid #0284c7; border-radius: 10px; padding: 14px; margin-top: 12px;">
-                  <!-- NÓ JOIN (BARREIRA DE CONVERGÊNCIA PARALELA) -->
-        <div style="margin: 12px 0; padding: 12px; background: rgba(14, 165, 233, 0.10); border: 1px dashed #38bdf8; border-radius: 10px;">
-          <label style="color: #38bdf8; font-weight: 700; font-size: 13px; display: block; margin-bottom: 6px;">
-            🔀 Nó Join — Convergência após Fan-Out (Opcional)
-          </label>
-          <select v-model="agenteEmEdicao.join_agent_slug" class="input-field" style="width: 100%; background: #020617; color: #f8fafc; border: 1px solid #0284c7; padding: 8px; border-radius: 6px;">
-            <option value="">Sem Nó Join (encerra após os ramos paralelos)</option>
-            <option
-              v-for="agOpt in agents"
-              :key="agOpt.slug"
-              :value="agOpt.slug"
-              :disabled="agOpt.slug === agenteEmEdicao.slug"
-            >
-              {{ agOpt.icon || '🤖' }} {{ agOpt.name }} ({{ agOpt.slug }})
-            </option>
-          </select>
-          <small style="color: #94a3b8; font-size: 11px; display: block; margin-top: 6px;">
-            Quando 2 ou mais próximos agentes rodarem em paralelo (Fan-Out), este Nó Join aguarda TODOS terminarem e recebe os resultados unificados.
-          </small>
-        </div>
-
-<div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;">
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;">
             <strong style="color: #38bdf8; font-size: 13px;">⏰ Disparos Automáticos deste Especialista ({{ getListaDisparosModal().length }})</strong>
             <button type="button" @click="adicionarDisparoNoAgente" style="background: #0284c7; color: #fff; border: none; padding: 9px 14px; border-radius: 7px; font-size: 13px; font-weight: 700; cursor: pointer; width: 100%;">
               ➕ Adicionar Novo Disparo
@@ -732,8 +711,6 @@ const agenteEmEdicao = ref<any>({
   tools: [] as string[],
   next_agent_slug: null,
   next_agent_slugs: [] as string[],
-  join_agent_slug: '',
-  join_agent_slug: '',
   cron_expression: '*/5 * * * *',
   is_active: true
 });
@@ -1086,8 +1063,6 @@ function abrirModalNovoAgente() {
     tools: [] as string[],
     next_agent_slug: null,
     next_agent_slugs: [] as string[],
-  join_agent_slug: '',
-  join_agent_slug: '',
     cron_expression: '*/5 * * * *',
     is_active: true
   };
@@ -1131,8 +1106,6 @@ function abrirModalEditarAgente(ag: any) {
     tools: Array.isArray(ag.tools) ? [...ag.tools] : [],
     next_agent_slug: ag.next_agent_slug || null,
     next_agent_slugs: slugsIniciais,
-  join_agent_slug: '',
-  join_agent_slug: '',
     cron_expression: ag.cron_expression || '*/5 * * * *'
   };
   exibirModalAgente.value = true;
@@ -1183,8 +1156,6 @@ async function salvarAgenteEspecialista() {
       base_url: agenteEmEdicao.value.base_url?.trim() || null,
       next_agent_slug: primaryNextSlug,
       next_agent_slugs: nextSlugs,
-  join_agent_slug: '',
-  join_agent_slug: '',
       response_instruction: agenteEmEdicao.value.system_prompt
     };
 
