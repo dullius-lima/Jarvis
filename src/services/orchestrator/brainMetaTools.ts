@@ -873,7 +873,9 @@ export const toolRegistrarGrafoConhecimento = {
         target: { type: "string", description: "Entidade de destino (ex: Clínica OdontoPrime, R$ 34,50, Sala)" },
         targetType: { type: "string", description: "Tipo da entidade de destino" },
         targetProps: { type: "object", description: "Atributos chave-valor do destino (ex: { endereco })" },
-        metadata: { type: "object", description: "Observações ou contexto adicional" }
+        metadata: { type: "object", description: "Observações ou contexto adicional" },
+        oldSource: { type: "string", description: "Preencher APENAS se o usuário estiver corrigindo o nome anterior da entidade origem" },
+        oldTarget: { type: "string", description: "Preencher APENAS se o usuário estiver corrigindo o nome anterior da entidade destino" }
       },
       required: ["source", "relation", "target"]
     }

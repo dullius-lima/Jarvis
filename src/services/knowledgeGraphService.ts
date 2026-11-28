@@ -11,6 +11,8 @@ export function normalizeEntityKey(raw: string): string {
 }
 
 export interface UpsertTripletInput {
+  oldSource?: string;
+  oldTarget?: string;
   source: string;
   sourceType?: string;
   sourceProps?: Record<string, any>;
@@ -30,6 +32,18 @@ export async function upsertKnowledgeTriplet(input: UpsertTripletInput) {
     return { success: false, message: 'Entidade origem, relação e destino são obrigatórios.' };
   }
 
+  if (input.oldSource) {
+    const oldSKey = normalizeEntityKey(input.oldSource);
+    if (oldSKey && oldSKey !== sourceKey) {
+      await pool.query(`DELETE FROM knowledge_nodes WHERE entity_key = $1;`, [oldSKey]).catch(() => {});
+    }
+  }
+  if (input.oldTarget) {
+    const oldTKey = normalizeEntityKey(input.oldTarget);
+    if (oldTKey && oldTKey !== targetKey) {
+      await pool.query(`DELETE FROM knowledge_nodes WHERE entity_key = $1;`, [oldTKey]).catch(() => {});
+    }
+  }
   const existingNodes = await pool.query(
     `SELECT entity_key FROM knowledge_nodes WHERE entity_key = ANY($1);`,
     [[sourceKey, targetKey]]
