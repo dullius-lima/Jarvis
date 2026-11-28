@@ -7,6 +7,8 @@
         <p>Inspecione e gerencie a retenção: Curto Prazo (Sessões), Médio Prazo (Episódica/Projetos) ou Longo Prazo (RAG Permanente).</p>
       </div>
 
+    <PainelGrafoECache />
+
       <div class="actions-row" style="margin: 0;">
         <button
           v-if="nivelMemoriaAtivo === 'medio'"
@@ -281,7 +283,6 @@
     </div>
 
 </section>
-  <PainelGrafoECache />
 </template>
 
 <script setup lang="ts">
