@@ -705,13 +705,53 @@ export async function processarChamadasDeFerramentas(params: {
     break;
   }
 
+  // __JOIN_SYNTHESIS_BARRIER__
+  const limparRelatorioInterno = (txt: string) =>
+    String(txt || "")
+      .replace(/\n*RELAT[ÓO]RIO DE EXECU[ÇC][ÃA]O AO JARVIS:[\s\S]*$/i, "")
+      .replace(/\n*SOLICITA[ÇC][ÃA]O DE DISPARO AO JARVIS:[\s\S]*$/i, "")
+      .trim();
+
+  if (saidasFerramentasParaSintese.length > 1 && (!textoFinal || /RELAT[ÓO]RIO DE EXECU[ÇC][ÃA]O AO JARVIS/i.test(textoFinal))) {
+    try {
+      const resumoJoinCompleto = saidasFerramentasParaSintese
+        .map((s, i) => {
+          const bruto = typeof s.result === "string" ? limparRelatorioInterno(s.result) : JSON.stringify(s.result);
+          return `### Ramo ${i + 1} — ${s.agentName || s.toolName}:\n${bruto}`;
+        })
+        .join("\n\n");
+
+      const sinteseJoin: any = await callOpenAICompatibleLLM({
+        provider: configuracaoCerebro.provider,
+        model: configuracaoCerebro.model,
+        apiKey: configuracaoCerebro.api_key,
+        baseUrl: configuracaoCerebro.base_url,
+        messages: [
+          {
+            role: "system",
+            content: `És o JARVIS (${activeSpeakerName}). Consolida TODOS os resultados dos especialistas executados em paralelo numa única resposta clara, organizada por tópicos em português, sem omitir nenhum ramo. NUNCA incluas cabeçalhos internos como "RELATÓRIO DE EXECUÇÃO AO JARVIS" ou "SOLICITAÇÃO DE DISPARO AO JARVIS".`
+          },
+          {
+            role: "user",
+            content: `Pedido original: "${userPrompt}"\n\nResultados paralelos recolhidos:\n${resumoJoinCompleto}`
+          }
+        ],
+        temperature: 0.2
+      });
+      const outJoin = sinteseJoin?.choices?.[0]?.message?.content?.trim();
+      if (outJoin) textoFinal = limparRelatorioInterno(outJoin);
+    } catch {}
+  }
+
   if (!textoFinal && saidasFerramentasParaSintese.length > 0) {
-    const ultimoItem = saidasFerramentasParaSintese[saidasFerramentasParaSintese.length - 1];
-    if (typeof ultimoItem.result === 'string' && ultimoItem.result.trim().length > 0) {
-      textoFinal = ultimoItem.result.trim();
-    } else {
-      textoFinal = JSON.stringify(saidasFerramentasParaSintese.map((s) => s.result));
-    }
+    textoFinal = saidasFerramentasParaSintese
+      .map((s) => {
+        const corpo = typeof s.result === "string" ? limparRelatorioInterno(s.result) : JSON.stringify(s.result);
+        return `**${s.agentName || s.toolName}:**\n${corpo}`;
+      })
+      .join("\n\n");
+  } else if (textoFinal) {
+    textoFinal = limparRelatorioInterno(textoFinal);
   }
 
   return {
