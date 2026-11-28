@@ -1,3 +1,7 @@
+import { asyncWebhookQueueMiddleware } from './services/queue/webhookQueueBridge.js';
+import { queueRouter } from './routes/queueRoutes.js';
+import { startQueueWorker } from './services/queue/queueWorker.js';
+import { enqueueJob } from './services/queue/queueRepository.js';
 import { resolveSensoryFrame } from './services/sensoryRouterService';
 import { attachDeviceMeshWebSocket, registerDeviceMeshRoutes } from './services/deviceMeshService';
 import { handleWebMcpJsonRpc } from "./services/webMcpService.js";
@@ -667,6 +671,19 @@ setInterval(() => {
 
 const server = http.createServer(app);
 initBrainWebSocketServer(server);
+
+app.use('/api/v1/queue', queueRouter);
+app.use('/api/v1/webhook', asyncWebhookQueueMiddleware);
+app.post('/api/v1/queue/enqueue', async (req, res) => {
+  try {
+    const { jobType, payload, priority, delaySeconds } = req.body || {};
+    if (!jobType) return res.status(400).json({ success: false, error: 'jobType obrigatorio' });
+    const job = await enqueueJob(jobType, payload || {}, { priority, delaySeconds });
+    return res.status(202).json({ success: true, job });
+  } catch (e: any) { return res.status(500).json({ success: false, error: e.message }); }
+});
+
+startQueueWorker().catch(console.error);
 
 server.listen(PORT, async () => {
   console.log(`🚀 Servidor backend e WebSocket Neural rodando na porta ${PORT}`);

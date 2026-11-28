@@ -1,3 +1,4 @@
+import { enqueueScheduledTrigger } from './queue/scheduleQueueBridge.js';
 import { pool } from '../config/database.js';
 import { processOrchestratorWorkflow } from './orchestratorService.js';
 
@@ -138,7 +139,7 @@ export async function evaluateScheduledTriggers() {
         if (!sched.enabled || !sched.cron_expression) continue;
         if (sched.last_run && Date.now() - new Date(sched.last_run).getTime() < 55000) continue;
         if (matchesCronExpression(sched.cron_expression, nowCg)) {
-          executeScheduledAgent(agent, false, sched.schedule_prompt, sched.id).catch((e) => console.error(`❌ [Cron] ${agent.name}:`, e.message));
+          enqueueScheduledTrigger(agent, sched).catch((e) => console.error(`❌ [Cron] ${agent.name}:`, e.message));
         }
       }
     }
