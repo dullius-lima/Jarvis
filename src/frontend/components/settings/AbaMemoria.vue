@@ -281,9 +281,11 @@
     </div>
 
 </section>
+  <PainelGrafoECache />
 </template>
 
 <script setup lang="ts">
+import PainelGrafoECache from './PainelGrafoECache.vue';
 import { ref, reactive, onMounted } from 'vue';
 
 type NivelMemoria = 'curto' | 'medio' | 'longo';
