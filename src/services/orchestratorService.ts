@@ -990,7 +990,7 @@ export async function processarExecucaoWorkflowComCache(
 ) {
   const t0 = Date.now();
   // __SANITIZE_VOCATIVO_STT__
-  userPrompt = String(userPrompt || "").replace(/\b(jarbas|jarves|járvis)\b/gi, "Jarvis");
+  userPrompt = String(userPrompt || "").replace(/\b(jarbas|jarvas|jarves|járvis)\b/gi, "Jarvis");
   const ehMutacaoOuEstado = /\b(registr\w+|salv\w+|atualiz\w+|cri\w+|apag\w+|exclu\w+|lembr\w+|memoriz\w+|grafo|agora|que horas|c[aâ]mera|tela)\b/i.test(userPrompt);
   const temMidia = Boolean(sensoryInput?.audioBase64 || sensoryInput?.screenFrame || sensoryInput?.webcamFrame || sensoryInput?.sensorData?.audioBase64 || sensoryInput?.sensorData?.screenFrame || sensoryInput?.sensorData?.webcamFrame);
 

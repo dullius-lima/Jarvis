@@ -220,7 +220,7 @@ export async function montarContextoEConexoes(
 
   // Tools Administrativas e de Memória Cognitiva (Curto, Médio e Longo Prazo)
   tools.push(
-    toolGerenciarMemoria,
+    toolGerenciarMemoria, toolRegistrarGrafoConhecimento,
     toolDelegarCriacaoSubagente,
     {
       type: 'function',
