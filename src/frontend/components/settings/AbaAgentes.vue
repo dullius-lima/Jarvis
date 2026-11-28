@@ -76,27 +76,6 @@
             🔗 Próximo Nó: {{ ag.next_agent_slug }}
           </span>
         </div>
-
-        <!-- NÓ JOIN (BARREIRA DE CONVERGÊNCIA PARALELA) -->
-        <div class="form-group" style="margin-top: 10px; padding: 10px; background: rgba(14, 165, 233, 0.08); border: 1px dashed rgba(56, 189, 248, 0.45); border-radius: 8px;">
-          <label style="color: #38bdf8; font-weight: 700; display: block; margin-bottom: 4px;">
-            🔀 Nó Join — Convergência após Fan-Out (Opcional)
-          </label>
-          <select v-model="ag.join_agent_slug" class="input-field">
-            <option value="">Sem Nó Join (encerra após os ramos paralelos)</option>
-            <option
-              v-for="agOpt in listaAgentes"
-              :key="agOpt.slug"
-              :value="agOpt.slug"
-              :disabled="agOpt.slug === ag.slug"
-            >
-              {{ agOpt.icon || "🤖" }} {{ agOpt.name }} ({{ agOpt.slug }})
-            </option>
-          </select>
-          <small style="color: #94a3b8; font-size: 11px; display: block; margin-top: 4px;">
-            Quando 2 ou mais próximos agentes rodarem em paralelo (Fan-Out), este Nó Join aguarda TODOS terminarem e recebe os resultados unificados.
-          </small>
-        </div>
   
 
         <div v-if="Array.isArray(ag.tools) && ag.tools.length" class="tools-chips">
@@ -498,6 +477,27 @@
                 <div v-if="listaAgentes.filter((a) => a.slug !== agenteEmEdicao.slug).length === 0" style="padding: 10px; font-size: 12px; color: #64748b;">
                   Nenhum outro agente cadastrado para encadeamento.
                 </div>
+
+          <!-- NÓ JOIN (BARREIRA DE CONVERGÊNCIA PARALELA) -->
+          <div style="margin-top: 12px; padding: 10px; background: rgba(14, 165, 233, 0.08); border: 1px dashed rgba(56, 189, 248, 0.5); border-radius: 8px;">
+            <label style="color: #38bdf8; font-weight: 700; font-size: 12px; display: block; margin-bottom: 6px;">
+              🔀 Nó Join — Convergência após Fan-Out (Opcional)
+            </label>
+            <select v-model="agenteEmEdicao.join_agent_slug" class="input-field" style="width: 100%;">
+              <option value="">Sem Nó Join (encerra após os ramos paralelos)</option>
+              <option
+                v-for="agOpt in agents"
+                :key="agOpt.slug"
+                :value="agOpt.slug"
+                :disabled="agOpt.slug === agenteEmEdicao.slug"
+              >
+                {{ agOpt.icon || '🤖' }} {{ agOpt.name }} ({{ agOpt.slug }})
+              </option>
+            </select>
+            <small style="color: #94a3b8; font-size: 11px; display: block; margin-top: 5px;">
+              Quando 2 ou mais próximos agentes rodarem em paralelo (Fan-Out), este Nó Join aguarda TODOS terminarem e recebe os resultados unificados.
+            </small>
+          </div>
               </div>
             </div>
 
