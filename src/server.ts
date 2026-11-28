@@ -1,3 +1,4 @@
+import knowledgeCacheRoutes from "./routes/knowledgeCacheRoutes.js";
 import { asyncWebhookQueueMiddleware } from './services/queue/webhookQueueBridge.js';
 import { queueRouter } from './routes/queueRoutes.js';
 import { startQueueWorker } from './services/queue/queueWorker.js';
@@ -604,6 +605,8 @@ app.all('/api/v1/webhook-test/global/:key', handleGlobalWebhookTrigger);
 
 // 9. Health Check
 app.post(["/api/v1/webmcp", "/api/v1/webmcp/mcp"], requireJwtAuth, handleWebMcpJsonRpc);
+
+app.use("/api/v1", knowledgeCacheRoutes);
 
 app.get('/health', (_req: Request, res: Response) => {
   return res.json({
