@@ -149,6 +149,7 @@ export async function initializeDatabaseSchema() {
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS payload_template TEXT;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS next_agent_slug VARCHAR(100) DEFAULT NULL;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS next_agent_slugs JSONB DEFAULT '[]'::jsonb;
+    ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS join_agent_slug VARCHAR(100) DEFAULT NULL;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS response_instruction TEXT DEFAULT '';
       ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS schedule_enabled BOOLEAN DEFAULT FALSE;

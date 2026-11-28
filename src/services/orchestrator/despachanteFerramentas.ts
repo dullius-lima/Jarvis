@@ -116,6 +116,45 @@ export async function processarChamadasDeFerramentas(params: {
   while (filaToolCallsAtual.length > 0 && cicloOrquestrador < MAX_ORCHESTRATOR_CYCLES) {
     cicloOrquestrador++;
 
+    // __FANOUT_REACT_PARALELO__
+    const _ehSequencialExplicito = /\b(depois|em seguida|após|apos|então|entao|encaminh\w+|mand\w+|envi\w+)\b/i.test(userPrompt);
+    if (filaToolCallsAtual.length > 1 && !_ehSequencialExplicito) {
+      const _pares = filaToolCallsAtual
+        .filter((tc: any) => tc.type === "function")
+        .map((tc: any) => {
+          const fn = sanitizeToolName(tc.function?.name);
+          let agArgs: Record<string, any> = {};
+          try { agArgs = JSON.parse(tc.function?.arguments || "{}"); } catch { agArgs = { task_details: tc.function?.arguments }; }
+          if (!agArgs.task_details) agArgs.task_details = userPrompt;
+          if (!agArgs.query) agArgs.query = agArgs.symbol || userPrompt;
+          const alv = normalizar(fn);
+          const ag = agentesAtivos.find((a: any) => normalizar(a.slug) === alv || normalizar(a.name) === alv);
+          return ag ? { tc, ag, agArgs } : null;
+        })
+        .filter(Boolean);
+      if (_pares.length === filaToolCallsAtual.length && _pares.length > 1) {
+        const _resParalelos = await Promise.allSettled(
+          _pares.map((p: any) => executeSpecialistPipeline(
+            { ...p.ag, system_prompt: `${p.ag.system_prompt || ""}\n${contextoTemporal}` },
+            p.agArgs, sessionId, activeSpeakerName, threadConversa, configuracaoCerebro.server_base_url, userPrompt, configuracaoCerebro, connectorsMap
+          ))
+        );
+        _pares.forEach((p: any, idx: number) => {
+          const r = _resParalelos[idx];
+          const cad = r.status === "fulfilled" ? r.value : [];
+          const ult = cad[cad.length - 1];
+          const out = r.status === "fulfilled" ? (ult?.output ?? cad) : { error: (r as PromiseRejectedResult).reason?.message };
+          trilhaExecucao.push({ step: trilhaExecucao.length + 1, kind: "agent", slug: p.ag.slug, name: `${p.ag.name} [Paralelo]`, nodeType: p.ag.agent_type || "llm", parentSlug: "jarvis_core", status: r.status === "fulfilled" ? "ok" : "error" });
+          toolsUsadas.push(...cad.flatMap((e: any) => e.executedTools || []));
+          saidasFerramentasParaSintese.push({ step: saidasFerramentasParaSintese.length + 1, toolName: p.ag.slug, agentName: `${p.ag.name} [Paralelo]`, result: out });
+        });
+        triggeredAgentName = `Fan-Out Paralelo (${_pares.length} especialistas)`;
+        triggeredAgentId = "fanout_parallel";
+        triggeredNodeType = "core";
+        filaToolCallsAtual = [];
+        continue;
+      }
+    }
     for (const toolCall of filaToolCallsAtual) {
     // [WEBMCP_DESP_START]
     {

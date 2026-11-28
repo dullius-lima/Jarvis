@@ -18,6 +18,7 @@ import {
   obterChaveContingenciaEnv
 } from './motorInferencaLLM.js';
 import { executarFerramentaVinculada } from './executorFerramentasFixas.js';
+import { executarFanOutJoin } from './fanOutJoinEngine.js';
 
 function buscarConectorResiliente(toolId: string, map: Map<string, any>): any | undefined {
   if (!toolId || !map) return undefined;
@@ -44,7 +45,8 @@ export async function executarEsteiraEspecialistas(
   serverBaseUrl: string,
   userPrompt = '',
   brainConfig?: any,
-  connectorsMap?: Map<string, any>
+  connectorsMap?: Map<string, any>,
+  options?: { singleNodeOnly?: boolean; preVisitedSlugs?: string[] }
 ) {
   let currentAgent = initialAgent;
   let currentPayload: any = {
@@ -54,7 +56,7 @@ export async function executarEsteiraEspecialistas(
     etapasAnteriores: Array.isArray(taskArgs?.etapasAnteriores) ? [...taskArgs.etapasAnteriores] : []
   };
   let hopCount = 0;
-  const visitedSlugsInChain = new Set<string>();
+  const visitedSlugsInChain = new Set<string>(options?.preVisitedSlugs || []);
   const filaProximosSlugs: string[] = [];
   const MAX_HOPS = 6;
   const cadeiaExecucao: Array<{
@@ -691,6 +693,7 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
       } as any);
     } catch {}
 
+    if (options?.singleNodeOnly) { currentAgent = null; continue; }
     const nextSingle = (currentAgent.next_agent_slug || '').trim();
     let nextMulti: string[] = [];
     if (Array.isArray(currentAgent.next_agent_slugs)) {
@@ -715,6 +718,33 @@ REGRAS TÉCNICAS DE EXECUÇÃO DE FERRAMENTAS:
       }
     }
 
+    if (filaProximosSlugs.length > 1) {
+      const ramos = filaProximosSlugs.splice(0, filaProximosSlugs.length);
+      const etapasBase = [
+        ...(Array.isArray(currentPayload?.etapasAnteriores) ? currentPayload.etapasAnteriores : []),
+        { especialista: `${currentAgent.name} (${currentAgent.slug})`, resultado: stepOutput }
+      ];
+      const foRes = await executarFanOutJoin({
+        parentAgent: currentAgent,
+        branchSlugs: ramos,
+        basePayload: { ...currentPayload, previousAgent: currentAgent.slug, previousOutput: stepOutput, etapasAnteriores: etapasBase, userPrompt },
+        visitedSlugs: visitedSlugsInChain,
+        executeBranch: async (branchAg, branchPay) => {
+          const sub = await executarEsteiraEspecialistas(branchAg, branchPay, sessionId, identityToken, conversationThread, serverBaseUrl, userPrompt, brainConfig, map, { singleNodeOnly: true, preVisitedSlugs: Array.from(visitedSlugsInChain) });
+          const last = sub[0];
+          return { output: last?.output, executedTools: last?.executedTools, traceSteps: last?.traceSteps };
+        }
+      });
+      cadeiaExecucao.push(...foRes.branchEntries);
+      if (foRes.joinAgent) {
+        eloAnteriorSlug = "fanout_join";
+        currentAgent = foRes.joinAgent;
+        currentPayload = foRes.mergedPayload;
+        continue;
+      }
+      currentAgent = null;
+      continue;
+    }
     const proximoSlugDaFila = filaProximosSlugs.shift();
     if (proximoSlugDaFila) {
       const nextRes = await pool

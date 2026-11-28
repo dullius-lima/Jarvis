@@ -423,6 +423,25 @@ export async function runAgentPipelineWithWaitSupport(
         });
       });
 
+      // __JOIN_WEBHOOK_SUPPORT__
+      let joinSlug = String(currentAgent.join_agent_slug || "").trim();
+      if (!joinSlug) {
+        const cnt = new Map<string, number>();
+        for (const s of subRes.rows) {
+          const nx = String(s.next_agent_slug || "").trim();
+          if (nx) cnt.set(nx, (cnt.get(nx) || 0) + 1);
+        }
+        for (const [k, v] of cnt.entries()) { if (v >= 2) { joinSlug = k; break; } }
+      }
+      if (joinSlug) {
+        const jRes = await pool.query("SELECT * FROM ai_agents WHERE slug = $1 AND is_active = TRUE LIMIT 1;", [joinSlug]);
+        if (jRes.rows.length > 0) {
+          currentPayload = { previous_agent: currentAgent.slug, fanout_results: pipelineHistory.slice(-subRes.rows.length), original_input: initialPayload };
+          currentAgent = jRes.rows[0];
+          hop += 2;
+          continue;
+        }
+      }
       break; // Conclui este branch após ramificar
     } else if (proximosSlugs.length === 1) {
       const nextRes = await pool.query(
