@@ -12,7 +12,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 WAKE_FIX_RE = re.compile(
-    r"\b(j[aá]\s*vi[su]?|jar\s*vis|jair\s*viz|iarvis|yarvis|djarvis|jarbas|jarves|jaives|javes|darvis|charvis|jaires|jairbis|jarlb[iy]s?|j[aá]bi|j[aá]\s*amiz|jaips|j[aá]\s*arv[eê]s|de\s*[aá]rvores|de\s*arvies|j[aá]\s*vez|gerbis)\b",
+    r"\b(j[aá]\s*vi[su]|jar\s*vis|jair\s*viz|iarvis|yarvis|djarvis|jarbas|jarves|jaives|javes|darvis|charvis|jairbis|jarlb[iy]s?|j[aá]\s+a\s+vez|j[aá]\s+vez|j[aá]\s+abris[oa]?|javascript)\b",
     re.IGNORECASE
 )
 
@@ -20,34 +20,6 @@ HALLUCINATION_RE = re.compile(
     r"^(o que [eé] o problema\??|o que [eé] isso\??|o que [eé] o seu nome\??|[eé],?\s*[eé]\.?|ah,?\s*ah\!?|n[aã]o [eé]\??|acha\!?|ainda n[aã]o\.?|obrigad[oa]|legendas.*|amara\.org.*|inscreva-se.*|tchau|sil[eê]ncio|you|thank you|bye|am[eé]m|[.\s\!?,-]+)$",
     re.IGNORECASE
 )
-
-PROTECTED_PT_WORDS = {
-    "juros", "juro", "jura", "jovens", "jovem", "jogar", "jogos", "jantar", "janela",
-    "janeiro", "julho", "junho", "justo", "junto", "jeito", "jornal", "jardim",
-    "gera", "gerar", "giro", "girar", "graves", "grave"
-}
-
-def normalize_jarvis_phonetic(text: str) -> str:
-    def repl(match):
-        w = match.group(0)
-        low = w.lower()
-        if low in PROTECTED_PT_WORDS:
-            return w
-        sk = re.sub(r"[áàâãä]", "a", low)
-        sk = re.sub(r"[éèêë]", "e", sk)
-        sk = re.sub(r"[íìîï]", "i", sk)
-        sk = re.sub(r"[óòôõö]", "o", sk)
-        sk = re.sub(r"[úùûü]", "u", sk)
-        sk = re.sub(r"^(?:ch|sh|x|g(?=[ei])|y|i(?=[aoe])|d?j)", "j", sk)
-        sk = re.sub(r"[vbfp]", "v", sk)
-        sk = re.sub(r"[szçc]", "s", sk)
-        cons = re.sub(r"[aeiouh]", "", sk)
-        if cons in {"jrvs", "jrv", "jrbs", "grvs", "drvs"} and 4 <= len(low) <= 9:
-            return "Jarvis"
-        return w
-
-    text = WAKE_FIX_RE.sub("Jarvis", text)
-    return re.sub(r"\b[A-Za-zÀ-ÿ]{4,9}\b", repl, text)
 
 def load_audio_16k_float32(file_path: str) -> np.ndarray:
     try:
@@ -96,34 +68,33 @@ def main():
 
         try:
             audio = load_audio_16k_float32(file_path)
-            if audio.size > 16000 * 11:
-                audio = audio[:16000 * 11]
+            if audio.size > 16000 * 10:
+                audio = audio[:16000 * 10]
 
             peak = float(np.max(np.abs(audio))) if audio.size > 0 else 0.0
-            if peak < 0.008:
+            if peak < 0.015:
                 sys.stdout.write(json.dumps({"success": True, "text": "", "peak": round(peak, 4)}) + "\n")
                 sys.stdout.flush()
                 continue
 
-            # Normalização suave sem distorção (teto 0.75 e ganho máximo 2.8x)
-            if peak < 0.55:
-                gain = min(1.5, 0.55 / peak)
-                audio = np.clip(audio * gain, -1.0, 1.0)
+            # Normalização linear suave sem distorção (teto 0.70, ganho máximo 2.5x)
+            if peak < 0.70:
+                gain = min(2.5, 0.70 / peak)
+                audio = np.clip(audio * gain, -0.95, 0.95)
 
             segments, _ = model.transcribe(
                 audio,
                 language="pt",
                 beam_size=2,
-                best_of=2,
+                best_of=1,
                 without_timestamps=True,
                 temperature=0.0,
                 repetition_penalty=1.20,
                 no_repeat_ngram_size=3,
                 vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=420, speech_pad_ms=260, threshold=0.45),
-                no_speech_threshold=0.55,
-                condition_on_previous_text=False,
-                initial_prompt="Jarvis, Oi Jarvis, bom dia Jarvis, qual é a previsão do tempo para amanhã, previsão do tempo hoje, manda um WhatsApp, envia mensagem, agenda, compromissos, acende a luz, apaga a luz, ar-condicionado, quarto de casal, sala, que horas são."
+                vad_parameters=dict(min_silence_duration_ms=420, speech_pad_ms=220, threshold=0.52),
+                no_speech_threshold=0.65,
+                condition_on_previous_text=False
             )
             text = " ".join([seg.text.strip() for seg in segments]).strip()
 
@@ -133,11 +104,7 @@ def main():
             elif HALLUCINATION_RE.match(text):
                 text = ""
             else:
-                text = normalize_jarvis_phonetic(text)
-                text = re.sub(r"\b(prefisando|previsando|privilisando|privisando)\s+o\s+tempo\s+(?:para\s+minha\s+|a\s+|pra\s+)?manh[aã]\b", "previsão do tempo para amanhã", text, flags=re.IGNORECASE)
-                text = re.sub(r"\bno\s+vix[eê]s\b", "no 23", text, flags=re.IGNORECASE)
-                text = re.sub(r"\b(ocorre|quarto)\s+de\s+casal\b", "quarto de casal", text, flags=re.IGNORECASE)
-                text = re.sub(r"\b(ocelando|selando|ocilando)\b", "oscilando", text, flags=re.IGNORECASE)
+                text = WAKE_FIX_RE.sub("Jarvis", text)
 
             sys.stdout.write(json.dumps({
                 "success": True,

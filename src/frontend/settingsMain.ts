@@ -1,49 +1,27 @@
-// [JWT_AND_APK_FETCH_BRIDGE]
-if (typeof window !== 'undefined' && !(window as any).__jarvisFetchBridgeInstalled) {
-  (window as any).__jarvisFetchBridgeInstalled = true;
-  const _baseFetch = window.fetch.bind(window);
-  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    let resolvedInput: RequestInfo | URL = input;
-    const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-
-    if (typeof resolvedInput === 'string' && resolvedInput.startsWith('/api/')) {
-      const isLocalApp =
-        window.location.hostname === 'localhost' ||
-        window.location.protocol === 'capacitor:' ||
-        window.location.protocol === 'file:';
-      if (isLocalApp) {
-        resolvedInput = 'http://163.176.111.18' + resolvedInput;
-      }
-    }
-
-    const isApiCall = rawUrl.startsWith('/api/') || rawUrl.includes('/api/v1/');
-    const token = localStorage.getItem('jarvis_auth_jwt_token') || '';
-    let nextInit = init;
-
-    if (isApiCall && token) {
-      const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
-      if (!headers.has('Authorization')) {
-        headers.set('Authorization', 'Bearer ' + token);
-      }
-      nextInit = { ...init, headers };
-    }
-
-    const resp = await _baseFetch(resolvedInput, nextInit);
-
-    if (isApiCall && resp.status === 401 && !rawUrl.includes('/api/v1/auth/login')) {
-      localStorage.removeItem('jarvis_authenticated_session');
-      localStorage.removeItem('jarvis_auth_jwt_token');
-      window.dispatchEvent(new Event('jarvis-auth-expired'));
-      if (window.location.pathname.includes('settings')) {
-        window.location.href = '/';
-      }
-    }
-
-    return resp;
-  };
-}
-
 import { createApp } from 'vue';
 import SettingsApp from './SettingsApp.vue';
+
+const origFetch = window.fetch.bind(window);
+window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  if (url.startsWith('/api/')) {
+    const tok =
+      localStorage.getItem('jarvis_jwt_token') ||
+      localStorage.getItem('jarvis_token') ||
+      localStorage.getItem('token') ||
+      '';
+    const headers = new Headers(init?.headers || {});
+    if (tok && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${tok}`);
+    }
+    const res = await origFetch(input, { ...init, headers });
+    if (res.status === 401 && !url.includes('/auth/')) {
+      alert('Sua sessão expirou após a atualização de segurança. Faça login na tela inicial e volte em Configurações.');
+      window.location.href = '/';
+    }
+    return res;
+  }
+  return origFetch(input, init);
+};
 
 createApp(SettingsApp).mount('#app');

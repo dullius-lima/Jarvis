@@ -1,6 +1,6 @@
 {
   "listen_screen_off": false,
-  "listen_only_unlocked": false,
+  "listen_only_unlocked": true,
   "listen_only_app_open": false,
   "push_to_talk_only": false,
   "silent_text_only": false,
@@ -8,8 +8,8 @@
   "edge_glow_enabled": true,
   "wake_screen_on_call": true,
   "privacy_lock_camera": false,
-  "continuous_chat_seconds": 15,
-  "mic_sensitivity": 1.8,
+  "continuous_chat_seconds": 30,
+  "mic_sensitivity": 2.5,
   "whisper_model": "tiny",
-  "voice_lock_only_registered": false
+  "voice_lock_only_registered": true
 }

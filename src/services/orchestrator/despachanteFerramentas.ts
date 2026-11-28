@@ -547,6 +547,21 @@ export async function processarChamadasDeFerramentas(params: {
     filaToolCallsAtual = [];
     if (saidasFerramentasParaSintese.length === 0) break;
 
+    // Curto-circuito: se o especialista já devolveu texto pronto e o pedido não exige encadeamento (WhatsApp/e-mail/salvar)
+    const ultimoPasso = saidasFerramentasParaSintese[saidasFerramentasParaSintese.length - 1];
+    const exigeSegundaEtapa = /\b(whatsapp|zap|email|e-mail|mande|manda|envie|envia|encaminhe|salve|grave)\b/i.test(userPrompt);
+    if (
+      cicloOrquestrador === 1 &&
+      !exigeSegundaEtapa &&
+      ultimoPasso?.isReadySpecialistText &&
+      typeof ultimoPasso.result === 'string' &&
+      ultimoPasso.result.trim().length > 15 &&
+      !/não consigo|nao consigo|não tenho acesso|nao tenho acesso|erro|indisponível/i.test(ultimoPasso.result)
+    ) {
+      textoFinal = ultimoPasso.result.trim();
+      break;
+    }
+
     const resumoPassosExecutados = saidasFerramentasParaSintese
       .map(
         (s, idx) =>

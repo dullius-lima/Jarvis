@@ -19,17 +19,39 @@ public class JarvisAccessibilityService extends AccessibilityService {
 
     @Override public void onServiceConnected() { super.onServiceConnected(); instance = this; }
 
+    private long lastPasswordScanMs = 0L;
+
     @Override
     public void onAccessibilityEvent(AccessibilityEvent e) {
-        if (e == null || e.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
-        CharSequence pkgCs = e.getPackageName();
-        if (pkgCs == null) return;
-        boolean nowProtected = SensitiveAppGuard.updateForegroundPackage(pkgCs.toString());
+        if (e == null) return;
+        int type = e.getEventType();
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            CharSequence pkgCs = e.getPackageName();
+            if (pkgCs != null) {
+                SensitiveAppGuard.updateForegroundPackage(pkgCs.toString());
+            }
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastPasswordScanMs > 300L) {
+            lastPasswordScanMs = now;
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            SensitiveAppGuard.setPasswordFieldVisible(containsPasswordField(root, 0));
+        }
+        boolean nowProtected = SensitiveAppGuard.isProtectedNow();
         if (nowProtected != lastProtectedState) {
             lastProtectedState = nowProtected;
             JarvisFloatingOrbManager.setSuspendedForSecurity(this, nowProtected);
             JarvisVoiceService.onSecurityLockChanged(nowProtected);
         }
+    }
+
+    private boolean containsPasswordField(AccessibilityNodeInfo n, int depth) {
+        if (n == null || depth > 8) return false;
+        if (n.isPassword()) return true;
+        for (int i = 0; i < n.getChildCount(); i++) {
+            if (containsPasswordField(n.getChild(i), depth + 1)) return true;
+        }
+        return false;
     }
 
     @Override public void onInterrupt() {}
@@ -165,7 +187,7 @@ public class JarvisAccessibilityService extends AccessibilityService {
         if (root == null) return "";
         StringBuilder sb = new StringBuilder();
         collect(root, sb, 0);
-        return sb.toString();
+        return SensitiveAppGuard.sanitizeSensitiveText(sb.toString(), false);
     }
 
     private void collect(AccessibilityNodeInfo n, StringBuilder sb, int d) {

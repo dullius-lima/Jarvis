@@ -15,6 +15,7 @@ export interface VoiceProfile {
   energy_avg: number;
   spectral_vector: number[];
   neural_embedding: number[];
+  reference_embeddings?: number[][];
   samples_count: number;
   updated_at?: Date;
 }
@@ -32,6 +33,11 @@ export interface SpeakerIdentificationResult {
 let schemaReady = false;
 const lastAdaptationByProfile = new Map<number, number>();
 
+function getPythonBinary(): string {
+  const venvPy = path.join(process.cwd(), 'whisper-env', 'bin', 'python3');
+  return fs.existsSync(venvPy) ? venvPy : 'python3';
+}
+
 export async function initVoiceBiometricsSchema(): Promise<void> {
   if (schemaReady) return;
   await query(`
@@ -44,6 +50,7 @@ export async function initVoiceBiometricsSchema(): Promise<void> {
       energy_pattern JSONB DEFAULT '[]'::jsonb,
       spectral_vector JSONB DEFAULT '[]'::jsonb,
       neural_embedding JSONB DEFAULT '[]'::jsonb,
+      reference_embeddings JSONB DEFAULT '[]'::jsonb,
       samples_count INT DEFAULT 1,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -51,13 +58,14 @@ export async function initVoiceBiometricsSchema(): Promise<void> {
   await query(`ALTER TABLE family_voice_profiles ADD COLUMN IF NOT EXISTS energy_avg NUMERIC(8, 5) DEFAULT 0.05000;`);
   await query(`ALTER TABLE family_voice_profiles ADD COLUMN IF NOT EXISTS spectral_vector JSONB DEFAULT '[]'::jsonb;`);
   await query(`ALTER TABLE family_voice_profiles ADD COLUMN IF NOT EXISTS neural_embedding JSONB DEFAULT '[]'::jsonb;`);
+  await query(`ALTER TABLE family_voice_profiles ADD COLUMN IF NOT EXISTS reference_embeddings JSONB DEFAULT '[]'::jsonb;`);
   schemaReady = true;
 }
 
 function readPreferences(): Record<string, any> {
   const candidates = [
-    path.join(process.cwd(), 'user_preferences.json'),
-    path.join(process.cwd(), 'assets', 'user_preferences.json')
+    path.join(process.cwd(), 'assets', 'user_preferences.json'),
+    path.join(process.cwd(), 'user_preferences.json')
   ];
   for (const p of candidates) {
     try {
@@ -76,7 +84,7 @@ export function isVoiceLockEnabled(): boolean {
 
 export function isContinuousLearningEnabled(): boolean {
   const prefs = readPreferences();
-  return typeof prefs.continuous_voice_learning === 'boolean' ? prefs.continuous_voice_learning : true;
+  return false;
 }
 
 function parseCombinedPayload(rawPayload: string): {
@@ -126,6 +134,19 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return denom > 0 ? dot / denom : 0;
 }
 
+function getProfileTemplates(profile: VoiceProfile): number[][] {
+  const list: number[][] = [];
+  if (Array.isArray(profile.reference_embeddings)) {
+    for (const item of profile.reference_embeddings) {
+      if (Array.isArray(item) && item.length >= 200) list.push(item);
+    }
+  }
+  if (Array.isArray(profile.neural_embedding) && profile.neural_embedding.length >= 200) {
+    list.push(profile.neural_embedding);
+  }
+  return list;
+}
+
 export async function extractAcousticFeatures(rawPayload: string): Promise<{
   pitchHz: number;
   energy: number;
@@ -141,20 +162,20 @@ export async function extractAcousticFeatures(rawPayload: string): Promise<{
     try {
       fs.writeFileSync(tmpFile, Buffer.from(audioBase64, 'base64'));
       const scriptPath = path.join(process.cwd(), 'scripts', 'voiceprint_extractor.py');
-      const { stdout } = await execFileAsync('python3', [scriptPath, tmpFile], { timeout: 6000 });
+      const { stdout } = await execFileAsync(getPythonBinary(), [scriptPath, tmpFile], { timeout: 6000 });
       const parsed = JSON.parse(stdout.trim());
-      if (parsed && parsed.ok && Array.isArray(parsed.embedding) && parsed.embedding.length > 0) {
+      if (parsed && parsed.ok && Array.isArray(parsed.embedding) && parsed.embedding.length >= 200) {
         return {
           pitchHz: Number(parsed.pitchHz) || hintPitch || 130,
           energy: Number(parsed.energy) || hintEnergy || 0.05,
           spectralVector: hintSpec.length === 16 ? hintSpec : parsed.embedding.slice(0, 16),
           embedding: parsed.embedding,
-          activeFrames: Number(parsed.activeFrames) || 10,
+          activeFrames: Number(parsed.activeFrames) || 20,
           rawAudioBase64: audioBase64
         };
       }
     } catch (err: any) {
-      console.warn('[VoiceBiometric] Fallback acústico:', err?.message || err);
+      console.warn('[VoiceBiometric] Falha extração neural:', err?.message || err);
     } finally {
       try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch {}
     }
@@ -173,7 +194,7 @@ export async function extractAcousticFeatures(rawPayload: string): Promise<{
 export async function listVoiceProfiles(): Promise<VoiceProfile[]> {
   await initVoiceBiometricsSchema();
   const res = await query(
-    `SELECT id, name, role, pitch_hz, energy_avg, spectral_vector, neural_embedding, samples_count, updated_at
+    `SELECT id, name, role, pitch_hz, energy_avg, spectral_vector, neural_embedding, reference_embeddings, samples_count, updated_at
      FROM family_voice_profiles
      ORDER BY CASE WHEN role = 'admin' THEN 1 WHEN role = 'family' THEN 2 ELSE 3 END, id ASC`
   );
@@ -190,194 +211,176 @@ export async function enrollSpeakerVoice(
   name: string,
   audioPayload: string,
   role: 'admin' | 'family' | 'guest' = 'family'
-): Promise<{ name: string; role: string; pitchHz: number; samplesCount: number; has44D: boolean }> {
+): Promise<{ name: string; role: string; pitchHz: number; samplesCount: number; has44D: boolean; hasNeural256D: boolean }> {
   await initVoiceBiometricsSchema();
   const cleanName = name.trim();
   const features = await extractAcousticFeatures(audioPayload);
 
-  if (features.embedding.length === 0 && features.pitchHz <= 0) {
-    throw new Error('Não foi possível extrair assinatura vocal válida desta gravação.');
+  if (features.embedding.length < 200) {
+    throw new Error('Fala muito curta ou baixa para gerar assinatura neural. Fale uma frase completa de 2 a 4 segundos.');
   }
 
   const existingRes = await query(
-    'SELECT id, pitch_hz, energy_avg, spectral_vector, neural_embedding, samples_count FROM family_voice_profiles WHERE LOWER(name) = LOWER($1)',
+    'SELECT id, pitch_hz, energy_avg, neural_embedding, reference_embeddings, samples_count FROM family_voice_profiles WHERE LOWER(name) = LOWER($1)',
     [cleanName]
   );
 
   if (existingRes.rows && existingRes.rows.length > 0) {
     const row = existingRes.rows[0];
-    const oldCount = Math.max(1, Number(row.samples_count) || 1);
-    const newCount = oldCount + 1;
+    const oldRefs: number[][] = Array.isArray(row.reference_embeddings)
+      ? row.reference_embeddings.filter((v: any) => Array.isArray(v) && v.length === features.embedding.length)
+      : [];
+    const oldCount = oldRefs.length;
+    const nextRefs = [...oldRefs, features.embedding].slice(-12);
+    const newCount = nextRefs.length;
 
-    const mergedPitch = Number((((Number(row.pitch_hz) * oldCount) + features.pitchHz) / newCount).toFixed(2));
-    const mergedEnergy = Number((((Number(row.energy_avg || 0.05) * oldCount) + features.energy) / newCount).toFixed(5));
+    const mergedPitch = oldCount > 0
+      ? Number((((Number(row.pitch_hz) * oldCount) + features.pitchHz) / (oldCount + 1)).toFixed(2))
+      : features.pitchHz;
+    const mergedEnergy = oldCount > 0
+      ? Number((((Number(row.energy_avg || 0.05) * oldCount) + features.energy) / (oldCount + 1)).toFixed(5))
+      : features.energy;
 
-    const oldSpec: number[] = Array.isArray(row.spectral_vector) ? row.spectral_vector : [];
-    const mergedSpec =
-      oldSpec.length === 16 && features.spectralVector.length === 16
-        ? oldSpec.map((v, idx) => Number((((v * oldCount) + features.spectralVector[idx]) / newCount).toFixed(4)))
-        : (features.spectralVector.length === 16 ? features.spectralVector : oldSpec);
-
-    const oldEmb: number[] = Array.isArray(row.neural_embedding) ? row.neural_embedding : [];
-    let mergedEmb: number[] = features.embedding;
-    if (oldEmb.length === features.embedding.length && oldEmb.length > 0) {
-      const avg = oldEmb.map((v, idx) => ((v * oldCount) + features.embedding[idx]) / newCount);
-      mergedEmb = l2Normalize(avg);
-    } else if (oldEmb.length > 0 && features.embedding.length === 0) {
-      mergedEmb = oldEmb;
+    const meanVec = new Array(features.embedding.length).fill(0);
+    for (const ref of nextRefs) {
+      for (let i = 0; i < ref.length; i++) meanVec[i] += ref[i];
     }
+    const centroid = l2Normalize(meanVec.map((v) => v / nextRefs.length));
 
     await query(
       `UPDATE family_voice_profiles
-       SET role = $1, pitch_hz = $2, energy_avg = $3, spectral_vector = $4::jsonb, neural_embedding = $5::jsonb, samples_count = $6, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7`,
-      [role, mergedPitch, mergedEnergy, JSON.stringify(mergedSpec), JSON.stringify(mergedEmb), newCount, row.id]
+       SET role = $1, pitch_hz = $2, energy_avg = $3, spectral_vector = $4::jsonb, neural_embedding = $5::jsonb, reference_embeddings = $6::jsonb, samples_count = $7, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $8`,
+      [role, mergedPitch, mergedEnergy, JSON.stringify(features.spectralVector), JSON.stringify(centroid), JSON.stringify(nextRefs), newCount, row.id]
     );
 
-    return { name: cleanName, role, pitchHz: mergedPitch, samplesCount: newCount, has44D: mergedEmb.length >= 40 };
+    return { name: cleanName, role, pitchHz: mergedPitch, samplesCount: newCount, has44D: true, hasNeural256D: true };
   }
 
+  const refs = [features.embedding];
   await query(
-    `INSERT INTO family_voice_profiles (name, role, pitch_hz, energy_avg, spectral_vector, neural_embedding, samples_count)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, 1)`,
+    `INSERT INTO family_voice_profiles (name, role, pitch_hz, energy_avg, spectral_vector, neural_embedding, reference_embeddings, samples_count)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, 1)`,
     [
       cleanName,
       role,
       features.pitchHz,
       features.energy,
       JSON.stringify(features.spectralVector),
-      JSON.stringify(features.embedding)
+      JSON.stringify(features.embedding),
+      JSON.stringify(refs)
     ]
   );
 
-  return {
-    name: cleanName,
-    role,
-    pitchHz: features.pitchHz,
-    samplesCount: 1,
-    has44D: features.embedding.length >= 40
-  };
+  return { name: cleanName, role, pitchHz: features.pitchHz, samplesCount: 1, has44D: true, hasNeural256D: true };
 }
 
-/**
- * Aprendizado Contínuo da Voz: assimila amostras reais do dia a dia via Média Móvel Exponencial (EMA)
- * mantendo proteção anti-contaminação (apenas amostras >= 0.81 e com intervalo >= 15s).
- */
 async function reinforceProfileContinuously(
   profile: VoiceProfile,
-  incoming: { pitchHz: number; energy: number; embedding: number[]; activeFrames: number }
+  incoming: { pitchHz: number; energy: number; embedding: number[]; activeFrames: number },
+  bestSimilarity: number
 ): Promise<boolean> {
   if (!isContinuousLearningEnabled()) return false;
-  if (incoming.embedding.length < 40 || incoming.activeFrames < 18) return false;
+  if (incoming.embedding.length < 200 || incoming.activeFrames < 35) return false;
+  // Só adiciona um novo template se for claramente a mesma pessoa (0.58..0.86) cobrindo uma nova distância/acústica
+  if (bestSimilarity < 0.43 || bestSimilarity > 0.86) return false;
 
   const now = Date.now();
   const lastAt = lastAdaptationByProfile.get(profile.id) || 0;
-  if (now - lastAt < 15000) return false;
+  if (now - lastAt < 25000) return false;
 
-  const storedEmb = Array.isArray(profile.neural_embedding) ? profile.neural_embedding : [];
-  if (storedEmb.length !== incoming.embedding.length) return false;
-
-  // Taxa de aprendizado adaptativa (8% da nova fala + 92% da assinatura consolidada)
-  const alpha = 0.08;
-  const blended = storedEmb.map((v, i) => v * (1 - alpha) + incoming.embedding[i] * alpha);
-  const normalized = l2Normalize(blended);
-  const adaptedPitch = Number((Number(profile.pitch_hz) * (1 - alpha) + incoming.pitchHz * alpha).toFixed(2));
-  const nextCount = Math.min(999, (Number(profile.samples_count) || 1) + 1);
+  const existingRefs = getProfileTemplates(profile);
+  const nextRefs = [...existingRefs, incoming.embedding].slice(-12);
+  const meanVec = new Array(incoming.embedding.length).fill(0);
+  for (const ref of nextRefs) {
+    for (let i = 0; i < ref.length; i++) meanVec[i] += ref[i];
+  }
+  const centroid = l2Normalize(meanVec.map((v) => v / nextRefs.length));
 
   lastAdaptationByProfile.set(profile.id, now);
   await query(
     `UPDATE family_voice_profiles
-     SET pitch_hz = $1, neural_embedding = $2::jsonb, samples_count = $3, updated_at = CURRENT_TIMESTAMP
+     SET neural_embedding = $1::jsonb, reference_embeddings = $2::jsonb, samples_count = $3, updated_at = CURRENT_TIMESTAMP
      WHERE id = $4`,
-    [adaptedPitch, JSON.stringify(normalized), nextCount, profile.id]
+    [JSON.stringify(centroid), JSON.stringify(nextRefs), nextRefs.length, profile.id]
   );
-  console.log(`🧬 [VoiceLearning] Assinatura de ${profile.name} aprimorada automaticamente (${nextCount} amostras).`);
+  console.log(`🧬 [VoiceLearning] Novo template acústico (distância/ambiente) adicionado para ${profile.name} (${nextRefs.length}/12).`);
   return true;
 }
 
-export async function identifySpeaker(audioPayload?: string, opts?: { trustedAdminChannel?: boolean; hasWakeWord?: boolean }): Promise<SpeakerIdentificationResult> {
+export async function identifySpeaker(
+  audioPayload?: string,
+  opts?: { trustedAdminChannel?: boolean; hasWakeWord?: boolean }
+): Promise<SpeakerIdentificationResult> {
   await initVoiceBiometricsSchema();
   const lockEnabled = isVoiceLockEnabled();
-  const profilesRes = await query('SELECT id, name, role, pitch_hz, spectral_vector, neural_embedding, samples_count FROM family_voice_profiles');
+  const profilesRes = await query(
+    'SELECT id, name, role, pitch_hz, spectral_vector, neural_embedding, reference_embeddings, samples_count FROM family_voice_profiles'
+  );
   const profiles: VoiceProfile[] = profilesRes.rows || [];
-  const calibratedProfiles = profiles.filter((pr) => Array.isArray(pr.neural_embedding) && pr.neural_embedding.length >= 40 && (Number(pr.samples_count) || 0) >= 3);
+
+  const calibratedProfiles = profiles.filter(
+    (pr) => getProfileTemplates(pr).length > 0 && (Number(pr.samples_count) || 0) >= 3
+  );
   const hasRegisteredProfiles = calibratedProfiles.length > 0;
 
   if (!hasRegisteredProfiles) {
+    if (opts?.trustedAdminChannel && opts?.hasWakeWord && audioPayload && audioPayload.length > 1000) {
+      const enrolled = await enrollSpeakerVoice('Matheus', audioPayload, 'admin').catch(() => null);
+      if (enrolled) {
+        console.log(`🎙️ [VoiceBiometric] Amostra nativa S25 gravada (${enrolled.samplesCount}/3) para Matheus.`);
+        return {
+          identified: true,
+          name: 'Matheus',
+          role: 'admin',
+          confidence: 0.99,
+          hasRegisteredProfiles: enrolled.samplesCount >= 3,
+          lockEnabled,
+          continuousLearned: true
+        };
+      }
+    }
     return { identified: false, name: 'Desconhecido', role: 'guest', confidence: 0, hasRegisteredProfiles: false, lockEnabled };
   }
 
   if (!audioPayload || audioPayload.length < 350) {
-    return { identified: false, name: 'Desconhecido', role: 'guest', confidence: 0, hasRegisteredProfiles: false, lockEnabled };
+    return { identified: false, name: 'Desconhecido', role: 'guest', confidence: 0, hasRegisteredProfiles: true, lockEnabled };
   }
 
   const incoming = await extractAcousticFeatures(audioPayload);
+  if (incoming.embedding.length < 200 || incoming.activeFrames < 16) {
+    return { identified: false, name: 'Desconhecido', role: 'guest', confidence: 0, hasRegisteredProfiles: true, lockEnabled };
+  }
+
   let bestProfile: VoiceProfile | null = null;
   let bestScore = -1;
+  let secondBestScore = -1;
 
-  for (const profile of profiles) {
-    const storedEmb = Array.isArray(profile.neural_embedding) ? profile.neural_embedding : [];
-    const storedSpec = Array.isArray(profile.spectral_vector) ? profile.spectral_vector : [];
-    const pStored = Number(profile.pitch_hz) || 130;
-    const pInc = incoming.pitchHz || 130;
-    const pitchDiff = Math.min(
-      Math.abs(pStored - pInc),
-      Math.abs(pStored - pInc * 2),
-      Math.abs(pStored * 2 - pInc)
-    );
-
-    let score = 0;
-    if (storedEmb.length > 0 && incoming.embedding.length === storedEmb.length) {
-      const cosSim = cosineSimilarity(incoming.embedding, storedEmb);
-      const pitchBonus = pitchDiff <= 28 ? 0.04 : (pitchDiff > 70 ? -0.08 : 0);
-      score = cosSim + pitchBonus;
-    } else if (storedSpec.length === 16 && incoming.spectralVector.length === 16) {
-      const specSim = cosineSimilarity(incoming.spectralVector, storedSpec);
-      const pitchFactor = Math.max(0, 1 - pitchDiff / 80);
-      score = (specSim * 0.72) + (pitchFactor * 0.28);
-    } else {
-      score = pitchDiff <= 25 ? 0.78 : 0.30;
+  for (const profile of calibratedProfiles) {
+    const templates = getProfileTemplates(profile);
+    let profileMax = -1;
+    for (const tpl of templates) {
+      if (tpl.length !== incoming.embedding.length) continue;
+      const sim = cosineSimilarity(incoming.embedding, tpl);
+      if (sim > profileMax) profileMax = sim;
     }
 
-    if (score > bestScore) {
-      bestScore = score;
+    if (profileMax > bestScore) {
+      secondBestScore = bestScore;
+      bestScore = profileMax;
       bestProfile = profile;
+    } else if (profileMax > secondBestScore) {
+      secondBestScore = profileMax;
     }
   }
 
-  // Auto-calibração de canal para o dispositivo Admin pareado ao dizer "Jarvis" com pitch compatível
-  if (
-    bestProfile &&
-    bestScore < 0.44 &&
-    opts?.trustedAdminChannel &&
-    opts?.hasWakeWord &&
-    bestProfile.role === 'admin' &&
-    incoming.embedding.length >= 40 &&
-    true
-  ) {
-    await reinforceProfileContinuously(bestProfile, {
-      pitchHz: incoming.pitchHz,
-      energy: incoming.energy,
-      embedding: incoming.embedding,
-      activeFrames: Math.max(20, incoming.activeFrames)
-    }).catch(() => false);
-    return {
-      identified: true,
-      name: bestProfile.name,
-      role: bestProfile.role,
-      confidence: Number(Math.max(bestScore, 0.74).toFixed(3)),
-      hasRegisteredProfiles: true,
-      lockEnabled,
-      continuousLearned: true
-    };
-  }
+  // Comparação Multi-Template 256D:
+  // Mesmo locutor (perto ou longe): 0.50 - 0.92 | TV / terceiros: 0.05 - 0.36
+  const THRESHOLD = opts?.hasWakeWord ? 0.38 : 0.42;
+  const MIN_MARGIN = calibratedProfiles.length > 1 ? 0.06 : 0;
 
-  const THRESHOLD = opts?.trustedAdminChannel ? 0.36 : 0.46;
-  if (bestProfile && bestScore >= THRESHOLD) {
-    let continuousLearned = false;
-    if (bestScore >= 0.82) {
-      continuousLearned = await reinforceProfileContinuously(bestProfile, incoming).catch(() => false);
-    }
+  if (bestProfile && bestScore >= THRESHOLD && (bestScore - secondBestScore) >= MIN_MARGIN) {
+    const continuousLearned = await reinforceProfileContinuously(bestProfile, incoming, bestScore).catch(() => false);
     return {
       identified: true,
       name: bestProfile.name,

@@ -240,7 +240,7 @@ export async function processarExecucaoWorkflow(
   if (visual.ehPerguntaVisual && !visual.frameAtivo && offlineTarget) {
     return { success: true, triggeredSuccess: true, agent: 'JARVIS (Córtex Visual)', agentId: 'jarvis_vision', nodeType: 'core', executedTools: [], response: `Não consegui conectar ao sensor de ${offlineTarget} no momento. Abra o app JARVIS nesse aparelho para mantê-lo ativo na rede.`, executionTimeMs: Date.now() - inicioExecucao, data: null as any };
   }
-    if (visual.ehPerguntaVisual && !visual.frameAtivo) {
+    if ((visual.ehPerguntaVisual || (sCheck.isVisual && !sCheck.stopAction)) && !visual.frameAtivo) {
       const respVisual = {
         success: true,
         triggeredSuccess: true,

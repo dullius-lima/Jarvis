@@ -57,6 +57,7 @@ public class JarvisVoiceService extends Service {
     }
 
     public static void onSecurityLockChanged(boolean locked) {
+        if (instance != null) JarvisSensoryHelper.onSecurityLockChanged(instance, locked);
         if (instance != null && locked) {
             instance.forceAwakeUntil = 0L;
             instance.continuousUntil = 0L;
@@ -130,7 +131,7 @@ public class JarvisVoiceService extends Service {
             .build();
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(101, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+            startForeground(101, n, (Build.VERSION.SDK_INT >= 34 ? (ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE | ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA) : ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE));
         } else {
             startForeground(101, n);
         }
@@ -183,14 +184,14 @@ public class JarvisVoiceService extends Service {
 
                 Object rawSens = d.opt("mic_sensitivity");
                 if (rawSens instanceof Number) {
-                    prefSensitivity = (float) Math.max(0.6, Math.min(2.2, ((Number) rawSens).doubleValue()));
+                    prefSensitivity = (float) Math.max(0.6, Math.min(2.5, ((Number) rawSens).doubleValue()));
                 } else {
                     String sMode = String.valueOf(rawSens == null ? "balanced" : rawSens).toLowerCase(Locale.ROOT);
-                    if ("high".equals(sMode)) prefSensitivity = 1.9f;
+                    if ("high".equals(sMode)) prefSensitivity = 2.2f;
                     else if ("noisy".equals(sMode)) prefSensitivity = 0.9f;
                     else prefSensitivity = 1.4f;
                 }
-                prefGain = Math.max(1.1f, Math.min(1.75f, 0.95f + (prefSensitivity * 0.35f)));
+                prefGain = Math.max(0.75f, Math.min(1.05f, 0.72f + (prefSensitivity * 0.14f)));
             } catch (Exception ignored) {}
             try { Thread.sleep(2000L); } catch (InterruptedException ignored) {}
         }
@@ -239,7 +240,7 @@ public class JarvisVoiceService extends Service {
                         AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize);
                     if (rec.getState() != AudioRecord.STATE_INITIALIZED) { rec.release(); rec = null; Thread.sleep(400L); continue; }
                     try {
-                        if (AutomaticGainControl.isAvailable()) AutomaticGainControl.create(rec.getAudioSessionId()).setEnabled(true);
+                        if (AutomaticGainControl.isAvailable()) AutomaticGainControl.create(rec.getAudioSessionId()).setEnabled(false);
                         if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(rec.getAudioSessionId()).setEnabled(true);
                         if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(rec.getAudioSessionId()).setEnabled(true);
                     } catch (Exception ignored) {}
@@ -255,7 +256,7 @@ public class JarvisVoiceService extends Service {
                 byte[] pcmBytes = new byte[n * 2];
                 for (int i = 0; i < n; i++) {
                     double x = chunk[i];
-                    double hp = 0.95 * (hpPrevOut + x - hpPrevIn);
+                    double hp = 0.94 * (hpPrevOut + x - hpPrevIn);
                     hpPrevIn = x; hpPrevOut = hp;
                     rawSq += (long) (hp * hp);
                     int amp = Math.max(-32768, Math.min(32767, (int) (hp * prefGain)));
@@ -265,15 +266,15 @@ public class JarvisVoiceService extends Service {
                 }
 
                 double rms = Math.sqrt((double) rawSq / n);
-                double baseThresh = Math.max(180.0, 360.0 / Math.max(0.6, prefSensitivity));
-                double threshold = Math.max(baseThresh, Math.min(noiseFloor, 160.0) * 1.40);
+                double baseThresh = Math.max(95.0, 220.0 / Math.max(0.6, prefSensitivity));
+                double threshold = Math.max(baseThresh, Math.min(noiseFloor, 220.0) * 1.45);
                 boolean forced = System.currentTimeMillis() < forceAwakeUntil || System.currentTimeMillis() < continuousUntil;
 
                 float owwScore = (!forced && owwDetector != null && owwDetector.isReady())
                     ? owwDetector.processPcm16(filteredShorts, n, 0.40f)
                     : -1f;
 
-                boolean localWakeHit = (owwScore >= 0.40f);
+                boolean localWakeHit = (owwScore >= 0.45f && rms >= threshold);
                 if (rms >= threshold) consecutiveSpeechChunks++;
                 else consecutiveSpeechChunks = 0;
 
@@ -300,7 +301,7 @@ public class JarvisVoiceService extends Service {
                 if (forced) JarvisFloatingOrbManager.setOrbState("active");
                 long startSpeak = System.currentTimeMillis();
                 long lastVoice = startSpeak;
-                long silenceCutoffMs = localWakeHit ? 1150L : 850L;
+                long silenceCutoffMs = localWakeHit ? 1300L : 1050L;
 
                 while (running && canListenNow() && (System.currentTimeMillis() - startSpeak < 9500L)) {
                     int r = rec.read(chunk, 0, chunk.length);
@@ -323,6 +324,13 @@ public class JarvisVoiceService extends Service {
                 }
 
                 byte[] fullPcm = utterance.toByteArray();
+                long checkSq = 0;
+                for (int k = 0; k + 1 < fullPcm.length; k += 2) {
+                    short sv = (short) ((fullPcm[k] & 0xFF) | (fullPcm[k + 1] << 8));
+                    checkSq += (long) sv * sv;
+                }
+                double fullRms = fullPcm.length > 2 ? Math.sqrt((double) checkSq / (fullPcm.length / 2)) : 0;
+                if (fullRms < 140.0) { JarvisFloatingOrbManager.setOrbState("idle"); continue; }
                 if (fullPcm.length < 12800) { JarvisFloatingOrbManager.setOrbState("idle"); continue; }
 
                 JarvisFloatingOrbManager.setOrbState("active");
@@ -357,7 +365,7 @@ public class JarvisVoiceService extends Service {
             c.setRequestProperty("x-device-id", devId);
             c.setRequestProperty("x-device-token", devTok);
             c.setConnectTimeout(5000);
-            c.setReadTimeout(22000);
+            c.setReadTimeout(50000);
             c.setDoOutput(true);
             c.getOutputStream().write(body.toString().getBytes("UTF-8"));
 
@@ -384,6 +392,7 @@ public class JarvisVoiceService extends Service {
                 return;
             }
 
+            updateNotifStatus("💬 " + (reply.length() > 70 ? reply.substring(0, 70) + "..." : reply));
             playReply(reply, audioB64);
         } catch (Exception e) {
             updateNotifStatus("❌ Erro conexão VM: " + e.getClass().getSimpleName());
@@ -415,10 +424,19 @@ public class JarvisVoiceService extends Service {
                     File f = File.createTempFile("jv_ph_", ".mp3", getCacheDir());
                     try (FileOutputStream fos = new FileOutputStream(f)) { fos.write(Base64.decode(audioB64, Base64.DEFAULT)); }
                     MediaPlayer mp = new MediaPlayer();
-                    mp.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
+                    mp.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
                     mp.setDataSource(f.getAbsolutePath());
                     mp.setOnCompletionListener(m -> { m.release(); f.delete(); onDone.run(); });
-                    mp.setOnErrorListener((m, w, e) -> { m.release(); f.delete(); onDone.run(); return true; });
+                    mp.setOnErrorListener((m, w, e) -> {
+                        m.release(); f.delete();
+                        if (tts != null && ttsReady && !clean.isEmpty()) {
+                            tts.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "ph_ans_fb");
+                            mainHandler.postDelayed(onDone, Math.max(2500L, clean.length() * 65L));
+                        } else {
+                            onDone.run();
+                        }
+                        return true;
+                    });
                     mp.prepare();
                     mp.start();
                     mainHandler.postDelayed(() -> { if (isSpeaking) onDone.run(); }, 25000L);
@@ -454,7 +472,7 @@ public class JarvisVoiceService extends Service {
         }).start();
     }
 
-    private void showGlow(int mode) {
+    private void showGlow(int mode) { if (true) return;
         if (SensitiveAppGuard.isProtectedNow()) return;
         mainHandler.post(() -> {
             try {

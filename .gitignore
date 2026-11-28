@@ -2,14 +2,13 @@ node_modules/
 dist/
 whisper-env/
 models/
-**/__pycache__/
+__pycache__/
 *.pyc
 .env
 .env.local
 backups/
 .backup_*
 *.bak
-*.bkp*
 *.enc
 *.log
 *.apk

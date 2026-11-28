@@ -454,6 +454,8 @@ app.post('/api/v1/voice/turn', requireDeviceOrJwtAuth, async (req, res) => {
     if (!audioBase64) return res.status(400).json({ success: false, error: 'audioBase64 ausente' });
 
     const isAdminDev = Boolean((req as any).device?.is_primary || String((req as any).device?.owner_profile || '').toLowerCase().includes('admin'));
+    const rawWavBuf = Buffer.from(String(audioBase64).replace(/^data:audio\/[a-zA-Z0-9+.-]+;base64,/, ''), 'base64');
+    if (rawWavBuf.length < 6000) return res.json({ success: true, woke: false, transcript: '', reply: '' });
     const tr = await transcribeFastWithGroqOrLocal(String(audioBase64));
     const normCheck = tr.text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const quickWake = /\b(jarvis|javis|jarves|jaives|javes|iarvis|yarvis|djarvis|jarbas|jar\s*vis|ja\s*vis)\b/.test(normCheck);
@@ -510,16 +512,23 @@ app.post('/api/v1/voice/turn', requireDeviceOrJwtAuth, async (req, res) => {
     if (reply) {
       try {
         const localBase = `http://127.0.0.1:${PORT}`;
+        const ctrlTts = new AbortController();
+        const timerTts = setTimeout(() => ctrlTts.abort(), 10000);
         const spResp = await fetch(`${localBase}/api/v1/audio/speak`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: reply })
+          body: JSON.stringify({ text: reply }),
+          signal: ctrlTts.signal
         });
+        clearTimeout(timerTts);
         const spJson: any = await spResp.json().catch(() => ({}));
         replyAudioB64 = String(spJson?.audioBase64 || '');
-      } catch {}
+      } catch (ttsErr: any) {
+        console.warn('[VoiceTurn] Falha/timeout no TTS da VM (usará fallback Android):', ttsErr?.message || ttsErr);
+      }
     }
 
+    console.log(`[VoiceTurn] Respondendo (${reply.length} chars | MP3: ${replyAudioB64.length} b64): "${reply.slice(0, 120)}"`);
     return res.json({ success: true, woke: true, transcript, reply, audioBase64: replyAudioB64 });
   } catch (e: any) {
     console.error('[VoiceTurn] Erro:', e?.message || e);
@@ -577,8 +586,8 @@ app.get('/api/v1/sensory/status', requireDeviceOrJwtAuth, (_req, res) => {
 });
 
 app.post('/api/v1/sensory/frame', requireDeviceOrJwtAuth, (req, res) => {
-  const { requestId, imageBase64 } = req.body || {};
-  const ok = requestId ? resolveSensoryFrame(String(requestId), imageBase64 || null) : false;
+  const { requestId, imageBase64, blockedSensitive, blockedReason } = req.body || {};
+  const ok = requestId ? resolveSensoryFrame(String(requestId), imageBase64 || null, Boolean(blockedSensitive), blockedReason || null) : false;
   res.json({ success: ok });
 });
 

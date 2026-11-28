@@ -6,7 +6,9 @@ import java.util.Locale;
 import java.util.Set;
 
 public final class SensitiveAppGuard {
-    private static volatile boolean protectedActive = false;
+    private static volatile boolean protectedPackageActive = false;
+    private static volatile boolean contactsPackageActive = false;
+    private static volatile boolean passwordFieldVisible = false;
     private static volatile String currentPackage = "";
 
     private static final Set<String> PROTECTED_PACKAGES = new HashSet<>(Arrays.asList(
@@ -29,6 +31,10 @@ public final class SensitiveAppGuard {
         "govbr", "authenticator", "bitwarden", "1password", "keepass", "knox", "samsungpass", "vault"
     };
 
+    private static final String[] CONTACTS_KEYWORDS = {
+        "contacts", "dialer", "telecom", "incallui", "agenda"
+    };
+
     public static boolean isPackageProtected(String pkg) {
         if (pkg == null || pkg.trim().isEmpty()) return false;
         String low = pkg.toLowerCase(Locale.ROOT).trim();
@@ -39,18 +45,48 @@ public final class SensitiveAppGuard {
         return false;
     }
 
+    public static boolean isPackageContacts(String pkg) {
+        if (pkg == null || pkg.trim().isEmpty()) return false;
+        String low = pkg.toLowerCase(Locale.ROOT).trim();
+        for (String kw : CONTACTS_KEYWORDS) {
+            if (low.contains(kw)) return true;
+        }
+        return false;
+    }
+
     public static boolean updateForegroundPackage(String pkg) {
-        if (pkg == null || pkg.isEmpty() || "com.matheus.jarvis".equals(pkg)) return protectedActive;
+        if (pkg == null || pkg.isEmpty() || "com.matheus.jarvis".equals(pkg)) return isProtectedNow();
         if (pkg.contains("inputmethod") || pkg.contains("keyboard") || pkg.equals("com.android.systemui")) {
-            return protectedActive;
+            return isProtectedNow();
         }
         currentPackage = pkg;
-        protectedActive = isPackageProtected(pkg);
-        return protectedActive;
+        protectedPackageActive = isPackageProtected(pkg);
+        contactsPackageActive = isPackageContacts(pkg);
+        return isProtectedNow();
+    }
+
+    public static boolean setPasswordFieldVisible(boolean visible) {
+        passwordFieldVisible = visible;
+        return isProtectedNow();
     }
 
     public static boolean isProtectedNow() {
-        return protectedActive;
+        return protectedPackageActive || passwordFieldVisible;
+    }
+
+    public static boolean isContactsScreenActive() {
+        return contactsPackageActive;
+    }
+
+    public static String sanitizeSensitiveText(String text, boolean allowContacts) {
+        if (text == null || text.isEmpty()) return "";
+        // Mascara sempre CPFs e chaves longas
+        String out = text.replaceAll("\\b\\d{3}\\.?\\d{3}\\.?\\d{3}-?\\d{2}\\b", "[CPF OCULTO]");
+        if (!allowContacts) {
+            // Mascara telefones brasileiros e internacionais salvo se o usuário pedir explicitamente
+            out = out.replaceAll("(\\+?\\d{1,3}[\\s.-]?)?(\\(?\\d{2,3}\\)?[\\s.-]?)?9?\\d{4}[\\s.-]?\\d{4}", "[TELEFONE OCULTO]");
+        }
+        return out;
     }
 
     public static String getCurrentPackage() {

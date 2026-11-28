@@ -182,7 +182,7 @@ public class DeviceCommandExecutor {
             }
             if ("CAPTURE_SENSORY".equals(obj.optString("type")) || "CAPTURE_SENSORY".equals(obj.optString("action"))) {
                 if (SensitiveAppGuard.isProtectedNow()) return;
-                JarvisSensoryHelper.handleCaptureRequest(ctx, currentDeviceId, obj.optString("requestId"), obj.optString("modality", "camera"), obj.optString("facing", "front"));
+                JarvisSensoryHelper.handleCaptureRequest(ctx, currentDeviceId, obj.optString("requestId"), obj.optString("modality", "camera"), obj.optString("facing", "front"), obj.optBoolean("keepArmed", false), obj.optBoolean("allowContacts", false));
                 return;
             }
 
