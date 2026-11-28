@@ -510,6 +510,7 @@ export async function createAgent(req: Request, res: Response) {
       tools = [],
       next_agent_slug = null,
       next_agent_slugs = [],
+      join_agent_slug = null,
       schedule_enabled = false,
       cron_expression = '*/5 * * * *',
       schedule_prompt = '',
@@ -546,6 +547,8 @@ export async function createAgent(req: Request, res: Response) {
       ? body.next_agent_slugs[0]
       : (next_agent_slug || null);
 
+    const cleanJoinSlug = (join_agent_slug && String(join_agent_slug).trim()) ? String(join_agent_slug).trim() : null;
+
     const values = [
       name,
       finalSlug,
@@ -568,6 +571,7 @@ export async function createAgent(req: Request, res: Response) {
       normalizeToolsArray(tools),
       primaryNextSlug,
       next_agent_slugs_val,
+      cleanJoinSlug,
       Boolean(schedule_enabled),
       cron_expression,
       schedule_prompt,
@@ -581,14 +585,14 @@ export async function createAgent(req: Request, res: Response) {
         name, slug, agent_type, description, system_prompt, provider, model,
         api_key, base_url, temperature, icon, script_handler, code_snippet,
         http_method, endpoint_url, auth_token, payload_template, response_instruction,
-        tools, next_agent_slug, next_agent_slugs, schedule_enabled, cron_expression, schedule_prompt,
+        tools, next_agent_slug, next_agent_slugs, join_agent_slug, schedule_enabled, cron_expression, schedule_prompt,
         is_error_trigger, error_notify_channel, is_active, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7,
         $8, $9, $10, $11, $12, $13,
         $14, $15, $16, $17, $18,
         $19, $20, $21, $22, $23, $24,
-        $25, $26, $27, CURRENT_TIMESTAMP
+        $25, $26, $27, $28, CURRENT_TIMESTAMP
       )
       ON CONFLICT (slug) DO UPDATE SET
         name = EXCLUDED.name,
@@ -611,6 +615,7 @@ export async function createAgent(req: Request, res: Response) {
         tools = EXCLUDED.tools,
         next_agent_slug = EXCLUDED.next_agent_slug,
         next_agent_slugs = EXCLUDED.next_agent_slugs,
+        join_agent_slug = EXCLUDED.join_agent_slug,
         schedule_enabled = EXCLUDED.schedule_enabled,
         cron_expression = EXCLUDED.cron_expression,
         schedule_prompt = EXCLUDED.schedule_prompt,
@@ -687,6 +692,8 @@ export async function updateAgent(req: Request, res: Response) {
           : (body.next_agent_slug || null))
       : (body.next_agent_slug !== undefined ? body.next_agent_slug : curr.next_agent_slug);
 
+    const updatedJoinSlug = body.join_agent_slug !== undefined ? (String(body.join_agent_slug || '').trim() || null) : (curr.join_agent_slug || null);
+
     const updated = await pool.query(
       `UPDATE ai_agents SET
         name = $1,
@@ -710,14 +717,15 @@ export async function updateAgent(req: Request, res: Response) {
         tools = $19,
         next_agent_slug = $20,
         next_agent_slugs = $21,
-        schedule_enabled = $22,
-        cron_expression = $23,
-        schedule_prompt = $24,
-        is_error_trigger = $25,
-        error_notify_channel = $26,
-        is_active = $27,
+        join_agent_slug = $22,
+        schedule_enabled = $23,
+        cron_expression = $24,
+        schedule_prompt = $25,
+        is_error_trigger = $26,
+        error_notify_channel = $27,
+        is_active = $28,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $28 RETURNING *;`,
+      WHERE id = $29 RETURNING *;`,
       [
         body.name ?? curr.name,
         body.slug ?? curr.slug,
@@ -740,6 +748,7 @@ export async function updateAgent(req: Request, res: Response) {
         updatedTools,
         primaryNextSlug,
         next_agent_slugs_val,
+        updatedJoinSlug,
         body.schedule_enabled !== undefined ? Boolean(body.schedule_enabled) : curr.schedule_enabled,
         body.cron_expression ?? curr.cron_expression,
         body.schedule_prompt !== undefined ? body.schedule_prompt : curr.schedule_prompt,
