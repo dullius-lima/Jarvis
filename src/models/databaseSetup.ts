@@ -282,6 +282,35 @@ export async function initializeDatabaseSchema() {
     // 8. Memória Vetorial de Longo Prazo (RAG) e Auditoria de Execução
     const embeddingColumnType = hasVectorExtension ? 'VECTOR(1536)' : 'TEXT';
     await client.query(`
+      CREATE TABLE IF NOT EXISTS knowledge_nodes (
+        id SERIAL PRIMARY KEY,
+        entity_key VARCHAR(160) UNIQUE NOT NULL,
+        label VARCHAR(255) NOT NULL,
+        entity_type VARCHAR(80) DEFAULT 'geral',
+        properties JSONB DEFAULT '{}'::jsonb,
+        mention_count INT DEFAULT 1,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS knowledge_edges (
+        id SERIAL PRIMARY KEY,
+        source_key VARCHAR(160) NOT NULL REFERENCES knowledge_nodes(entity_key) ON DELETE CASCADE,
+        relation VARCHAR(120) NOT NULL,
+        target_key VARCHAR(160) NOT NULL REFERENCES knowledge_nodes(entity_key) ON DELETE CASCADE,
+        weight NUMERIC(4,2) DEFAULT 1.00,
+        metadata JSONB DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(source_key, relation, target_key)
+      );
+      CREATE TABLE IF NOT EXISTS semantic_route_cache (
+        id SERIAL PRIMARY KEY,
+        prompt_sample TEXT NOT NULL,
+        vector_json JSONB NOT NULL,
+        agent_slug VARCHAR(120) NOT NULL,
+        agent_name VARCHAR(180),
+        tool_name VARCHAR(120),
+        hit_count INT DEFAULT 1,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
       CREATE TABLE IF NOT EXISTS vector_documents (
         id SERIAL PRIMARY KEY,
         title VARCHAR(255),

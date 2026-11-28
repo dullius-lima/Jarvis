@@ -1,10 +1,12 @@
+import { queryRelevantSubgraph } from "../knowledgeGraphService.js";
 import { ensureActiveWebMcpTools } from "../webMcpService.js";
 // src/services/orchestrator/montadorPromptEConexoes.ts
 import { pool } from '../../config/database.js';
 import { searchVectorDocuments } from '../ragService.js';
 import { getCentralBrainConfig, sanitizeToolName } from './brainConfigAndUtils.js';
 import { getDynamicToolsCatalog } from './catalogAndDatabase.js';
-import { toolDelegarCriacaoSubagente, toolGerenciarMemoria } from './brainMetaTools.js';
+import { toolDelegarCriacaoSubagente, toolGerenciarMemoria,
+    toolRegistrarGrafoConhecimento, toolRegistrarGrafoConhecimento } from './brainMetaTools.js';
 
 export async function montarContextoEConexoes(
   userPrompt: string,
@@ -137,6 +139,7 @@ export async function montarContextoEConexoes(
 1. CURTO PRAZO (Sessão Atual): Histórico imediato da conversa acima. Não precisa salvar manualmente.
 2. MÉDIO PRAZO (15 a 180 dias): Para listas de compras, lembretes, tarefas ativas e projetos temporários, use SEMPRE a ferramenta "gerenciar_memoria_cognitiva" com tipo_memoria="medio_prazo" (contexto_semanal: 15-30d; tarefa_ativa: 45-60d; projeto: 90-180d). NUNCA crie arquivos .md/.txt na VM nem tente salvar listas no Notion sem ordem explícita.
 3. ATUALIZAR / CONCLUIR MÉDIO PRAZO: Se já existir item em [MEMÓRIA EPISÓDICA ATIVA], use acao="atualizar" com o ID para incluir/remover itens, ou acao="concluir" ao finalizar.
+3. GRAFO RELACIONAL: Sempre que o usuário informar vínculos ou atributos duráveis entre pessoas, empresas, ativos, imóveis, saúde ou dispositivos, invoque "registrar_grafo_conhecimento" para analisar se já existe e criar ou atualizar os nós.
 4. LONGO PRAZO (Permanente & Contatos): Contatos telefônicos e regras permanentes ficam na Memória de Longo Prazo. Para salvar contatos, use "salvar_contato_agenda" ou "gerenciar_memoria_cognitiva" (tipo_memoria="longo_prazo", categoria="contato"). Para consultar números já listados abaixo em [MEMÓRIA DE LONGO PRAZO - CONTATOS], leia diretamente daqui e repasse o telefone ao especialista (ex: WhatsApp) sem pedir o número ao usuário.`,
     `[MEMÓRIA DE LONGO PRAZO - AGENDA DE CONTATOS]:\n${textoAgenda}`,
     `[MEMÓRIA DE MÉDIO PRAZO - EPISÓDICA ATIVA]:\n${textoMedioPrazo}`,

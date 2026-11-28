@@ -1,3 +1,4 @@
+import { lookupSemanticRoute, learnSemanticRoute, invalidateSemanticRouteCache } from "./semanticRouteCacheService.js";
 import { validateAuthorizedDevice } from './deviceRegistryService.js';
 import { tryHandleUiControlCommand, executeDeviceUiAction } from './uiControlService.js';
 import { requestLiveSensoryFrame, detectSensoryIntent, handleSensoryStopCommand } from './sensoryRouterService.js';
@@ -959,7 +960,7 @@ export async function processarFluxoOrquestrador(arg1?: any, arg2?: any, arg3?: 
     const prompt = typeof arg2 === 'string' ? arg2 : arg2?.textPrompt || arg2?.prompt || 'Verificar status';
     const sid = arg3 || arg2?.sessionId || `sess_${Date.now()}`;
     const sensory = arg4 || (typeof arg2 === 'object' ? arg2 : undefined);
-    return processarExecucaoWorkflow(token, prompt, sid, sensory);
+    return processarExecucaoWorkflowComCache(token, prompt, sid, sensory);
   }
 
   const params = arg1 || {};
@@ -972,15 +973,99 @@ export async function processarFluxoOrquestrador(arg1?: any, arg2?: any, arg3?: 
     'Verificar status';
   const sid = params?.sessionId || params?.sensorData?.sessionId || `sess_${Date.now()}`;
   const sensoryData = params?.sensorData || params;
-  return processarExecucaoWorkflow(token, prompt, sid, sensoryData);
+  return processarExecucaoWorkflowComCache(token, prompt, sid, sensoryData);
 }
 
 export const processarEstimuloOrquestrador = async (identityToken: string, sensorData: any) => {
   return processarFluxoOrquestrador({ identityToken, sensorData });
 };
 
+// __SEMANTIC_ROUTE_CACHE_HOOK__
+const _execucaoOriginalWorkflow = processarExecucaoWorkflow;
+export async function processarExecucaoWorkflowComCache(
+  identityToken: string,
+  userPrompt: string,
+  sessionId = `sess_${Date.now()}`,
+  sensoryInput?: any
+) {
+  const t0 = Date.now();
+  const ehMutacaoOuEstado = /\b(registr\w+|salv\w+|atualiz\w+|cri\w+|apag\w+|exclu\w+|lembr\w+|memoriz\w+|grafo|agora|que horas|c[aâ]mera|tela)\b/i.test(userPrompt);
+  const temMidia = Boolean(sensoryInput?.audioBase64 || sensoryInput?.screenFrame || sensoryInput?.webcamFrame || sensoryInput?.sensorData?.audioBase64 || sensoryInput?.sensorData?.screenFrame || sensoryInput?.sensorData?.webcamFrame);
+
+  if (!ehMutacaoOuEstado && !temMidia) {
+    try {
+      const hit = await lookupSemanticRoute(userPrompt, 0.88);
+      if (hit.hit && hit.route?.agent_slug) {
+        const agRes = await pool.query(`SELECT * FROM ai_agents WHERE LOWER(slug) = LOWER($1) AND is_active = TRUE LIMIT 1;`, [hit.route.agent_slug]);
+        if (agRes.rows.length > 0) {
+          const ag = agRes.rows[0];
+          const brainCfg = await getCentralBrainConfig();
+          const { connectorsMap } = await getDynamicToolsCatalog();
+          const cadeia = await executeSpecialistPipeline(
+            ag,
+            { task_details: userPrompt, query: userPrompt },
+            sessionId,
+            identityToken || "Matheus-Admin",
+            [],
+            brainCfg.server_base_url,
+            userPrompt,
+            brainCfg,
+            connectorsMap
+          );
+          const ultimo = cadeia[cadeia.length - 1];
+          const outText = typeof ultimo?.output === "string" ? ultimo.output : JSON.stringify(ultimo?.output ?? cadeia);
+          if (outText && outText.trim().length > 2) {
+            appendShortTermMemory(sessionId, "user", userPrompt);
+            appendShortTermMemory(sessionId, "assistant", outText);
+            return {
+              success: true,
+              triggeredSuccess: true,
+              agent: `${ag.name} ⚡ [Cache Semântico ${Math.round(hit.similarity * 100)}%]`,
+              agentId: ag.slug,
+              nodeType: ag.agent_type || "llm",
+              semanticCacheHit: true,
+              semanticSimilarity: hit.similarity,
+              memoryStored: true,
+              identity: identityToken || "Matheus-Admin",
+              sessionId,
+              response: outText,
+              executionTimeMs: Date.now() - t0
+            };
+          }
+        }
+      }
+    } catch {}
+  }
+
+  const resultado: any = await _execucaoOriginalWorkflow(identityToken, userPrompt, sessionId, sensoryInput);
+
+  try {
+    const tools: string[] = Array.isArray(resultado?.executedTools) ? resultado.executedTools : [];
+    const houveMutacao = tools.some((t) =>
+      ["registrar_grafo_conhecimento", "gerenciar_memoria_cognitiva", "salvar_memoria_permanente", "create_or_update_ai_agent", "delete_tool_connector", "update_persona_and_behavior"].includes(t)
+    );
+    if (houveMutacao) {
+      await invalidateSemanticRouteCache();
+    } else if (
+      resultado?.success &&
+      !ehMutacaoOuEstado &&
+      resultado?.agentId &&
+      !["jarvis_core", "jarvis_vision", "fanout_parallel"].includes(resultado.agentId)
+    ) {
+      await learnSemanticRoute({
+        promptSample: userPrompt,
+        agentSlug: resultado.agentId,
+        agentName: resultado.agent,
+        toolName: tools[0]
+      });
+    }
+  } catch {}
+
+  return resultado;
+}
+
 // Aliases para retrocompatibilidade
-export const processWorkflowExecution = processarExecucaoWorkflow;
+export const processWorkflowExecution = processarExecucaoWorkflowComCache;
 export const processOrchestratorWorkflow = processarFluxoOrquestrador;
 export const processOrchestratorStimulus = processarEstimuloOrquestrador;
 export const scheduleCalendarInterceptor = interceptarAcaoAgenda;

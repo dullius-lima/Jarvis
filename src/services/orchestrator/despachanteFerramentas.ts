@@ -1,3 +1,4 @@
+import { executarRegistroGrafoConhecimento } from "./brainMetaTools.js";
 import { callWebMcpTool, ensureActiveWebMcpTools } from "../webMcpService.js";
 // src/services/orchestrator/despachanteFerramentas.ts
 import { sanitizeToolName } from './brainConfigAndUtils.js';
@@ -242,6 +243,18 @@ export async function processarChamadasDeFerramentas(params: {
       }
 
       // 0. Gestão Cognitiva de Memória (Curto, Médio e Longo Prazo)
+      if (fnName === "registrar_grafo_conhecimento") {
+        let gArgs: any = {};
+        try { gArgs = JSON.parse(toolCall.function?.arguments || "{}"); } catch {}
+        const resGrafo = await executarRegistroGrafoConhecimento(gArgs).catch((e: any) => ({ success: false, message: e.message }));
+        triggeredAgentName = "JARVIS (Grafo de Conhecimento)";
+        triggeredAgentId = "registrar_grafo_conhecimento";
+        triggeredNodeType = "core";
+        toolsUsadas.push("registrar_grafo_conhecimento");
+        trilhaExecucao.push({ step: trilhaExecucao.length + 1, kind: "tool", slug: "registrar_grafo_conhecimento", name: "Grafo Relacional", nodeType: "core", parentSlug: "jarvis_core", status: resGrafo.success ? "ok" : "error" });
+        saidasFerramentasParaSintese.push({ step: saidasFerramentasParaSintese.length + 1, toolName: "registrar_grafo_conhecimento", agentName: "Grafo de Conhecimento Relacional", result: resGrafo });
+        continue;
+      }
       if (fnName === 'gerenciar_memoria_cognitiva') {
         const tipoMem = argsParsed.tipo_memoria || 'medio_prazo';
         triggeredAgentName =

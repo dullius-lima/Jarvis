@@ -1,3 +1,4 @@
+import { upsertKnowledgeTriplet } from "../knowledgeGraphService.js";
 // src/services/orchestrator/brainMetaTools.ts
 import { pool } from '../../config/database.js';
 import {
@@ -856,3 +857,29 @@ export default {
   updateAgentOrJarvisPersona,
   executeHackerSecuritySuite
 };
+
+export const toolRegistrarGrafoConhecimento = {
+  type: "function" as const,
+  function: {
+    name: "registrar_grafo_conhecimento",
+    description: "Analisa entidades e vínculos duráveis (pessoas, família, empresas, ativos B3, imóveis, dispositivos, saúde, conceitos). Verifica no PostgreSQL se já existem: se não existir, CRIA; se já existir, ATUALIZA e mescla atributos.",
+    parameters: {
+      type: "object",
+      properties: {
+        source: { type: "string", description: "Entidade de origem (ex: Dra. Camila, PETR4, Ar Sala)" },
+        sourceType: { type: "string", description: "Tipo: pessoa, empresa, ativo, imovel, dispositivo, saude, conceito" },
+        sourceProps: { type: "object", description: "Atributos chave-valor da origem (ex: { telefone, especialidade })" },
+        relation: { type: "string", description: "Relação direcionada (ex: TRABALHA_EM, ESPOSA_DE, PRECO_TETO, LOCALIZADO_EM)" },
+        target: { type: "string", description: "Entidade de destino (ex: Clínica OdontoPrime, R$ 34,50, Sala)" },
+        targetType: { type: "string", description: "Tipo da entidade de destino" },
+        targetProps: { type: "object", description: "Atributos chave-valor do destino (ex: { endereco })" },
+        metadata: { type: "object", description: "Observações ou contexto adicional" }
+      },
+      required: ["source", "relation", "target"]
+    }
+  }
+};
+
+export async function executarRegistroGrafoConhecimento(params: any) {
+  return await upsertKnowledgeTriplet(params);
+}
