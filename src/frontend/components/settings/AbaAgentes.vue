@@ -77,6 +77,28 @@
           </span>
         </div>
 
+        <!-- NÓ JOIN (BARREIRA DE CONVERGÊNCIA PARALELA) -->
+        <div class="form-group" style="margin-top: 10px; padding: 10px; background: rgba(14, 165, 233, 0.08); border: 1px dashed rgba(56, 189, 248, 0.45); border-radius: 8px;">
+          <label style="color: #38bdf8; font-weight: 700; display: block; margin-bottom: 4px;">
+            🔀 Nó Join — Convergência após Fan-Out (Opcional)
+          </label>
+          <select v-model="ag.join_agent_slug" class="input-field">
+            <option value="">Sem Nó Join (encerra após os ramos paralelos)</option>
+            <option
+              v-for="agOpt in listaAgentes"
+              :key="agOpt.slug"
+              :value="agOpt.slug"
+              :disabled="agOpt.slug === ag.slug"
+            >
+              {{ agOpt.icon || "🤖" }} {{ agOpt.name }} ({{ agOpt.slug }})
+            </option>
+          </select>
+          <small style="color: #94a3b8; font-size: 11px; display: block; margin-top: 4px;">
+            Quando 2 ou mais próximos agentes rodarem em paralelo (Fan-Out), este Nó Join aguarda TODOS terminarem e recebe os resultados unificados.
+          </small>
+        </div>
+  
+
         <div v-if="Array.isArray(ag.tools) && ag.tools.length" class="tools-chips">
           <span v-for="t in ag.tools" :key="t" class="tool-chip">🛠️ {{ t }}</span>
         </div>
@@ -710,6 +732,7 @@ const agenteEmEdicao = ref<any>({
   tools: [] as string[],
   next_agent_slug: null,
   next_agent_slugs: [] as string[],
+  join_agent_slug: '',
   cron_expression: '*/5 * * * *',
   is_active: true
 });
@@ -1062,6 +1085,7 @@ function abrirModalNovoAgente() {
     tools: [] as string[],
     next_agent_slug: null,
     next_agent_slugs: [] as string[],
+  join_agent_slug: '',
     cron_expression: '*/5 * * * *',
     is_active: true
   };
@@ -1105,6 +1129,7 @@ function abrirModalEditarAgente(ag: any) {
     tools: Array.isArray(ag.tools) ? [...ag.tools] : [],
     next_agent_slug: ag.next_agent_slug || null,
     next_agent_slugs: slugsIniciais,
+  join_agent_slug: '',
     cron_expression: ag.cron_expression || '*/5 * * * *'
   };
   exibirModalAgente.value = true;
@@ -1155,6 +1180,7 @@ async function salvarAgenteEspecialista() {
       base_url: agenteEmEdicao.value.base_url?.trim() || null,
       next_agent_slug: primaryNextSlug,
       next_agent_slugs: nextSlugs,
+  join_agent_slug: '',
       response_instruction: agenteEmEdicao.value.system_prompt
     };
 
