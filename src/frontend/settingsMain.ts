@@ -6,9 +6,11 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
   if (url.startsWith('/api/')) {
     const tok =
+      localStorage.getItem('jarvis_auth_jwt_token') ||
       localStorage.getItem('jarvis_jwt_token') ||
       localStorage.getItem('jarvis_token') ||
       localStorage.getItem('token') ||
+      localStorage.getItem('jarvis_paired_device_token') ||
       '';
     const headers = new Headers(init?.headers || {});
     if (tok && !headers.has('Authorization')) {
